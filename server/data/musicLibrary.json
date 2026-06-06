@@ -1,0 +1,2210 @@
+{
+  "generatedAt": "2026-06-06T00:41:14.408Z",
+  "count": 88,
+  "songs": [
+    {
+      "id": "ef1e95f6564b081d",
+      "title": "就忘了吧",
+      "artist": "1K",
+      "album": "就忘了吧",
+      "version": "",
+      "filename": "1K - 就忘了吧.mp3",
+      "fileUrl": "/api/music/file/ef1e95f6564b081d",
+      "coverPath": "/covers/ef1e95f6564b081d.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.139Z"
+    },
+    {
+      "id": "cdc9177402d87f46",
+      "title": "与我无关",
+      "artist": "阿冗",
+      "album": "与我无关",
+      "version": "",
+      "filename": "阿冗 - 与我无关.flac",
+      "fileUrl": "/api/music/file/cdc9177402d87f46",
+      "coverPath": "/covers/cdc9177402d87f46.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.376Z"
+    },
+    {
+      "id": "23380737d9e4b3a9",
+      "title": "直到你降临",
+      "artist": "阿肆",
+      "album": "直到你降临",
+      "version": "",
+      "filename": "阿肆 - 直到你降临.mp3",
+      "fileUrl": "/api/music/file/23380737d9e4b3a9",
+      "coverPath": "/covers/23380737d9e4b3a9.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.378Z"
+    },
+    {
+      "id": "89113c295125b234",
+      "title": "我愿",
+      "artist": "阿虾",
+      "album": "我愿",
+      "version": "",
+      "filename": "阿虾 - 我愿.mp3",
+      "fileUrl": "/api/music/file/89113c295125b234",
+      "coverPath": "/covers/89113c295125b234.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.381Z"
+    },
+    {
+      "id": "9d7755fe4c877420",
+      "title": "红色高跟鞋",
+      "artist": "蔡健雅",
+      "album": "若你碰到他",
+      "version": "",
+      "filename": "蔡健雅 - 红色高跟鞋.mp3",
+      "fileUrl": "/api/music/file/9d7755fe4c877420",
+      "coverPath": "/covers/9d7755fe4c877420.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.331Z"
+    },
+    {
+      "id": "901650b7617ac87a",
+      "title": "越来越不懂",
+      "artist": "蔡健雅",
+      "album": "Goodbye & Hello",
+      "version": "",
+      "filename": "蔡健雅 - 越来越不懂.flac",
+      "fileUrl": "/api/music/file/901650b7617ac87a",
+      "coverPath": "/covers/901650b7617ac87a.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.334Z"
+    },
+    {
+      "id": "5763e5bdd2ca65b8",
+      "title": "倒带",
+      "artist": "蔡依林",
+      "album": "求婚事务所 电视原声带",
+      "version": "",
+      "filename": "蔡依林 - 倒带.mp3",
+      "fileUrl": "/api/music/file/5763e5bdd2ca65b8",
+      "coverPath": "/covers/5763e5bdd2ca65b8.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.328Z"
+    },
+    {
+      "id": "2f2fa7fd74c36514",
+      "title": "一个人想着一个人",
+      "artist": "曾沛慈",
+      "album": "终极一班2 (电视原声带)",
+      "version": "",
+      "filename": "曾沛慈 - 一个人想着一个人.flac",
+      "fileUrl": "/api/music/file/2f2fa7fd74c36514",
+      "coverPath": "/covers/2f2fa7fd74c36514.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.254Z"
+    },
+    {
+      "id": "a756ef73a8d99062",
+      "title": "小半",
+      "artist": "陈粒",
+      "album": "小梦大半",
+      "version": "",
+      "filename": "陈粒 - 小半.mp3",
+      "fileUrl": "/api/music/file/a756ef73a8d99062",
+      "coverPath": "/covers/a756ef73a8d99062.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.389Z"
+    },
+    {
+      "id": "5a141d15f4f2a1cc",
+      "title": "虚拟",
+      "artist": "陈粒",
+      "album": "小梦大半",
+      "version": "",
+      "filename": "陈粒 - 虚拟.mp3",
+      "fileUrl": "/api/music/file/5a141d15f4f2a1cc",
+      "coverPath": "/covers/5a141d15f4f2a1cc.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.392Z"
+    },
+    {
+      "id": "da78717ffb18f7ce",
+      "title": "太聪明",
+      "artist": "陈绮贞",
+      "album": "Groupies吉他手",
+      "version": "",
+      "filename": "陈绮贞 - 太聪明.mp3",
+      "fileUrl": "/api/music/file/da78717ffb18f7ce",
+      "coverPath": "/covers/da78717ffb18f7ce.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.395Z"
+    },
+    {
+      "id": "6f7f50e83445755c",
+      "title": "心似烟火",
+      "artist": "陈壹千",
+      "album": "心似烟火",
+      "version": "",
+      "filename": "陈壹千 - 心似烟火.flac",
+      "fileUrl": "/api/music/file/6f7f50e83445755c",
+      "coverPath": "/covers/6f7f50e83445755c.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.383Z"
+    },
+    {
+      "id": "1df119338d178cfc",
+      "title": "孤独患者",
+      "artist": "陈奕迅",
+      "album": "？",
+      "version": "",
+      "filename": "陈奕迅 - 孤独患者.mp3",
+      "fileUrl": "/api/music/file/1df119338d178cfc",
+      "coverPath": "/covers/1df119338d178cfc.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.386Z"
+    },
+    {
+      "id": "357a98c6bc22c2ea",
+      "title": "願い～あの頃のキミへ～",
+      "artist": "當山みれい",
+      "album": "Answer",
+      "version": "",
+      "filename": "當山みれい - 願い～あの頃のキミへ～.flac",
+      "fileUrl": "/api/music/file/357a98c6bc22c2ea",
+      "coverPath": "/covers/357a98c6bc22c2ea.jpg",
+      "language": "ja",
+      "languageTags": [
+        "日语"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.310Z"
+    },
+    {
+      "id": "80c9831f910d206c",
+      "title": "猜不透",
+      "artist": "丁当",
+      "album": "我爱上的",
+      "version": "",
+      "filename": "丁当 - 猜不透.flac",
+      "fileUrl": "/api/music/file/80c9831f910d206c",
+      "coverPath": "/covers/80c9831f910d206c.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.187Z"
+    },
+    {
+      "id": "92a794054bb1724c",
+      "title": "哪里都是你",
+      "artist": "队长",
+      "album": "哪里都是你",
+      "version": "",
+      "filename": "队长 - 哪里都是你.flac",
+      "fileUrl": "/api/music/file/92a794054bb1724c",
+      "coverPath": "/covers/92a794054bb1724c.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.371Z"
+    },
+    {
+      "id": "a0b56637b25e19bf",
+      "title": "哪里都是你2.0",
+      "artist": "队长",
+      "album": "哪里都是你2.0",
+      "version": "",
+      "filename": "队长 - 哪里都是你2.0.mp3",
+      "fileUrl": "/api/music/file/a0b56637b25e19bf",
+      "coverPath": "/covers/a0b56637b25e19bf.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.373Z"
+    },
+    {
+      "id": "94074b0c1558cc7b",
+      "title": "予你",
+      "artist": "队长",
+      "album": "予你",
+      "version": "",
+      "filename": "队长 - 予你.flac",
+      "fileUrl": "/api/music/file/94074b0c1558cc7b",
+      "coverPath": "/covers/94074b0c1558cc7b.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.368Z"
+    },
+    {
+      "id": "d419dd9151255a2d",
+      "title": "特别的人",
+      "artist": "方大同",
+      "album": "危险世界",
+      "version": "",
+      "filename": "方大同 - 特别的人.mp3",
+      "fileUrl": "/api/music/file/d419dd9151255a2d",
+      "coverPath": "/covers/d419dd9151255a2d.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.247Z"
+    },
+    {
+      "id": "9859ac7d0fcbd494",
+      "title": "最好的我",
+      "artist": "房祖名",
+      "album": "乱",
+      "version": "",
+      "filename": "房祖名; 龚芝怡 - 最好的我.mp3",
+      "fileUrl": "/api/music/file/9859ac7d0fcbd494",
+      "coverPath": "/covers/9859ac7d0fcbd494.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.243Z"
+    },
+    {
+      "id": "0aa31f1b98e3fc23",
+      "title": "第57次取消发送",
+      "artist": "菲菲公主（陆绮菲）",
+      "album": "第57次取消发送",
+      "version": "",
+      "filename": "菲菲公主（陆绮菲） - 第57次取消发送.flac",
+      "fileUrl": "/api/music/file/0aa31f1b98e3fc23",
+      "coverPath": "/covers/0aa31f1b98e3fc23.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.322Z"
+    },
+    {
+      "id": "e05047d3cf279873",
+      "title": "你在 不在",
+      "artist": "郭采洁",
+      "album": "爱异想",
+      "version": "",
+      "filename": "郭采洁 - 你在 不在.flac",
+      "fileUrl": "/api/music/file/e05047d3cf279873",
+      "coverPath": "/covers/e05047d3cf279873.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.358Z"
+    },
+    {
+      "id": "8fa4131c2376b419",
+      "title": "爱情讯息",
+      "artist": "郭静",
+      "album": "下一个天亮",
+      "version": "",
+      "filename": "郭静 - 爱情讯息.flac",
+      "fileUrl": "/api/music/file/8fa4131c2376b419",
+      "coverPath": "/covers/8fa4131c2376b419.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "心动"
+      ],
+      "sceneTags": [
+        "想念"
+      ],
+      "energy": 50,
+      "memoryWeight": 60,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.363Z"
+    },
+    {
+      "id": "aceb484a48346d04",
+      "title": "下一个天亮",
+      "artist": "郭静",
+      "album": "下一个天亮",
+      "version": "",
+      "filename": "郭静 - 下一个天亮.mp3",
+      "fileUrl": "/api/music/file/aceb484a48346d04",
+      "coverPath": "/covers/aceb484a48346d04.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.360Z"
+    },
+    {
+      "id": "b94932eb32a76352",
+      "title": "恋愛サーキュレーション",
+      "artist": "花澤香菜",
+      "album": "化物語音楽全集 Songs&Soundtracks",
+      "version": "",
+      "filename": "花澤香菜 - 恋愛サーキュレーション.flac",
+      "fileUrl": "/api/music/file/b94932eb32a76352",
+      "coverPath": "/covers/b94932eb32a76352.jpg",
+      "language": "ja",
+      "languageTags": [
+        "日语"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.317Z"
+    },
+    {
+      "id": "5879d0038bc102e3",
+      "title": "天若有情",
+      "artist": "黄丽玲",
+      "album": "天若有情",
+      "version": "",
+      "filename": "黄丽玲 - 天若有情.mp3",
+      "fileUrl": "/api/music/file/5879d0038bc102e3",
+      "coverPath": "/covers/5879d0038bc102e3.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.407Z"
+    },
+    {
+      "id": "91bf11a226b3d026",
+      "title": "夏天的风",
+      "artist": "火羊瞌睡了",
+      "album": "夏天的风",
+      "version": "",
+      "filename": "火羊瞌睡了 - 夏天的风.mp3",
+      "fileUrl": "/api/music/file/91bf11a226b3d026",
+      "coverPath": "/covers/91bf11a226b3d026.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "愉悦"
+      ],
+      "sceneTags": [
+        "通勤"
+      ],
+      "energy": 64,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.295Z"
+    },
+    {
+      "id": "5f5044145829ba53",
+      "title": "最后一页",
+      "artist": "江语晨",
+      "album": "恋习",
+      "version": "",
+      "filename": "江语晨 - 最后一页.mp3",
+      "fileUrl": "/api/music/file/5f5044145829ba53",
+      "coverPath": "/covers/5f5044145829ba53.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.285Z"
+    },
+    {
+      "id": "c79ab86fbc01132c",
+      "title": "阳光下的星星",
+      "artist": "金海心",
+      "album": "独立日",
+      "version": "",
+      "filename": "金海心 - 阳光下的星星.flac",
+      "fileUrl": "/api/music/file/c79ab86fbc01132c",
+      "coverPath": "/covers/c79ab86fbc01132c.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "愉悦"
+      ],
+      "sceneTags": [
+        "通勤"
+      ],
+      "energy": 64,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.365Z"
+    },
+    {
+      "id": "4738c362658591fc",
+      "title": "Darling",
+      "artist": "空匪",
+      "album": "#####looooooove",
+      "version": "",
+      "filename": "空匪 - Darling.flac",
+      "fileUrl": "/api/music/file/4738c362658591fc",
+      "coverPath": "/covers/4738c362658591fc.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.314Z"
+    },
+    {
+      "id": "a7eaa8c454b93991",
+      "title": "看透所有一切",
+      "artist": "困困的先生",
+      "album": "看透所有一切",
+      "version": "",
+      "filename": "困困的先生 - 看透所有一切.flac",
+      "fileUrl": "/api/music/file/a7eaa8c454b93991",
+      "coverPath": "/covers/a7eaa8c454b93991.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.213Z"
+    },
+    {
+      "id": "f64221d328d2b0ea",
+      "title": "阿拉斯加海湾",
+      "artist": "蓝心羽",
+      "album": "阿拉斯加海湾",
+      "version": "",
+      "filename": "蓝心羽 - 阿拉斯加海湾.flac",
+      "fileUrl": "/api/music/file/f64221d328d2b0ea",
+      "coverPath": "/covers/f64221d328d2b0ea.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.324Z"
+    },
+    {
+      "id": "c922e950dbe5f128",
+      "title": "我们 (原唱版)",
+      "artist": "乐柠组合",
+      "album": "我们",
+      "version": "原唱版",
+      "filename": "乐柠组合 - 我们 (原唱版).mp3",
+      "fileUrl": "/api/music/file/c922e950dbe5f128",
+      "coverPath": "/covers/c922e950dbe5f128.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.194Z"
+    },
+    {
+      "id": "19c9f6fbaa6d6eb1",
+      "title": "罗生门（Follow）",
+      "artist": "梨冻紧",
+      "album": "罗生门（Follow）",
+      "version": "Follow",
+      "filename": "梨冻紧; Wiz_H张子豪 - 罗生门（Follow）.mp3",
+      "fileUrl": "/api/music/file/19c9f6fbaa6d6eb1",
+      "coverPath": "/covers/19c9f6fbaa6d6eb1.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.279Z"
+    },
+    {
+      "id": "63507112bb2bf433",
+      "title": "我知道你",
+      "artist": "励阳/徐君",
+      "album": "Dream Start",
+      "version": "",
+      "filename": "励阳; 徐君 - 我知道你.flac",
+      "fileUrl": "/api/music/file/63507112bb2bf433",
+      "coverPath": "/covers/63507112bb2bf433.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.203Z"
+    },
+    {
+      "id": "68b1b4ce0f72bb92",
+      "title": "会呼吸的痛",
+      "artist": "梁静茹",
+      "album": "崇拜",
+      "version": "",
+      "filename": "梁静茹 - 会呼吸的痛.mp3",
+      "fileUrl": "/api/music/file/68b1b4ce0f72bb92",
+      "coverPath": "/covers/68b1b4ce0f72bb92.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.275Z"
+    },
+    {
+      "id": "7113e1d49cecccca",
+      "title": "心墙",
+      "artist": "林俊杰",
+      "album": "她说 概念自选辑",
+      "version": "",
+      "filename": "林俊杰 - 心墙.flac",
+      "fileUrl": "/api/music/file/7113e1d49cecccca",
+      "coverPath": "/covers/7113e1d49cecccca.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.269Z"
+    },
+    {
+      "id": "94b2251b538d6f2d",
+      "title": "至少还有你",
+      "artist": "林忆莲",
+      "album": "林忆莲's",
+      "version": "",
+      "filename": "林忆莲 - 至少还有你.flac",
+      "fileUrl": "/api/music/file/94b2251b538d6f2d",
+      "coverPath": "/covers/94b2251b538d6f2d.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.271Z"
+    },
+    {
+      "id": "34b911d41ca692bf",
+      "title": "我只能离开",
+      "artist": "刘思达",
+      "album": "我只能离开",
+      "version": "",
+      "filename": "刘思达 - 我只能离开.mp3",
+      "fileUrl": "/api/music/file/34b911d41ca692bf",
+      "coverPath": "/covers/34b911d41ca692bf.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.201Z"
+    },
+    {
+      "id": "0e8a900fa950906e",
+      "title": "海屿你",
+      "artist": "马也_Crabbit",
+      "album": "海屿你",
+      "version": "",
+      "filename": "马也_Crabbit - 海屿你.mp3",
+      "fileUrl": "/api/music/file/0e8a900fa950906e",
+      "coverPath": "/covers/0e8a900fa950906e.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.402Z"
+    },
+    {
+      "id": "f552c6fea38895ca",
+      "title": "戒不掉（原声版）",
+      "artist": "欧阳耀莹",
+      "album": "戒不掉（原声版）",
+      "version": "原声版",
+      "filename": "欧阳耀莹 - 戒不掉（原声版）.flac",
+      "fileUrl": "/api/music/file/f552c6fea38895ca",
+      "coverPath": "/covers/f552c6fea38895ca.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.282Z"
+    },
+    {
+      "id": "f2c85996bb04a00e",
+      "title": "如果爱忘了",
+      "artist": "戚薇",
+      "album": "如果爱忘了",
+      "version": "",
+      "filename": "戚薇 - 如果爱忘了.mp3",
+      "fileUrl": "/api/music/file/f2c85996bb04a00e",
+      "coverPath": "/covers/f2c85996bb04a00e.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "心动"
+      ],
+      "sceneTags": [
+        "想念"
+      ],
+      "energy": 50,
+      "memoryWeight": 60,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.239Z"
+    },
+    {
+      "id": "77822d09b8bcc810",
+      "title": "到时说爱我",
+      "artist": "茜拉",
+      "album": "心旅",
+      "version": "",
+      "filename": "茜拉 - 到时说爱我.flac",
+      "fileUrl": "/api/music/file/77822d09b8bcc810",
+      "coverPath": "/covers/77822d09b8bcc810.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "心动"
+      ],
+      "sceneTags": [
+        "想念"
+      ],
+      "energy": 50,
+      "memoryWeight": 60,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.319Z"
+    },
+    {
+      "id": "da79ef8f025541cd",
+      "title": "疑心病",
+      "artist": "任然",
+      "album": "从小到大",
+      "version": "",
+      "filename": "任然 - 疑心病.mp3",
+      "fileUrl": "/api/music/file/da79ef8f025541cd",
+      "coverPath": "/covers/da79ef8f025541cd.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.198Z"
+    },
+    {
+      "id": "f3a9e56dab9e86b5",
+      "title": "其实",
+      "artist": "软萌小棉羊",
+      "album": "2024最新抖音热门榜单Top1【53】",
+      "version": "",
+      "filename": "软萌小棉羊 - 其实.mp3",
+      "fileUrl": "/api/music/file/f3a9e56dab9e86b5",
+      "coverPath": "/covers/f3a9e56dab9e86b5.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.343Z"
+    },
+    {
+      "id": "a2bd63e4509bac95",
+      "title": "在你的身边",
+      "artist": "盛哲",
+      "album": "在你的身边",
+      "version": "",
+      "filename": "盛哲 - 在你的身边.flac",
+      "fileUrl": "/api/music/file/a2bd63e4509bac95",
+      "coverPath": "/covers/a2bd63e4509bac95.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.312Z"
+    },
+    {
+      "id": "5f2e4f60b79c328a",
+      "title": "少一点天份",
+      "artist": "孙盛希",
+      "album": "少一点天份",
+      "version": "",
+      "filename": "孙盛希 - 少一点天份.mp3",
+      "fileUrl": "/api/music/file/5f2e4f60b79c328a",
+      "coverPath": "/covers/5f2e4f60b79c328a.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.219Z"
+    },
+    {
+      "id": "c475d27e1b76d1fb",
+      "title": "我怀念的",
+      "artist": "孙燕姿",
+      "album": "逆光",
+      "version": "",
+      "filename": "孙燕姿 - 我怀念的.flac",
+      "fileUrl": "/api/music/file/c475d27e1b76d1fb",
+      "coverPath": "/covers/c475d27e1b76d1fb.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.216Z"
+    },
+    {
+      "id": "d1c8144cc10368b3",
+      "title": "得不到的温柔",
+      "artist": "汪苏泷",
+      "album": "登陆计划",
+      "version": "",
+      "filename": "汪苏泷 - 得不到的温柔.flac",
+      "fileUrl": "/api/music/file/d1c8144cc10368b3",
+      "coverPath": "/covers/d1c8144cc10368b3.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "心动"
+      ],
+      "sceneTags": [
+        "想念"
+      ],
+      "energy": 50,
+      "memoryWeight": 60,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.288Z"
+    },
+    {
+      "id": "39d93a9b9da8d896",
+      "title": "我想念",
+      "artist": "汪苏泷",
+      "album": "我想念",
+      "version": "",
+      "filename": "汪苏泷 - 我想念.mp3",
+      "fileUrl": "/api/music/file/39d93a9b9da8d896",
+      "coverPath": "/covers/39d93a9b9da8d896.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.291Z"
+    },
+    {
+      "id": "58af8300609ad17e",
+      "title": "把回忆拼好给你",
+      "artist": "王贰浪",
+      "album": "把回忆拼好给你",
+      "version": "",
+      "filename": "王贰浪 - 把回忆拼好给你.mp3",
+      "fileUrl": "/api/music/file/58af8300609ad17e",
+      "coverPath": "/covers/58af8300609ad17e.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.304Z"
+    },
+    {
+      "id": "605c527402932d15",
+      "title": "谁",
+      "artist": "王贰浪",
+      "album": "谁",
+      "version": "",
+      "filename": "王贰浪 - 谁.flac",
+      "fileUrl": "/api/music/file/605c527402932d15",
+      "coverPath": "/covers/605c527402932d15.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.307Z"
+    },
+    {
+      "id": "2d020208b9c4b3bd",
+      "title": "一直很安静",
+      "artist": "王贰浪",
+      "album": "一直很安静",
+      "version": "",
+      "filename": "王贰浪 - 一直很安静.flac",
+      "fileUrl": "/api/music/file/2d020208b9c4b3bd",
+      "coverPath": "/covers/2d020208b9c4b3bd.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.300Z"
+    },
+    {
+      "id": "5f8bdec28d7348d4",
+      "title": "离开我的依赖",
+      "artist": "王艳薇",
+      "album": "离开我的依赖",
+      "version": "",
+      "filename": "王艳薇 - 离开我的依赖.flac",
+      "fileUrl": "/api/music/file/5f8bdec28d7348d4",
+      "coverPath": "/covers/5f8bdec28d7348d4.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.297Z"
+    },
+    {
+      "id": "94deeff88260e6b6",
+      "title": "大眠 (完整版)",
+      "artist": "小乐哥（王唯乐）",
+      "album": "大眠 (完整版)",
+      "version": "完整版",
+      "filename": "小乐哥（王唯乐） - 大眠 (完整版).flac",
+      "fileUrl": "/api/music/file/94deeff88260e6b6",
+      "coverPath": "/covers/94deeff88260e6b6.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.222Z"
+    },
+    {
+      "id": "06c6b0337ecd4436",
+      "title": "我走后",
+      "artist": "小咪",
+      "album": "我走后",
+      "version": "",
+      "filename": "小咪 - 我走后.flac",
+      "fileUrl": "/api/music/file/06c6b0337ecd4436",
+      "coverPath": "/covers/06c6b0337ecd4436.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.225Z"
+    },
+    {
+      "id": "0836b147ed3c305f",
+      "title": "想自由",
+      "artist": "徐秉龙",
+      "album": "想自由",
+      "version": "",
+      "filename": "徐秉龙 - 想自由.flac",
+      "fileUrl": "/api/music/file/0836b147ed3c305f",
+      "coverPath": "/covers/0836b147ed3c305f.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.235Z"
+    },
+    {
+      "id": "dbff4434c2289f44",
+      "title": "到此为止",
+      "artist": "徐佳莹",
+      "album": "心里学",
+      "version": "",
+      "filename": "徐佳莹 - 到此为止.mp3",
+      "fileUrl": "/api/music/file/dbff4434c2289f44",
+      "coverPath": "/covers/dbff4434c2289f44.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.230Z"
+    },
+    {
+      "id": "7b315d275feca026",
+      "title": "最初的记忆",
+      "artist": "徐佳莹",
+      "album": "夏至未至 影视原声带",
+      "version": "",
+      "filename": "徐佳莹 - 最初的记忆.flac",
+      "fileUrl": "/api/music/file/7b315d275feca026",
+      "coverPath": "/covers/7b315d275feca026.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.232Z"
+    },
+    {
+      "id": "fe2e093a0fde422d",
+      "title": "迟迟",
+      "artist": "薛之谦",
+      "album": "天外来物",
+      "version": "",
+      "filename": "薛之谦 - 迟迟.flac",
+      "fileUrl": "/api/music/file/fe2e093a0fde422d",
+      "coverPath": "/covers/fe2e093a0fde422d.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.340Z"
+    },
+    {
+      "id": "8ef673822500621f",
+      "title": "其实",
+      "artist": "薛之谦",
+      "album": "意外",
+      "version": "",
+      "filename": "薛之谦 - 其实.flac",
+      "fileUrl": "/api/music/file/8ef673822500621f",
+      "coverPath": "/covers/8ef673822500621f.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.337Z"
+    },
+    {
+      "id": "b5674d5ca8b119e4",
+      "title": "夏夜最后的烟火",
+      "artist": "颜人中",
+      "album": "夏夜最后的烟火",
+      "version": "",
+      "filename": "颜人中 - 夏夜最后的烟火.mp3",
+      "fileUrl": "/api/music/file/b5674d5ca8b119e4",
+      "coverPath": "/covers/b5674d5ca8b119e4.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "愉悦"
+      ],
+      "sceneTags": [
+        "通勤"
+      ],
+      "energy": 64,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.399Z"
+    },
+    {
+      "id": "8dbcfcfaa23195ca",
+      "title": "带我走",
+      "artist": "杨丞琳",
+      "album": "摩登摇滚",
+      "version": "",
+      "filename": "杨丞琳 - 带我走.mp3",
+      "fileUrl": "/api/music/file/8dbcfcfaa23195ca",
+      "coverPath": "/covers/8dbcfcfaa23195ca.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.262Z"
+    },
+    {
+      "id": "119a0dcbc3e3fbc2",
+      "title": "带我走(Live)",
+      "artist": "杨丞琳",
+      "album": "半熟宣言 庆功演唱会",
+      "version": "Live",
+      "filename": "杨丞琳 - 带我走(Live).mp3",
+      "fileUrl": "/api/music/file/119a0dcbc3e3fbc2",
+      "coverPath": "/covers/119a0dcbc3e3fbc2.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "热烈"
+      ],
+      "sceneTags": [
+        "现场"
+      ],
+      "energy": 68,
+      "memoryWeight": 58,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.259Z"
+    },
+    {
+      "id": "1ae48f85554dfc03",
+      "title": "雨爱",
+      "artist": "杨丞琳",
+      "album": "雨爱",
+      "version": "",
+      "filename": "杨丞琳 - 雨爱.flac",
+      "fileUrl": "/api/music/file/1ae48f85554dfc03",
+      "coverPath": "/covers/1ae48f85554dfc03.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅",
+        "心动"
+      ],
+      "sceneTags": [
+        "深夜",
+        "想念"
+      ],
+      "energy": 34,
+      "memoryWeight": 72,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.266Z"
+    },
+    {
+      "id": "f7feebd7db2ecac4",
+      "title": "下雨天",
+      "artist": "与少年他",
+      "album": "下雨天",
+      "version": "",
+      "filename": "与少年他; 芝麻Mochi - 下雨天.mp3",
+      "fileUrl": "/api/music/file/f7feebd7db2ecac4",
+      "coverPath": "/covers/f7feebd7db2ecac4.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.191Z"
+    },
+    {
+      "id": "bac8c4a962d152d4",
+      "title": "其实其实",
+      "artist": "鸢",
+      "album": "全网最新热歌电音322",
+      "version": "",
+      "filename": "鸢 - 其实其实.flac",
+      "fileUrl": "/api/music/file/bac8c4a962d152d4",
+      "coverPath": "/covers/bac8c4a962d152d4.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.405Z"
+    },
+    {
+      "id": "33e1f9142bacebe6",
+      "title": "还是分开",
+      "artist": "张叶蕾",
+      "album": "还是分开",
+      "version": "",
+      "filename": "张叶蕾 - 还是分开.flac",
+      "fileUrl": "/api/music/file/33e1f9142bacebe6",
+      "coverPath": "/covers/33e1f9142bacebe6.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.227Z"
+    },
+    {
+      "id": "213478398b2ca6b4",
+      "title": "就让这大雨全都落下",
+      "artist": "郑润泽",
+      "album": "就让这大雨全都落下",
+      "version": "",
+      "filename": "郑润泽 - 就让这大雨全都落下.flac",
+      "fileUrl": "/api/music/file/213478398b2ca6b4",
+      "coverPath": "/covers/213478398b2ca6b4.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.351Z"
+    },
+    {
+      "id": "25149e3e653639bd",
+      "title": "如果呢",
+      "artist": "郑润泽",
+      "album": "如果呢",
+      "version": "",
+      "filename": "郑润泽 - 如果呢.flac",
+      "fileUrl": "/api/music/file/25149e3e653639bd",
+      "coverPath": "/covers/25149e3e653639bd.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.349Z"
+    },
+    {
+      "id": "b028d23ef1e55f1e",
+      "title": "瞬",
+      "artist": "郑润泽",
+      "album": "瞬",
+      "version": "",
+      "filename": "郑润泽 - 瞬.mp3",
+      "fileUrl": "/api/music/file/b028d23ef1e55f1e",
+      "coverPath": "/covers/b028d23ef1e55f1e.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.355Z"
+    },
+    {
+      "id": "5a7ba614cdd38347",
+      "title": "于是",
+      "artist": "郑润泽",
+      "album": "于是",
+      "version": "",
+      "filename": "郑润泽 - 于是.mp3",
+      "fileUrl": "/api/music/file/5a7ba614cdd38347",
+      "coverPath": "/covers/5a7ba614cdd38347.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.347Z"
+    },
+    {
+      "id": "f2689ef4acb34075",
+      "title": "我看过",
+      "artist": "周星星",
+      "album": "我看过",
+      "version": "",
+      "filename": "周星星 - 我看过.mp3",
+      "fileUrl": "/api/music/file/f2689ef4acb34075",
+      "coverPath": "/covers/f2689ef4acb34075.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.211Z"
+    },
+    {
+      "id": "ebe97652dfa371c9",
+      "title": "永不失联的爱",
+      "artist": "周兴哲",
+      "album": "如果雨之后",
+      "version": "",
+      "filename": "周兴哲 - 永不失联的爱.flac",
+      "fileUrl": "/api/music/file/ebe97652dfa371c9",
+      "coverPath": "/covers/ebe97652dfa371c9.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅",
+        "心动"
+      ],
+      "sceneTags": [
+        "深夜",
+        "想念"
+      ],
+      "energy": 34,
+      "memoryWeight": 72,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.206Z"
+    },
+    {
+      "id": "a0bc69b35e732c01",
+      "title": "最好的我（破碎版）",
+      "artist": "昨夜梦游",
+      "album": "最好的我（破碎版）",
+      "version": "破碎版",
+      "filename": "昨夜梦游 - 最好的我（破碎版）.mp3",
+      "fileUrl": "/api/music/file/a0bc69b35e732c01",
+      "coverPath": "/covers/a0bc69b35e732c01.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.251Z"
+    },
+    {
+      "id": "d59ec5d660ff70e1",
+      "title": "我知道",
+      "artist": "By2",
+      "album": "Twins",
+      "version": "",
+      "filename": "By2 - 我知道.mp3",
+      "fileUrl": "/api/music/file/d59ec5d660ff70e1",
+      "coverPath": "/covers/d59ec5d660ff70e1.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.142Z"
+    },
+    {
+      "id": "a85516e20cbf9a13",
+      "title": "Call Me Maybe",
+      "artist": "Carly Rae Jepsen",
+      "album": "Call Me Maybe",
+      "version": "",
+      "filename": "Carly Rae Jepsen - Call Me Maybe.flac",
+      "fileUrl": "/api/music/file/a85516e20cbf9a13",
+      "coverPath": "/covers/a85516e20cbf9a13.jpg",
+      "language": "en",
+      "languageTags": [
+        "英语"
+      ],
+      "moodTags": [
+        "愉悦"
+      ],
+      "sceneTags": [
+        "通勤"
+      ],
+      "energy": 64,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.145Z"
+    },
+    {
+      "id": "57aea3e65aaef44a",
+      "title": "雨过后的风景",
+      "artist": "Dizzy Dizzo (蔡诗芸)",
+      "album": "黑色彩虹",
+      "version": "",
+      "filename": "Dizzy Dizzo (蔡诗芸) - 雨过后的风景.mp3",
+      "fileUrl": "/api/music/file/57aea3e65aaef44a",
+      "coverPath": "/covers/57aea3e65aaef44a.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.148Z"
+    },
+    {
+      "id": "654df618e478cc3f",
+      "title": "Departures〜あなたにおくるアイの歌〜",
+      "artist": "EGOIST",
+      "album": "Departures~あなたにおくるアイの歌~",
+      "version": "",
+      "filename": "EGOIST - Departures〜あなたにおくるアイの歌〜.mp3",
+      "fileUrl": "/api/music/file/654df618e478cc3f",
+      "coverPath": "/covers/654df618e478cc3f.jpg",
+      "language": "ja",
+      "languageTags": [
+        "日语"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.152Z"
+    },
+    {
+      "id": "c03875d866c8879f",
+      "title": "多远都要在一起",
+      "artist": "G.E.M.邓紫棋",
+      "album": "新的心跳",
+      "version": "",
+      "filename": "G.E.M.邓紫棋 - 多远都要在一起.mp3",
+      "fileUrl": "/api/music/file/c03875d866c8879f",
+      "coverPath": "/covers/c03875d866c8879f.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.163Z"
+    },
+    {
+      "id": "d777f3a75dc2f628",
+      "title": "光年之外",
+      "artist": "G.E.M.邓紫棋",
+      "album": "光年之外",
+      "version": "",
+      "filename": "G.E.M.邓紫棋 - 光年之外.flac",
+      "fileUrl": "/api/music/file/d777f3a75dc2f628",
+      "coverPath": "/covers/d777f3a75dc2f628.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "愉悦"
+      ],
+      "sceneTags": [
+        "通勤"
+      ],
+      "energy": 64,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.154Z"
+    },
+    {
+      "id": "167673e0651a5a51",
+      "title": "唯一",
+      "artist": "G.E.M.邓紫棋",
+      "album": "T.I.M.E.",
+      "version": "",
+      "filename": "G.E.M.邓紫棋 - 唯一.flac",
+      "fileUrl": "/api/music/file/167673e0651a5a51",
+      "coverPath": "/covers/167673e0651a5a51.jpg",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "心动"
+      ],
+      "sceneTags": [
+        "想念"
+      ],
+      "energy": 50,
+      "memoryWeight": 60,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.158Z"
+    },
+    {
+      "id": "96e171dee2d6fc10",
+      "title": "Power",
+      "artist": "JordanBeats",
+      "album": "Power (Instrumentals & Rap Beats)",
+      "version": "",
+      "filename": "JordanBeats - Power.mp3",
+      "fileUrl": "/api/music/file/96e171dee2d6fc10",
+      "coverPath": "/covers/96e171dee2d6fc10.jpg",
+      "language": "instrumental",
+      "languageTags": [
+        "纯音乐"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": false,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.167Z"
+    },
+    {
+      "id": "01069e5e57368090",
+      "title": "恋音と雨空",
+      "artist": "Lefty Hand Cream",
+      "album": "1LDK",
+      "version": "",
+      "filename": "Lefty Hand Cream - 恋音と雨空.flac",
+      "fileUrl": "/api/music/file/01069e5e57368090",
+      "coverPath": "/covers/01069e5e57368090.jpg",
+      "language": "ja",
+      "languageTags": [
+        "日语"
+      ],
+      "moodTags": [
+        "惆怅"
+      ],
+      "sceneTags": [
+        "深夜"
+      ],
+      "energy": 34,
+      "memoryWeight": 62,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.169Z"
+    },
+    {
+      "id": "a5d7e44be3a8f453",
+      "title": "絆",
+      "artist": "miu-clips",
+      "album": "Rhythm of My Heart",
+      "version": "",
+      "filename": "miu-clips - 絆.flac",
+      "fileUrl": "/api/music/file/a5d7e44be3a8f453",
+      "coverPath": "/covers/a5d7e44be3a8f453.png",
+      "language": "ja",
+      "languageTags": [
+        "日语"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.173Z"
+    },
+    {
+      "id": "52b37bc7b50226a5",
+      "title": "Maybe",
+      "artist": "mixed matches/Lukrative",
+      "album": "Ready for the World",
+      "version": "",
+      "filename": "mixed matches; Lukrative - Maybe.flac",
+      "fileUrl": "/api/music/file/52b37bc7b50226a5",
+      "coverPath": "/covers/52b37bc7b50226a5.jpg",
+      "language": "en",
+      "languageTags": [
+        "英语"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.175Z"
+    },
+    {
+      "id": "96b3dd82442a80c3",
+      "title": "❀",
+      "artist": "nevva",
+      "album": "❀",
+      "version": "",
+      "filename": "nevva - ❀.mp3",
+      "fileUrl": "/api/music/file/96b3dd82442a80c3",
+      "coverPath": "/covers/96b3dd82442a80c3.jpg",
+      "language": "instrumental",
+      "languageTags": [
+        "纯音乐"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": false,
+      "tagSource": "manual",
+      "createdAt": "2026-06-06T00:41:14.180Z"
+    },
+    {
+      "id": "192529b1ee5a9401",
+      "title": "失眠",
+      "artist": "Suki刘舒妤",
+      "album": "Ladies Night",
+      "version": "",
+      "filename": "Suki刘舒妤 - 失眠.mp3",
+      "fileUrl": "/api/music/file/192529b1ee5a9401",
+      "coverPath": "/covers/192529b1ee5a9401.png",
+      "language": "zh",
+      "languageTags": [
+        "中文"
+      ],
+      "moodTags": [
+        "平静"
+      ],
+      "sceneTags": [
+        "日常"
+      ],
+      "energy": 50,
+      "memoryWeight": 50,
+      "vocal": true,
+      "tagSource": "auto",
+      "createdAt": "2026-06-06T00:41:14.183Z"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "yun-music-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "music:dedupe": "node scripts/dedupe-music.js",
+    "music:tags": "node scripts/apply-manual-tags.js",
+    "music:covers": "node scripts/extract-covers.js",
+    "codegraph": "codegraph-mcp --workspace . --exclude node_modules --exclude .git --exclude dist --exclude build --graph-only",
+    "codegraph:index": "codegraph-mcp --workspace . --exclude node_modules --exclude .git --exclude dist --exclude build --graph-only --run-tool codegraph_get_module_summary --tool-args \"{\\\"path\\\":\\\".\\\"}\""
+  },
+  "devDependencies": {
+    "@astudioplus/codegraph-mcp": "^0.17.7"
+  },
+  "dependencies": {
+    "music-metadata": "^11.12.3"
+  }
+}

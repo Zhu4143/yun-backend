@@ -1,0 +1,11 @@
+.env
+.env.local
+node_modules/
+.DS_Store
+desktop.ini
+
+public_old_backup/
+*.bak
+.mcp.json
+public/user_memory.json
+server/data/yunMemory.json
