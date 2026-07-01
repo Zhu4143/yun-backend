@@ -1,0 +1,106 @@
+.yun-hologram-avatar {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.yun-avatar-drag-surface {
+  position: fixed;
+  left: max(0px, calc(var(--avatar-drag-x, 0px) - 40px));
+  top: max(0px, calc(9vh + var(--avatar-drag-y, 0px)));
+  z-index: 2;
+  width: min(48vw, 640px);
+  height: min(82vh, 820px);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.yun-avatar-drag-surface:active {
+  cursor: grabbing;
+}
+
+.yun-hologram-avatar canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.yun-hologram-avatar--terrain {
+  z-index: 2;
+  pointer-events: none;
+  transform: translateY(5vh);
+  background: transparent;
+}
+
+.yun-hologram-avatar--terrain canvas {
+  background: transparent !important;
+  pointer-events: none;
+}
+
+.yun-hologram-avatar--terrain .yun-hologram-avatar__message,
+.yun-hologram-avatar--terrain .yun-hologram-avatar__message--animation {
+  left: 50%;
+  bottom: 34%;
+  transform: translateX(-50%);
+}
+
+.yun-hologram-avatar__message {
+  position: absolute;
+  left: 88px;
+  bottom: 118px;
+  padding: 10px 14px;
+  border: 1px solid rgba(125, 236, 255, 0.32);
+  border-radius: 18px;
+  color: rgba(216, 250, 255, 0.82);
+  background: rgba(18, 42, 55, 0.24);
+  box-shadow: 0 0 24px rgba(80, 220, 255, 0.12);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 12px rgba(95, 226, 255, 0.32);
+  backdrop-filter: blur(14px);
+}
+
+.yun-hologram-avatar__message--animation {
+  bottom: 164px;
+}
+
+.yun-motion-picker {
+  position: fixed;
+  left: 76px;
+  bottom: 76px;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  width: min(440px, calc(100vw - 152px));
+  pointer-events: auto;
+}
+
+.yun-motion-button {
+  min-width: 46px;
+  height: 32px;
+  border: 1px solid rgba(137, 238, 255, 0.28);
+  border-radius: 999px;
+  color: rgba(226, 251, 255, 0.84);
+  background: rgba(18, 42, 56, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 18px rgba(82, 218, 255, 0.10);
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+}
+
+.yun-motion-button.is-active {
+  border-color: rgba(132, 246, 255, 0.62);
+  color: white;
+  background: rgba(48, 112, 132, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0 22px rgba(94, 229, 255, 0.22),
+    0 0 34px rgba(190, 151, 255, 0.14);
+}

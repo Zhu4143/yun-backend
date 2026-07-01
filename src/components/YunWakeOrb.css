@@ -1,0 +1,126 @@
+.yun-wake-orb-shell {
+  --yun-orb-size: clamp(148px, 14vw, 206px);
+  position: absolute;
+  left: 50%;
+  top: 43%;
+  z-index: 6;
+  width: var(--yun-orb-size);
+  height: var(--yun-orb-size);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -46%) scale(0.82);
+  filter: drop-shadow(0 24px 34px rgba(0, 0, 0, 0.34));
+  transition: opacity 520ms ease, transform 720ms cubic-bezier(0.2, 0.82, 0.2, 1);
+}
+
+.yun-wake-orb-shell.is-visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.yun-wake-orb {
+  position: relative;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.44) !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.045)),
+    linear-gradient(112deg, transparent 8%, rgba(255, 255, 255, 0.12) 32%, transparent 50%),
+    radial-gradient(circle at 20% 8%, rgba(255, 238, 210, 0.15), transparent 30%),
+    rgba(255, 255, 255, 0.055) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.72),
+    inset 0 -8px 18px rgba(38, 21, 12, 0.08),
+    0 16px 34px rgba(30, 16, 8, 0.16) !important;
+}
+
+.yun-wake-orb,
+.yun-wake-orb > *,
+.yun-wake-orb > .glass,
+.yun-wake-orb .glass__warp {
+  border-radius: 50% !important;
+  overflow: hidden !important;
+}
+
+.yun-wake-orb > .glass,
+.yun-wake-orb .glass__warp {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.yun-wake-orb::before,
+.yun-wake-orb::after,
+.yun-wake-orb__rear,
+.yun-wake-orb__depth,
+.yun-wake-orb__shine {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.yun-wake-orb::before {
+  z-index: 3;
+  border: 2px solid transparent;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(255, 239, 212, 0.28) 34%, rgba(135, 214, 255, 0.18) 62%, rgba(255, 255, 255, 0.55)) border-box;
+  -webkit-mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 1;
+}
+
+.yun-wake-orb::after {
+  inset: 2.5%;
+  z-index: 4;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 9px 11px 16px rgba(255, 255, 255, 0.14),
+    inset -13px -16px 22px rgba(28, 18, 12, 0.17),
+    inset 0 -3px 5px rgba(255, 225, 184, 0.12);
+}
+
+.yun-wake-orb__rear {
+  inset: 6%;
+  z-index: 1;
+  transform: translateY(7px) scale(0.965);
+  border: 1px solid rgba(207, 238, 255, 0.2);
+  background:
+    radial-gradient(ellipse at 50% 82%, rgba(255, 239, 214, 0.13), transparent 42%),
+    radial-gradient(circle at 50% 48%, transparent 54%, rgba(15, 24, 29, 0.16) 82%, rgba(7, 12, 15, 0.24) 100%);
+  box-shadow:
+    inset 0 -13px 22px rgba(5, 9, 12, 0.2),
+    0 9px 17px rgba(10, 8, 7, 0.15);
+}
+
+.yun-wake-orb__depth {
+  inset: 2%;
+  z-index: 2;
+  background:
+    radial-gradient(ellipse at 34% 23%, rgba(255, 255, 255, 0.2), transparent 26%),
+    radial-gradient(ellipse at 52% 88%, rgba(255, 230, 194, 0.1), transparent 48%),
+    radial-gradient(circle at 47% 43%, transparent 42%, rgba(18, 27, 32, 0.055) 64%, rgba(10, 16, 20, 0.17) 100%);
+  box-shadow:
+    inset 15px 17px 24px rgba(255, 255, 255, 0.075),
+    inset -19px -23px 29px rgba(3, 9, 13, 0.13);
+}
+
+.yun-wake-orb__shine {
+  inset: 8% 18% 59% 16%;
+  z-index: 5;
+  background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.36), rgba(255, 255, 255, 0.08) 43%, transparent 72%);
+  filter: blur(4px);
+  transform: rotate(-20deg) skewX(-8deg);
+}
+
+@media (max-width: 720px) {
+  .yun-wake-orb-shell {
+    --yun-orb-size: 136px;
+    top: 39%;
+  }
+}

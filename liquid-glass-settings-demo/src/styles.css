@@ -1,0 +1,163 @@
+:root {
+  color: rgba(255, 255, 255, 0.92);
+  font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+  --song-primary: #7657ff;
+  --song-secondary: #51e0f0;
+  --song-accent: #ffb75f;
+  --optical-intensity: 0.18;
+  --optical-distortion: 0.16;
+  --optical-flow: 0.12;
+  --optical-blur: 0.04;
+  --optical-chromatic: 0.14;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #03040a;
+}
+
+button { font: inherit; }
+
+.demo-shell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 22% 18%, rgba(118, 87, 255, 0.26), transparent 34%),
+    radial-gradient(circle at 82% 76%, rgba(81, 224, 240, 0.18), transparent 38%),
+    linear-gradient(135deg, #050711, #090713 56%, #020407);
+}
+
+.ambient {
+  position: absolute;
+  width: 56vw;
+  height: 18vw;
+  border-radius: 50%;
+  filter: blur(54px);
+  opacity: calc(0.22 + var(--optical-intensity) * 0.34);
+  animation: float 12s ease-in-out infinite alternate;
+}
+
+.ambient--one { left: -12%; top: 12%; background: #7d36ff; transform: rotate(-24deg); }
+.ambient--two { right: -10%; bottom: 8%; background: #21d9ed; transform: rotate(28deg); animation-delay: -5s; }
+
+.particle-disc {
+  position: absolute;
+  width: min(74vw, 900px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  opacity: 0.72;
+  background:
+    repeating-radial-gradient(circle, transparent 0 6px, rgba(255,255,255,.16) 7px 8px),
+    conic-gradient(from 25deg, #1a1630, #6954df, #141521, #31b8cf, #16121d, #d87b43, #1a1630);
+  mask: radial-gradient(circle, #000 0 68%, transparent 69%);
+  transform: perspective(850px) rotateX(61deg) rotateZ(-24deg) scale(1.15);
+  filter: saturate(calc(1 + var(--optical-chromatic) * .7));
+}
+
+.settings-glass {
+  position: relative;
+  z-index: 2;
+  width: min(520px, calc(100vw - 34px));
+  border-radius: 30px;
+  isolation: isolate;
+}
+
+.settings-card { padding: 26px; }
+.settings-header, .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.settings-header { margin-bottom: 24px; }
+.eyebrow { margin: 0 0 5px; color: rgba(205,235,255,.64); font-size: 11px; letter-spacing: .14em; }
+h1 { margin: 0; font-size: 27px; }
+.close-button { width: 38px; height: 38px; border: 1px solid rgba(255,255,255,.24); border-radius: 50%; color: white; background: rgba(255,255,255,.05); cursor: pointer; }
+.settings-row { min-height: 38px; font-size: 15px; }
+.summary, .mode-copy { color: rgba(232,239,247,.58); font-size: 13px; line-height: 1.65; }
+.summary { margin: 18px 0; }
+.mode-copy { margin: 14px 0 18px; }
+.mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.manage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+
+.glass-pill-shell {
+  position: relative;
+  display: block;
+  min-width: 0;
+  padding: 1px;
+  border-radius: 18px;
+}
+
+.glass-pill-shell.is-wide { width: 100%; }
+
+.glass-pill-shell__halo {
+  position: absolute;
+  inset: -2px;
+  border-radius: 19px;
+  pointer-events: none;
+  opacity: .56;
+  background:
+    linear-gradient(120deg, transparent 0 34%, rgba(255,255,255,.82) 46%, transparent 58%),
+    conic-gradient(from 0deg, rgba(255,255,255,.05), rgba(255,255,255,.0) 18%, rgba(255,255,255,.14) 34%, rgba(255,255,255,.0) 52%, rgba(255,255,255,.08) 72%, rgba(255,255,255,.05));
+  filter: blur(4px) saturate(1.1);
+  mix-blend-mode: screen;
+  animation: pillHaloSweep 4.6s linear infinite;
+}
+
+.glass-pill-shell.is-active .glass-pill-shell__halo {
+  opacity: .84;
+  animation-duration: 3.6s;
+}
+
+.glass-pill-lens { border-radius: 16px; }
+
+.glass-pill-button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 16px;
+  color: rgba(255,255,255,.78);
+  background: transparent;
+  cursor: pointer;
+  transition: transform 180ms ease, color 180ms ease;
+}
+
+.glass-pill-button:hover,
+.glass-pill-button.is-active {
+  color: rgba(255,255,255,.96);
+  transform: translateY(-1px);
+}
+
+.glass-pill-shell.is-wide .glass-pill-button { min-height: 48px; }
+.toggle { position: relative; width: 48px; height: 27px; padding: 0; border: 1px solid rgba(255,255,255,.24); border-radius: 999px; background: rgba(255,255,255,.08); cursor: pointer; }
+.toggle i { position: absolute; top: 4px; left: 4px; width: 17px; height: 17px; border-radius: 50%; background: rgba(255,255,255,.72); transition: 220ms ease; }
+.toggle.is-on { background: color-mix(in srgb, var(--song-accent) 28%, rgba(255,255,255,.08)); }
+.toggle.is-on i { left: 25px; background: #ffe2a8; box-shadow: 0 0 13px rgba(255,188,92,.5); }
+.divider { height: 1px; margin: 22px 0 14px; background: linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent); }
+.hint { position: fixed; bottom: 20px; z-index: 3; margin: 0; color: rgba(255,255,255,.38); font-size: 12px; }
+
+@keyframes float {
+  from { translate: -3% -4%; rotate: -2deg; }
+  to { translate: 5% 7%; rotate: 3deg; }
+}
+
+@keyframes pillHaloSweep {
+  from { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.02); }
+  to { transform: rotate(360deg) scale(1); }
+}
+
+@media (max-width: 560px) {
+  .settings-card { padding: 21px; }
+  .mode-grid { grid-template-columns: 1fr; }
+  .hint { display: none; }
+}

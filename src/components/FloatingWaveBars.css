@@ -1,0 +1,134 @@
+.floating-wave-bars {
+  position: absolute;
+  left: 50%;
+  bottom: 180px;
+  z-index: 2;
+  width: clamp(940px, 78vw, 1160px);
+  height: clamp(44px, 7vh, 76px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0.82;
+  mix-blend-mode: screen;
+  filter: blur(0.08px);
+  transform: translateX(-50%);
+}
+
+.floating-wave-bars__inner {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  width: 100%;
+  height: 100%;
+  gap: clamp(1px, 0.18vw, 4px);
+  padding: 0 clamp(4px, 0.7vw, 14px);
+}
+
+.floating-wave-bars__inner::before {
+  content: "";
+  position: absolute;
+  inset: 18% 0;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 48% 56%, rgba(255, 229, 182, 0.16), rgba(255, 229, 182, 0.035) 46%, transparent 70%);
+  filter: blur(12px);
+  opacity: 0.44;
+}
+
+.floating-wave-bars__bar {
+  position: relative;
+  z-index: 1;
+  width: clamp(2px, 0.22vw, 5px);
+  height: var(--bar-height);
+  min-height: 10px;
+  max-height: 100%;
+  transform-origin: 50% 100%;
+  transform: scaleY(0.42);
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(255, 250, 232, 0.78),
+      rgba(255, 226, 174, 0.66) 48%,
+      rgba(246, 211, 150, 0.48)
+    );
+  box-shadow:
+    0 0 5px rgba(255, 230, 184, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.30);
+  animation: floating-wave-idle calc(var(--bar-duration) * 1.6) ease-in-out infinite;
+  animation-delay: var(--bar-delay);
+  will-change: transform, opacity;
+}
+
+.floating-wave-bars.is-active .floating-wave-bars__bar {
+  opacity: 0.86;
+  animation-name: floating-wave-active;
+  animation-duration: var(--bar-duration);
+}
+
+.floating-wave-bars.is-idle .floating-wave-bars__bar {
+  opacity: 0.54;
+}
+
+.floating-wave-bars.is-audio-reactive .floating-wave-bars__bar {
+  animation: none;
+  transform: scaleY(var(--wave-scale, 0.42));
+  transition: opacity 180ms ease;
+}
+
+@keyframes floating-wave-active {
+  0%,
+  100% {
+    transform: scaleY(0.24);
+  }
+
+  34% {
+    transform: scaleY(1.18);
+  }
+
+  58% {
+    transform: scaleY(0.42);
+  }
+
+  76% {
+    transform: scaleY(1.34);
+  }
+}
+
+@keyframes floating-wave-idle {
+  0%,
+  100% {
+    transform: scaleY(0.22);
+  }
+
+  50% {
+    transform: scaleY(0.58);
+  }
+}
+
+@media (max-width: 768px) {
+  .floating-wave-bars {
+    left: 50%;
+    bottom: 112px;
+    width: calc(100vw - 54px);
+    height: 44px;
+    opacity: 0.54;
+  }
+
+  .floating-wave-bars__inner {
+    gap: clamp(1px, 0.34vw, 4px);
+    padding: 0 6px;
+  }
+
+  .floating-wave-bars__bar {
+    width: clamp(1.5px, 0.32vw, 3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-wave-bars__bar {
+    animation-duration: 2.8s;
+  }
+}
