@@ -7,6 +7,8 @@ import { useLocalPlayer } from './hooks/useLocalPlayer'
 import { useYunChat } from './hooks/useYunChat'
 import { useYunMemory } from './hooks/useYunMemory'
 import { useYunVoice } from './hooks/useYunVoice'
+import { createYunLegacyPlayerAdapter } from './player/adapters/yunLegacyPlayerAdapter'
+import { PlayerProvider } from './player/react/PlayerProvider'
 import FloatingLyrics from './components/FloatingLyrics'
 import LyricForegroundFog from './components/LyricForegroundFog'
 import VoicePickupGlass from './components/VoicePickupGlass'
@@ -511,12 +513,12 @@ function App() {
   const sceneCoverSlotRefs = useRef([])
   const coverSweepFrameRef = useRef(0)
 
+  const legacyPlayer = useLocalPlayer(libraryTracks)
   const {
     audioRef,
     currentSong,
     isPlaying,
     currentTime,
-    duration,
     playbackMode,
     lastAutoNextSong,
     playSong,
@@ -527,7 +529,13 @@ function App() {
     seekTo,
     setPlaybackMode,
     readAudioFrequencyData,
-  } = useLocalPlayer(libraryTracks)
+  } = legacyPlayer
+  const [playerCore] = useState(() => createYunLegacyPlayerAdapter())
+  const playerState = playerCore.updateLegacy(legacyPlayer)
+  useLayoutEffect(() => {
+    playerCore.flush()
+  })
+  useEffect(() => () => playerCore.dispose(), [playerCore])
   const yunVoice = useYunVoice({ musicAudioRef: audioRef })
   const voiceSettings = yunVoice.settings
   const yunMemory = useYunMemory()
@@ -681,24 +689,24 @@ function App() {
   }, [playSong, reactToSongChange])
 
   const playNextWithPodcastReaction = useCallback(async () => {
-    const result = await playNext()
+    const result = await playerCore.next()
 
     if (result?.ok && result.song) {
       reactToSongChange(result.song, 'user_next')
     }
 
     return result
-  }, [playNext, reactToSongChange])
+  }, [playerCore, reactToSongChange])
 
   const playPreviousWithPodcastReaction = useCallback(async () => {
-    const result = await playPrevious()
+    const result = await playerCore.previous()
 
     if (result?.ok && result.song) {
       reactToSongChange(result.song, 'user_prev')
     }
 
     return result
-  }, [playPrevious, reactToSongChange])
+  }, [playerCore, reactToSongChange])
 
   const visibleLibraryTracks = useMemo(() => {
     const query = libraryQuery.trim().toLowerCase()
@@ -1043,7 +1051,7 @@ function App() {
 
   const morphRect = morphLayer?.phase === 'to' ? morphLayer.to : morphLayer?.from
   const morphRadius = morphLayer?.phase === 'to' ? morphLayer.toRadius : morphLayer?.fromRadius
-  const displayedSong = currentSong || {
+  const displayedSong = playerState.currentTrack || {
     title: 'golden hour',
     artist: 'kudasai',
     coverUrl: '',
@@ -1303,7 +1311,7 @@ function App() {
     .slice(1, 4)
     .map((track) => getSongCoverUrl(track, ''))
     .filter(Boolean), [memoryStripTracks])
-  const progressPercent = duration ? Math.min(100, (currentTime / duration) * 100) : 0
+  const progressPercent = playerState.duration ? Math.min(100, (playerState.currentTime / playerState.duration) * 100) : 0
   const backgroundCoverUrl = getSongCoverUrl(currentSong, sceneCoverItems[0]?.coverUrl || sceneTestCovers[0])
   const songThemeStyle = useSongTheme(backgroundCoverUrl)
   const morphStyle = morphLayer
@@ -1317,14 +1325,15 @@ function App() {
     : undefined
 
   return (
+    <PlayerProvider core={playerCore}>
     <main
       className={`app${uiMode === 'immersive' ? ' immersive-mode' : ' normal-mode'}${activePanel === 'library' ? ' library-open' : ''}${activePanel === 'memory' ? ' memory-settings-open' : ''}${activePanel === 'voice' ? ' voice-open' : ''}${activePanel === 'playMode' ? ' play-mode-open' : ''}${panelContentVisible ? '' : ' panel-content-hidden'}${morphLayer ? ' is-morphing' : ''}`}
       style={songThemeStyle}
     >
       <AnimatedBackground
-        active={isPlaying}
+        active={playerState.isPlaying}
         coverUrl={backgroundCoverUrl}
-        trackKey={currentSong?.id || currentSong?.url || currentSong?.path || `${currentSong?.title || ''}-${currentSong?.artist || ''}`}
+        trackKey={playerState.currentTrack?.id || playerState.currentTrack?.url || playerState.currentTrack?.path || `${playerState.currentTrack?.title || ''}-${playerState.currentTrack?.artist || ''}`}
         preloadCoverUrls={backgroundPreloadCoverUrls}
         getFrequencyData={readAudioFrequencyData}
         mountainControls={mountainControls}
@@ -2074,10 +2083,10 @@ function App() {
             <button
               className="control-button control-button--primary"
               type="button"
-              aria-label={isPlaying ? 'Pause' : 'Play'}
-              onClick={togglePlayPause}
+              aria-label={playerState.isPlaying ? 'Pause' : 'Play'}
+              onClick={() => playerCore.togglePlay()}
             >
-              {isPlaying ? 'Ⅱ' : '▶'}
+              {playerState.isPlaying ? 'Ⅱ' : '▶'}
             </button>
             <button className="control-button" type="button" aria-label="Next" onClick={playNextWithPodcastReaction}>›</button>
             <button className="control-button control-button--ghost" aria-label="Repeat">↻</button>
@@ -2089,20 +2098,20 @@ function App() {
               role="button"
               tabIndex={0}
               onClick={(event) => {
-                if (!duration) return
+                if (!playerState.duration) return
                 const rect = event.currentTarget.getBoundingClientRect()
                 const ratio = (event.clientX - rect.left) / rect.width
-                seekTo(duration * ratio)
+                playerCore.seek(playerState.duration * ratio)
               }}
               onKeyDown={(event) => {
-                if (event.key === 'ArrowLeft') seekTo(currentTime - 5)
-                if (event.key === 'ArrowRight') seekTo(currentTime + 5)
+                if (event.key === 'ArrowLeft') playerCore.seek(playerState.currentTime - 5)
+                if (event.key === 'ArrowRight') playerCore.seek(playerState.currentTime + 5)
               }}
             >
               <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
               <div className="progress-thumb" style={{ left: `${progressPercent}%` }} />
             </div>
-            <p className="time-code">{formatTime(currentTime)} / {formatTime(duration)}</p>
+            <p className="time-code">{formatTime(playerState.currentTime)} / {formatTime(playerState.duration)}</p>
           </div>
           <button
             className={`ai-play-button${pressedPanel === 'playMode' ? ' is-pressed' : ''}`}
@@ -2407,6 +2416,7 @@ function App() {
         />
       )}
     </main>
+    </PlayerProvider>
   )
 }
 
