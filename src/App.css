@@ -5442,7 +5442,7 @@ button {
 /* The voice panel is an extension of the top-controls glass volume, not a
    second floating card. The WebGL glass pass sees both shells at the same
    strength; these DOM rules only provide the connected geometry and edge. */
-@media (min-width: 721px) {
+@media (min-width: 600px) {
   .app:has(.voice-popover.is-open, .memory-settings-panel.is-open, .mountain-tuning-panel.is-open) .top-controls-card {
     border-radius: var(--top-controls-radius) var(--top-controls-radius) 0 0;
   }
