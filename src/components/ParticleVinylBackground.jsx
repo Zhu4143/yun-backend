@@ -2294,7 +2294,6 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
         '.top-controls-card.is-open',
         '.voice-popover.is-open',
         '.memory-settings-panel.is-open',
-        '.mountain-tuning-panel.is-open',
         '.ai-mode-expanded.is-open',
         '.chat-panel',
       ].join(',')

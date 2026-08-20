@@ -5140,6 +5140,9 @@ button {
   -webkit-backdrop-filter: none;
   border-radius: var(--top-controls-radius);
   pointer-events: none;
+  transition:
+    height 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 360ms ease;
 }
 
 .app :is(.top-controls-card, .player-card, .local-library-drawer) > .glass-edge-highlight {
@@ -5253,7 +5256,7 @@ button {
   align-items: center;
   gap: 12px 16px;
   width: 100%;
-  height: 100%;
+  height: 164px;
   opacity: 0;
   pointer-events: none;
 }
@@ -5596,6 +5599,57 @@ button {
 
   .app .voice-popover .voice-custom input::placeholder {
     color: rgba(255, 255, 255, 0.42);
+  }
+
+  /* Mountain tuning is content inside the top glass body. Expanding the
+     parent shell, rather than showing another card, makes it read like a
+     desktop panel being pulled longer from its lower edge. */
+  .app:has(.mountain-tuning-panel.is-open) .top-controls-card {
+    height: min(596px, calc(100dvh - 72px));
+    border-radius: var(--top-controls-radius);
+  }
+
+  .app .mountain-tuning-panel,
+  .app .mountain-tuning-panel.is-open {
+    top: 216px !important;
+    height: auto !important;
+    max-height: min(356px, calc(100dvh - 288px)) !important;
+    padding: 16px 20px 20px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: hidden auto !important;
+    transform: translateX(-50%) translateY(-10px) !important;
+    clip-path: inset(0 0 100% 0);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none !important;
+    transition:
+      clip-path 430ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 190ms ease,
+      transform 430ms cubic-bezier(0.22, 1, 0.36, 1),
+      visibility 0s linear 430ms !important;
+  }
+
+  .app .mountain-tuning-panel::before,
+  .app .mountain-tuning-panel::after,
+  .app .mountain-tuning-panel > :is(.glass-edge-highlight, .glass-specular-highlight) {
+    display: none !important;
+  }
+
+  .app .mountain-tuning-panel.is-open {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto !important;
+    transform: translateX(-50%) translateY(0) !important;
+    transition:
+      clip-path 430ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 260ms ease 80ms,
+      transform 430ms cubic-bezier(0.22, 1, 0.36, 1) !important;
   }
 }
 
