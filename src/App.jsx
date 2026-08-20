@@ -3362,17 +3362,20 @@ function App({ onVisualReady }) {
             </div>
             {waitingTracks.length ? (
               <div className="library-up-next-list">
-                {waitingTracks.slice(0, 3).map((track, index) => (
+                {waitingTracks.slice(0, 3).map((track, index) => {
+                  const coverUrl = getSongCoverUrl(track, '/covers/default-cover.jpg')
+                  return (
                   <article className="library-up-next-track" key={`up-next-manual-${track.id || `${track.title}-${track.artist}`}`}>
                     <span className="library-up-next-index">{index + 1}</span>
-                    <span className="library-up-next-cover" style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined} aria-hidden="true" />
+                    <span className="library-up-next-cover" style={{ backgroundImage: `url(${coverUrl})` }} aria-hidden="true" />
                     <span className="library-up-next-info">
                       <strong>{track.title}</strong>
                       <small>{track.artist}</small>
                     </span>
                     <button type="button" aria-label={`从待播放移除 ${track.title}`} onClick={() => removeUpNext(track)}>×</button>
                   </article>
-                ))}
+                  )
+                })}
                 {waitingTracks.length > 3 && <p className="library-up-next-more">还有 {waitingTracks.length - 3} 首等待播放</p>}
               </div>
             ) : (
@@ -3390,17 +3393,20 @@ function App({ onVisualReady }) {
                 <button type="button" onClick={clearAutoUpNext}>换一批</button>
               </div>
               <div className="library-up-next-list">
-                {aiCandidateTracks.slice(0, 3).map((track, index) => (
+                {aiCandidateTracks.slice(0, 3).map((track, index) => {
+                  const coverUrl = getSongCoverUrl(track, '/covers/default-cover.jpg')
+                  return (
                   <article className="library-up-next-track" key={`ai-candidate-${track.id || `${track.title}-${track.artist}`}`}>
                     <span className="library-up-next-index">{index + 1}</span>
-                    <span className="library-up-next-cover" style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined} aria-hidden="true" />
+                    <span className="library-up-next-cover" style={{ backgroundImage: `url(${coverUrl})` }} aria-hidden="true" />
                     <span className="library-up-next-info">
                       <strong>{track.title}</strong>
                       <small>{track.artist} · 昀已规划</small>
                     </span>
                     <button type="button" aria-label={`从 AI 候选移除 ${track.title}`} onClick={() => removeAutoUpNext(track)}>×</button>
                   </article>
-                ))}
+                  )
+                })}
               </div>
             </section>
           )}
