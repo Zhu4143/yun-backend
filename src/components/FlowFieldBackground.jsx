@@ -491,13 +491,20 @@ export default function FlowFieldBackground({
   settings,
   paused = false,
   forceTransitionSignal = 0,
+  quality = 'high',
 }) {
+  const dpr = quality === 'low'
+    ? [0.45, 0.6]
+    : quality === 'medium'
+      ? [0.6, 0.8]
+      : [1, 1.5]
+
   return (
     <Canvas
       className="flow-field-canvas"
       orthographic
       camera={{ position: [0, 0, 1], near: 0, far: 2 }}
-      dpr={[1, 1.5]}
+      dpr={dpr}
       gl={{ antialias: false, alpha: false, powerPreference: 'high-performance' }}
     >
       <FlowFieldQuad

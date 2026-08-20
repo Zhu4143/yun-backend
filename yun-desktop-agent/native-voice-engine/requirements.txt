@@ -1,0 +1,5 @@
+# Additional packages for the py-xiaozhi-derived native audio sidecar.
+# fastapi, uvicorn, numpy and sherpa-onnx are already present in Yun's local
+# speech environment; these two add Windows full-duplex I/O and 10 ms VAD.
+sounddevice>=0.5,<1
+webrtcvad-wheels>=2.0.14,<3

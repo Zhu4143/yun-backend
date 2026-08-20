@@ -1,17 +1,6 @@
 import { PlayerCore } from '../PlayerCore.js'
 import { createPlayerStore } from '../playerStore.js'
-import { INITIAL_PLAYER_STATE, PLAYER_STATUS } from '../playerTypes.js'
-
-function sameState(a, b) {
-  return a.currentTrack === b.currentTrack
-    && a.isPlaying === b.isPlaying
-    && a.currentTime === b.currentTime
-    && a.duration === b.duration
-    && a.volume === b.volume
-    && a.playbackMode === b.playbackMode
-    && a.status === b.status
-    && a.error === b.error
-}
+import { INITIAL_PLAYER_STATE, PLAYER_STATUS, playerStateEquals } from '../playerTypes.js'
 
 function deriveStatus(legacy, error) {
   if (error) return PLAYER_STATUS.ERROR
@@ -56,6 +45,7 @@ export function createYunLegacyPlayerAdapter() {
     previous: () => run(() => legacy.playPrevious()),
     seek: (seconds) => legacy.seekTo(seconds),
     playTrack: (track, options) => run(() => legacy.playSong(track, options)),
+    setVolume: (value) => legacy.setVolume(value),
     setPlaybackMode: (mode) => legacy.setPlaybackMode(mode),
   }
 
@@ -63,20 +53,28 @@ export function createYunLegacyPlayerAdapter() {
 
   core.updateLegacy = (nextLegacy) => {
     legacy = nextLegacy
-    const audioVolume = Number(nextLegacy.audioRef?.current?.volume)
+    const userVolume = Number(nextLegacy.volume)
     const previousState = store.getState()
+    const isCrossfading = Boolean(nextLegacy.getPlaybackDiagnostics?.()?.isCrossfading)
     const nextState = {
       currentTrack: nextLegacy.currentSong,
       isPlaying: nextLegacy.isPlaying,
       currentTime: nextLegacy.currentTime,
       duration: nextLegacy.duration,
-      volume: Number.isFinite(audioVolume) ? audioVolume : previousState.volume,
+      volume: Number.isFinite(userVolume) ? userVolume : previousState.volume,
       playbackMode: nextLegacy.playbackMode,
       status: deriveStatus(nextLegacy, lastError),
       error: lastError,
+      queue: typeof nextLegacy.getActiveQueue === 'function' ? nextLegacy.getActiveQueue() : [],
+      upNext: Array.isArray(nextLegacy.upNextTracks) ? nextLegacy.upNextTracks : [],
+      autoUpNext: Array.isArray(nextLegacy.autoUpNextTracks) ? nextLegacy.autoUpNextTracks : [],
+      lyrics: null,
+      dominantColor: null,
+      audioFeatures: null,
+      trackChangeProgress: isCrossfading ? 1 : 0,
     }
 
-    if (!sameState(previousState, nextState)) {
+    if (!playerStateEquals(previousState, nextState)) {
       store.replaceState(nextState)
       pendingNotification = true
     }

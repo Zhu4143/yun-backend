@@ -1,0 +1,131 @@
+.asr-settings-glass {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  z-index: 1100;
+  box-sizing: border-box;
+}
+
+.asr-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--glass-text, #e8f1ff);
+  font-size: 13px;
+}
+
+.asr-settings-header .sub {
+  margin: 0 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  opacity: 0.62;
+}
+
+.asr-settings-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.asr-status-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #8fa3c2;
+}
+
+.asr-status-row.is-on {
+  background: rgba(29, 158, 117, 0.16);
+  color: #5dcaa5;
+}
+
+.asr-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.asr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.asr-field > span {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.asr-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 16, 28, 0.45);
+  color: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.asr-field input:focus {
+  border-color: rgba(122, 190, 255, 0.6);
+}
+
+.asr-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.asr-btn {
+  padding: 7px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+.asr-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.asr-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.asr-btn--primary {
+  background: rgba(29, 158, 117, 0.24);
+  border-color: rgba(93, 202, 165, 0.5);
+}
+
+.asr-btn--danger {
+  border-color: rgba(226, 75, 74, 0.4);
+  color: #f09595;
+}
+
+.asr-message {
+  margin: 0;
+  font-size: 12px;
+  color: #5dcaa5;
+}
+
+.asr-test-result {
+  margin: 0;
+  font-size: 12px;
+  color: #85b7eb;
+  word-break: break-all;
+}

@@ -15,8 +15,33 @@ export const INITIAL_PLAYER_STATE = Object.freeze({
   playbackMode: 'sequence',
   status: PLAYER_STATUS.IDLE,
   error: null,
+  queue: [],
+  upNext: [],
+  autoUpNext: [],
+  lyrics: null,
+  dominantColor: null,
+  audioFeatures: null,
+  trackChangeProgress: 0,
 })
 
-// Reserved for later phases: queue, lyrics, dominantColor, audioFeatures,
-// and trackChangeProgress. They intentionally do not exist in Phase 1 state.
-
+// Reference-equal comparison of two PlayerState snapshots. Arrays (`queue`,
+// `upNext`, `autoUpNext`) are compared by identity, which is valid because the
+// adapter bridges them straight from React/ref state that keeps a stable
+// reference until it actually changes.
+export function playerStateEquals(a, b) {
+  return a.currentTrack === b.currentTrack
+    && a.isPlaying === b.isPlaying
+    && a.currentTime === b.currentTime
+    && a.duration === b.duration
+    && a.volume === b.volume
+    && a.playbackMode === b.playbackMode
+    && a.status === b.status
+    && a.error === b.error
+    && a.queue === b.queue
+    && a.upNext === b.upNext
+    && a.autoUpNext === b.autoUpNext
+    && a.lyrics === b.lyrics
+    && a.dominantColor === b.dominantColor
+    && a.audioFeatures === b.audioFeatures
+    && a.trackChangeProgress === b.trackChangeProgress
+}

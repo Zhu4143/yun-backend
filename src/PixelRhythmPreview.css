@@ -1,0 +1,80 @@
+.pixel-preview {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: #01030a;
+}
+
+.vinyl-transition-layer,
+.bridge-transition-layer,
+.portrait-transition-layer {
+  position: absolute;
+  inset: 0;
+  will-change: opacity;
+}
+
+.vinyl-transition-layer { z-index: 1; }
+.bridge-transition-layer { z-index: 2; pointer-events: none; }
+.portrait-transition-layer { z-index: 3; pointer-events: none; }
+
+.vinyl-portrait-bridge,
+.vinyl-portrait-bridge canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sequence-speed-control {
+  position: fixed;
+  z-index: 10;
+  right: 24px;
+  bottom: 24px;
+  width: min(300px, calc(100vw - 48px));
+  padding: 14px 16px;
+  color: #d8ffff;
+  border: 1px solid rgba(0, 200, 255, 0.24);
+  border-radius: 14px;
+  background: rgba(2, 9, 22, 0.82);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(16px);
+}
+
+.sequence-speed-control div {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.sequence-speed-control strong {
+  color: #00c8ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.sequence-speed-control input {
+  display: block;
+  width: 100%;
+  accent-color: #00bfff;
+}
+
+.transition-toggle {
+  position: fixed;
+  z-index: 11;
+  right: 24px;
+  bottom: 124px;
+  padding: 11px 16px;
+  color: #d8ffff;
+  border: 1px solid rgba(0, 200, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(2, 9, 22, 0.86);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.32);
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+}
+
+.transition-toggle:hover {
+  border-color: rgba(0, 225, 255, 0.75);
+  background: rgba(0, 80, 125, 0.5);
+}

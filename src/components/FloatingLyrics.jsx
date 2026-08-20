@@ -33,6 +33,11 @@ function FloatingLyrics({ currentSong, currentTime = 0, active = false }) {
   const requestIdRef = useRef(0)
   const rootRef = useRef(null)
   const lyricFlowFrameRef = useRef(0)
+  const lyricFlowMeasureFrameRef = useRef(0)
+  const lyricFlowSettleTimerRef = useRef(0)
+  const lyricProgressFrameRef = useRef(0)
+  const activeLineRef = useRef(null)
+  const playbackTimeAnchorRef = useRef({ time: 0, now: 0 })
   const songId = currentSong?.id || ''
 
   useEffect(() => {
@@ -89,33 +94,84 @@ function FloatingLyrics({ currentSong, currentTime = 0, active = false }) {
     : ''
 
   useEffect(() => {
+    playbackTimeAnchorRef.current = {
+      time: Number(currentTime) || 0,
+      now: performance.now(),
+    }
+  }, [currentTime])
+
+  useEffect(() => {
+    window.cancelAnimationFrame(lyricProgressFrameRef.current)
+    if (!active || !activeLyricKey) return undefined
+
+    const line = lines[activeIndex]
+    const nextLine = lines[activeIndex + 1]
+    if (!line) return undefined
+    const lineStart = Number(line.time) || 0
+    const lineDuration = Math.max(0.8, (Number(nextLine?.time) || lineStart + 4) - lineStart)
+
+    const updateProgress = (now) => {
+      const anchor = playbackTimeAnchorRef.current
+      const interpolatedTime = anchor.time + Math.max(0, now - anchor.now) * 0.001
+      const progress = clamp((interpolatedTime - lineStart) / lineDuration, 0, 1)
+      activeLineRef.current?.style.setProperty('--lyric-line-progress', progress.toFixed(4))
+      lyricProgressFrameRef.current = window.requestAnimationFrame(updateProgress)
+    }
+    lyricProgressFrameRef.current = window.requestAnimationFrame(updateProgress)
+
+    return () => window.cancelAnimationFrame(lyricProgressFrameRef.current)
+  }, [active, activeIndex, activeLyricKey, lines])
+
+  useEffect(() => {
     window.cancelAnimationFrame(lyricFlowFrameRef.current)
+    window.cancelAnimationFrame(lyricFlowMeasureFrameRef.current)
+    window.clearTimeout(lyricFlowSettleTimerRef.current)
     if (!activeLyricKey) {
       lyricFlowController.deactivate()
       return undefined
     }
     const startTime = performance.now()
     lyricFlowController.beginReveal(startTime)
-    const measureActiveLyric = (now) => {
+    const measureActiveLyric = () => {
       const activeLine = rootRef.current?.querySelector('.floating-lyrics__line.is-active')
       if (activeLine) {
         lyricFlowController.updateRect(
           activeLine.getBoundingClientRect(),
           window.innerWidth,
           window.innerHeight,
-          now,
+          performance.now(),
         )
       }
-      if (now - startTime < 2150) {
-        lyricFlowFrameRef.current = window.requestAnimationFrame(measureActiveLyric)
+    }
+    const advanceReveal = (now) => {
+      lyricFlowController.updateEnvelope(now)
+      if (lyricFlowController.active) {
+        lyricFlowFrameRef.current = window.requestAnimationFrame(advanceReveal)
       }
     }
-    lyricFlowFrameRef.current = window.requestAnimationFrame(measureActiveLyric)
-    return () => window.cancelAnimationFrame(lyricFlowFrameRef.current)
+    lyricFlowMeasureFrameRef.current = window.requestAnimationFrame(measureActiveLyric)
+    lyricFlowFrameRef.current = window.requestAnimationFrame(advanceReveal)
+    // The track needs one follow-up measurement after its CSS scroll settles.
+    // Measuring on every animation frame forced layout for over two seconds on
+    // every lyric change, competing directly with the WebGL record renderer.
+    lyricFlowSettleTimerRef.current = window.setTimeout(measureActiveLyric, 620)
+    const observer = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(measureActiveLyric)
+      : null
+    if (rootRef.current) observer?.observe(rootRef.current)
+    return () => {
+      window.cancelAnimationFrame(lyricFlowFrameRef.current)
+      window.cancelAnimationFrame(lyricFlowMeasureFrameRef.current)
+      window.clearTimeout(lyricFlowSettleTimerRef.current)
+      observer?.disconnect()
+    }
   }, [activeIndex, activeLyricKey])
 
   useEffect(() => () => {
     window.cancelAnimationFrame(lyricFlowFrameRef.current)
+    window.cancelAnimationFrame(lyricFlowMeasureFrameRef.current)
+    window.clearTimeout(lyricFlowSettleTimerRef.current)
+    window.cancelAnimationFrame(lyricProgressFrameRef.current)
     lyricFlowController.deactivate()
   }, [])
 
@@ -159,6 +215,7 @@ function FloatingLyrics({ currentSong, currentTime = 0, active = false }) {
                       : ' is-near'
               return (
                 <p
+                  ref={index === activeIndex ? activeLineRef : undefined}
                   className={`floating-lyrics__line${stateClass}`}
                   data-lyric-text={line.text}
                   style={{

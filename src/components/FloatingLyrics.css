@@ -1,3 +1,9 @@
+@property --lyric-line-progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
 .floating-lyrics {
   position: absolute;
   left: 0;
@@ -115,23 +121,13 @@
   -webkit-backdrop-filter: none;
 }
 
-.floating-lyrics__text::before,
-.floating-lyrics__text::after {
-  content: attr(data-lyric-text);
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  white-space: nowrap;
-  color: currentColor;
-  background: none;
-  background-image: none;
-  border: 0;
-  box-shadow: none;
-  -webkit-text-fill-color: currentColor;
-  opacity: 0;
-}
-
 .floating-lyrics__line.is-active {
+  /* Keep the cover-driven colour, but give the current line a small local
+     contrast reserve when it crosses a bright part of the record.  A full
+     difference blend was intentionally avoided: it flips too aggressively
+     between the wallpaper and the spinning cover. */
+  isolation: isolate;
+  z-index: 0;
   color: var(--lyric-current-text);
   background: none;
   background-image: none;
@@ -146,10 +142,28 @@
   filter: blur(0);
   transform: translateX(0) scale(1.05);
   text-shadow:
-    0 0 4px color-mix(in srgb, var(--lyric-glow) 32%, transparent),
-    0 1px 10px rgba(0, 0, 0, 0.34);
+    0 0 4px color-mix(in srgb, var(--lyric-glow) 28%, transparent),
+    0 1px 2px rgba(6, 8, 13, 0.58),
+    0 2px 12px rgba(0, 0, 0, 0.26);
   will-change: transform, filter, opacity;
   animation: lyric-fog-reveal 780ms cubic-bezier(0.16, 0.82, 0.22, 1) both;
+}
+
+.floating-lyrics__line.is-active::before {
+  content: '';
+  position: absolute;
+  inset: -9px -20px;
+  z-index: -1;
+  border-radius: 18px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(7, 10, 17, 0.25),
+    rgba(7, 10, 17, 0.12) 68%,
+    transparent
+  );
+  filter: blur(9px);
+  opacity: 0.78;
 }
 
 @keyframes lyric-fog-reveal {
@@ -176,40 +190,26 @@
 }
 
 .floating-lyrics__line.is-active .floating-lyrics__text {
-  color: color-mix(in srgb, var(--song-primary) 78%, var(--lyric-current-text));
-}
-
-.floating-lyrics__line.is-active .floating-lyrics__text::after {
-  color: color-mix(in srgb, var(--song-secondary) 72%, rgba(255, 255, 255, 0.95));
-  background: none;
-  background-image: none;
-  clip-path: inset(0 calc((1 - var(--lyric-line-progress)) * 100%) 0 0);
-  opacity: 0.96;
-  text-shadow:
-    0 0 3px color-mix(in srgb, var(--lyric-glow) 42%, transparent);
-  transition:
-    clip-path 180ms linear,
-    color 1000ms ease,
-    text-shadow 1000ms ease,
-    opacity 800ms ease;
-}
-
-.floating-lyrics__line.is-active .floating-lyrics__text::before {
-  color: rgba(255, 255, 255, 0.82);
-  background: none;
-  background-image: none;
-  clip-path: inset(
-    0
-    calc(100% - min(100%, var(--lyric-line-progress) * 100% + 5%))
-    0
-    max(0%, var(--lyric-line-progress) * 100% - 5%)
+  /* Render progression on the real text instead of cloned pseudo text.
+     The clones could retain a prior lyric's attr() value during a lyric swap. */
+  color: transparent;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--song-secondary) 48%, rgba(245, 249, 255, 0.98)) 0%,
+    color-mix(in srgb, var(--song-secondary) 48%, rgba(245, 249, 255, 0.98)) max(0%, calc(var(--lyric-line-progress) * 100% - 12%)),
+    color-mix(in srgb, var(--song-secondary) 36%, rgba(240, 246, 255, 0.96)) calc(var(--lyric-line-progress) * 100%),
+    color-mix(in srgb, var(--song-primary) 52%, var(--lyric-current-text)) min(100%, calc(var(--lyric-line-progress) * 100% + 12%)),
+    color-mix(in srgb, var(--song-primary) 52%, var(--lyric-current-text)) 100%
   );
-  opacity: 0.34;
-  text-shadow: 0 0 4px color-mix(in srgb, var(--lyric-glow) 36%, transparent);
-  transition:
-    clip-path 180ms linear,
-    color 1000ms ease,
-    opacity 800ms ease;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  -webkit-text-stroke: 0.55px rgba(6, 8, 13, 0.32);
+  paint-order: stroke fill;
+  text-shadow:
+    0 0 3px color-mix(in srgb, var(--lyric-glow) 30%, transparent),
+    0 1px 2px rgba(5, 7, 12, 0.42);
+  transition: text-shadow 1000ms ease;
 }
 
 .floating-lyrics__line.is-previous {

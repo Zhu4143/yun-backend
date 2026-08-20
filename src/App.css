@@ -29,8 +29,12 @@
   .library-search,
   .library-track,
   .library-scroll-track,
+  .library-playlist-row,
   .library-scan-button,
-  .library-all-button
+  .library-all-button,
+  .library-close-button,
+  .library-import-button,
+  .library-nav-button
 ) {
   border-color: rgba(255, 255, 255, 0.34) !important;
   background:
@@ -66,8 +70,12 @@
   .library-search,
   .library-track,
   .library-scroll-track,
+  .library-playlist-row,
   .library-scan-button,
-  .library-all-button
+  .library-all-button,
+  .library-close-button,
+  .library-import-button,
+  .library-nav-button
 ) {
   border-color: rgba(255, 255, 255, 0.13) !important;
   box-shadow:
@@ -98,8 +106,7 @@ body {
 
 /* UI mode switch: keep logic mounted, only change visibility. */
 .app.immersive-mode .scene-cover-overlay,
-.app.immersive-mode .status-card,
-.app.immersive-mode .chat-panel {
+.app.immersive-mode .status-card {
   display: none !important;
 }
 
@@ -160,10 +167,51 @@ body {
   --voice-popover-width: 392px;
 }
 
+/* liquid-glass-react renders two decorative siblings beside each glass body.
+   When a body is hidden it can briefly measure 0×0 while those siblings keep
+   their padding and stack at the viewport center as a thin vertical remnant. */
+.app > span[style*="height: 0px"][style*="width: 0px"] {
+  display: none !important;
+}
+
 .app.flow-debug-isolated > :not(.bg-image) {
   visibility: hidden !important;
   pointer-events: none !important;
 }
+
+.app.wallpaper-mode {
+  --wallpaper-taskbar-safe: 76px;
+}
+
+.app.wallpaper-mode .immersive-player-handle {
+  display: none;
+}
+
+.app.wallpaper-mode.immersive-mode .player-card {
+  bottom: var(--wallpaper-taskbar-safe);
+  transform: translateX(-50%) scale(0.92);
+  opacity: 0.94;
+  visibility: visible;
+  pointer-events: auto;
+  filter: none;
+  transition-duration: 240ms;
+}
+
+.app.wallpaper-mode.immersive-mode .player-card.is-immersive-visible {
+  transform: translateX(-50%) scale(0.94);
+}
+
+.app.wallpaper-mode.quality-low .yun-awakening-optics,
+.app.wallpaper-mode.quality-low .yun-speaking-optics,
+.app.wallpaper-mode.quality-low .lyric-foreground-fog {
+  display: none !important;
+}
+
+/* Native fullscreen is a clean canvas for the visual experience. Keep the
+   audio session running, but remove the application chrome until Esc exits. */
+/* Fullscreen must retain the same edge affordances as immersive mode. Hiding
+   these layers made the top settings and bottom player unreachable, while the
+   right-side library still worked because it was not part of this selector. */
 
 .lyric-foreground-fog {
   position: fixed;
@@ -268,7 +316,7 @@ body {
 }
 
 /* TTS response field: unlike the listening state this never summons the orb.
-   Two edge halves travel inward and breathe for the duration of speech. */
+   A single ring keeps the color field continuous around the entire viewport. */
 .yun-speaking-optics {
   position: fixed;
   inset: 0;
@@ -278,6 +326,19 @@ body {
   transition: opacity 1.4s cubic-bezier(0.22, 0.62, 0.28, 1);
   --speaking-color-a: var(--song-primary);
   --speaking-color-b: var(--song-secondary);
+  --speaking-color: color-mix(in srgb, var(--speaking-color-a) 54%, var(--speaking-color-b));
+  --speaking-color-light: color-mix(in srgb, var(--speaking-color-b) 66%, white 16%);
+  --speaking-pulse: 0;
+  --speaking-glow-blur: 22px;
+  --speaking-glow-spread: 3px;
+  --speaking-inner-glow: 13px;
+  --speaking-band-blur: 2.4px;
+  --speaking-band-saturation: 1.28;
+  --speaking-band-brightness: 0.58;
+  --speaking-ring-opacity: 0.32;
+  --speaking-tint-opacity: 0.12;
+  --speaking-tint-saturation: 1.02;
+  --speaking-tint-brightness: 0.99;
 }
 
 .gesture-camera-toggle {
@@ -321,42 +382,43 @@ body {
   text-shadow: 0 0 9px var(--song-secondary);
 }
 
-.yun-speaking-optics__side {
+.yun-speaking-optics__ring {
   position: absolute;
-  inset: 0;
+  inset: 3px;
+  padding: 10px;
   opacity: 0;
-  filter: saturate(1.35) brightness(1.16);
+  border-radius: 28px;
+  background: conic-gradient(
+    from 218deg,
+    var(--speaking-color-a),
+    var(--speaking-color) 17%,
+    var(--speaking-color-light) 32%,
+    var(--speaking-color-b) 48%,
+    var(--speaking-color) 66%,
+    var(--speaking-color-light) 82%,
+    var(--speaking-color-a)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  box-shadow:
+    0 0 var(--speaking-glow-blur) var(--speaking-glow-spread) color-mix(in srgb, var(--speaking-color) 62%, transparent),
+    inset 0 0 var(--speaking-inner-glow) color-mix(in srgb, var(--speaking-color-light) 43%, transparent);
+  filter:
+    blur(var(--speaking-band-blur))
+    saturate(var(--speaking-band-saturation))
+    brightness(var(--speaking-band-brightness));
+  transform: scale(0.996);
   transition:
-    transform 1.15s cubic-bezier(0.16, 0.76, 0.22, 1),
-    opacity 1.25s ease-out;
-}
-
-.yun-speaking-optics__side--left {
-  clip-path: inset(0 50% 0 0);
-  transform: scaleX(0.018);
-  transform-origin: left center;
-  border-left: 2px solid var(--speaking-color-a);
-  border-top: 2px solid var(--speaking-color-a);
-  border-bottom: 2px solid var(--speaking-color-b);
-  border-radius: 28px 0 0 28px;
-  box-shadow:
-    inset 20px 0 30px color-mix(in srgb, var(--speaking-color-a) 42%, transparent),
-    inset 0 16px 26px color-mix(in srgb, var(--speaking-color-a) 18%, transparent),
-    inset 0 -18px 28px color-mix(in srgb, var(--speaking-color-b) 24%, transparent);
-}
-
-.yun-speaking-optics__side--right {
-  clip-path: inset(0 0 0 50%);
-  transform: scaleX(0.018);
-  transform-origin: right center;
-  border-right: 2px solid var(--speaking-color-b);
-  border-top: 2px solid var(--speaking-color-a);
-  border-bottom: 2px solid var(--speaking-color-b);
-  border-radius: 0 28px 28px 0;
-  box-shadow:
-    inset -20px 0 30px color-mix(in srgb, var(--speaking-color-b) 42%, transparent),
-    inset 0 16px 26px color-mix(in srgb, var(--speaking-color-a) 18%, transparent),
-    inset 0 -18px 28px color-mix(in srgb, var(--speaking-color-b) 24%, transparent);
+    transform 520ms cubic-bezier(0.16, 0.76, 0.22, 1),
+    opacity 360ms ease-out,
+    box-shadow 90ms linear,
+    filter 90ms linear;
 }
 
 .yun-speaking-optics__tint {
@@ -364,10 +426,9 @@ body {
   inset: 0;
   opacity: 0;
   background:
-    radial-gradient(ellipse at 0 50%, color-mix(in srgb, var(--speaking-color-a) 11%, transparent), transparent 44%),
-    radial-gradient(ellipse at 100% 50%, color-mix(in srgb, var(--speaking-color-b) 11%, transparent), transparent 44%);
-  backdrop-filter: saturate(1.055) brightness(1.018);
-  transition: opacity 1.35s ease-out;
+    radial-gradient(ellipse at 50% 50%, transparent 48%, color-mix(in srgb, var(--speaking-color) 19%, transparent) 100%);
+  backdrop-filter: saturate(var(--speaking-tint-saturation)) brightness(var(--speaking-tint-brightness));
+  transition: opacity 360ms ease-out, background 90ms linear;
 }
 
 .yun-speaking-optics.is-active {
@@ -376,38 +437,20 @@ body {
   transition-timing-function: ease-out;
 }
 
-.yun-speaking-optics.is-active .yun-speaking-optics__side {
-  opacity: 1;
-  transform: scaleX(1);
-  transition-duration: 1.15s, 220ms;
-  animation: yun-speaking-edge-breath 1.36s ease-in-out 1.12s infinite;
+.yun-speaking-optics.is-active .yun-speaking-optics__ring {
+  opacity: var(--speaking-ring-opacity);
+  transform: scale(1);
 }
 
 .yun-speaking-optics.is-active .yun-speaking-optics__tint {
   opacity: 1;
-  transition-duration: 520ms;
-  transition-delay: 280ms;
-  animation: yun-speaking-tint-breath 1.72s ease-in-out 1.1s infinite;
-}
-
-@keyframes yun-speaking-edge-breath {
-  0%, 100% { filter: saturate(1.22) brightness(0.86); opacity: 0.68; }
-  34% { filter: saturate(1.52) brightness(1.28); opacity: 1; }
-  58% { filter: saturate(1.30) brightness(0.94); opacity: 0.76; }
-  76% { filter: saturate(1.42) brightness(1.13); opacity: 0.92; }
-}
-
-@keyframes yun-speaking-tint-breath {
-  0%, 100% { opacity: 0.32; }
-  38% { opacity: 0.72; }
-  64% { opacity: 0.42; }
-  82% { opacity: 0.60; }
+  opacity: var(--speaking-tint-opacity);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .yun-speaking-optics.is-active .yun-speaking-optics__side,
+  .yun-speaking-optics.is-active .yun-speaking-optics__ring,
   .yun-speaking-optics.is-active .yun-speaking-optics__tint {
-    animation: none;
+    transition-duration: 0.01ms;
   }
 }
 
@@ -1074,7 +1117,11 @@ body {
   padding: 18px 30px;
   border: 0;
   background: transparent;
-  box-shadow: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.075),
+    inset 1px 0 0 rgba(255, 255, 255, 0.032),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+    inset -1px 0 0 rgba(0, 0, 0, 0.05);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -1788,6 +1835,36 @@ body {
   white-space: nowrap;
 }
 
+.voice-value-asr-wrap {
+  grid-column: 2 / 4;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.voice-value-asr-set {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.voice-value-asr-set:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.voice-asr-settings {
+  grid-column: 1 / 4;
+  margin-top: 6px;
+}
+
 .voice-row-label + .voice-value {
   grid-column: 2 / 4;
   justify-self: end;
@@ -2000,6 +2077,47 @@ body {
   min-width: 0;
 }
 
+.voiceprint-enrollment {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0 3px;
+  border-top: 1px solid rgba(255, 239, 218, 0.1);
+}
+
+.voiceprint-enrollment__detail {
+  margin: 4px 0 0;
+  color: rgba(255, 237, 210, 0.62);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.voiceprint-enrollment__actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.voiceprint-button {
+  min-height: 29px;
+  border: 1px solid rgba(255, 232, 190, 0.36);
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: rgba(255, 250, 240, 0.9);
+  background: linear-gradient(135deg, rgba(255, 225, 174, 0.17), rgba(255, 255, 255, 0.06));
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.voiceprint-button:disabled { cursor: wait; opacity: 0.6; }
+.voiceprint-button.is-quiet { background: rgba(255, 255, 255, 0.04); color: rgba(255, 237, 210, 0.65); }
+
+@media (max-width: 720px) {
+  .voiceprint-enrollment { grid-template-columns: 1fr; }
+}
+
 .voice-custom span {
   color: rgba(255, 237, 210, 0.64);
   font-size: 11px;
@@ -2022,13 +2140,15 @@ body {
 
 .memory-settings-panel {
   position: absolute;
-  top: 330px;
-  left: calc(100% - 286px);
-  right: auto;
-  width: 354px;
+  --memory-settings-top: clamp(96px, 32vh, 330px);
+  top: var(--memory-settings-top);
+  left: auto;
+  right: 24px;
+  width: min(420px, calc(100vw - 48px));
+  max-height: calc(100dvh - var(--memory-settings-top) - 24px);
   padding: 18px;
   z-index: 6;
-  min-height: 376px;
+  min-height: 0;
   border-radius: 32px !important;
   overflow: hidden !important;
   transform: translateX(10px) translateY(0) scale(0.985);
@@ -2238,6 +2358,10 @@ body {
   z-index: 1;
   display: grid;
   gap: 12px;
+  max-height: calc(100dvh - var(--memory-settings-top) - 60px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .memory-settings-header,
@@ -2281,6 +2405,12 @@ body {
   min-height: 32px;
   color: rgba(255, 255, 255, 0.82);
   font-size: 13px;
+}
+
+.memory-settings-row--section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.13);
 }
 
 .memory-toggle {
@@ -2409,6 +2539,71 @@ body {
   grid-column: span 2;
 }
 
+.pro-model-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.pro-model-config .memory-settings-row,
+.pro-model-config p,
+.pro-model-config small,
+.pro-model-config-key,
+.pro-model-config button {
+  grid-column: 1 / -1;
+}
+
+.pro-model-config p,
+.pro-model-config small {
+  margin: 0;
+  color: rgba(255, 236, 207, 0.58);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.pro-model-config label {
+  display: grid;
+  gap: 5px;
+  color: rgba(255, 236, 207, 0.72);
+  font-size: 11px;
+}
+
+.pro-model-config input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 225, 180, 0.22);
+  border-radius: 10px;
+  background: rgba(42, 24, 10, 0.2);
+  color: rgba(255, 248, 235, 0.92);
+  padding: 9px 10px;
+  font: inherit;
+  outline: none;
+}
+
+.pro-model-config input:focus {
+  border-color: rgba(255, 224, 184, 0.58);
+}
+
+.pro-model-config button {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  height: 38px;
+  border: 1px solid rgba(255, 225, 180, 0.3);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 226, 172, 0.3), rgba(62, 37, 18, 0.94));
+  color: rgba(255, 239, 213, 0.92);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.pro-model-config button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 .memory-settings-row--footer {
   margin-top: 3px;
   padding-top: 12px;
@@ -2534,6 +2729,35 @@ body {
   color: rgba(255, 255, 255, 0.92);
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.chat-skill-candidate {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.chat-skill-candidate small {
+  color: rgba(255, 244, 220, 0.76);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-skill-candidate > div {
+  display: flex;
+  gap: 7px;
+}
+
+.chat-skill-candidate button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 238, 210, 0.26);
+  border-radius: 999px;
+  color: rgba(255, 249, 237, 0.92);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
 }
 
 .chat-bubble span {
@@ -2762,10 +2986,11 @@ body {
   }
 
   .memory-settings-panel {
-    top: 342px;
-    left: calc(100% - 232px);
-    right: auto;
-    width: 312px;
+    --memory-settings-top: min(342px, calc(100dvh - 120px));
+    top: var(--memory-settings-top);
+    left: auto;
+    right: 18px;
+    width: min(420px, calc(100vw - 36px));
   }
 
   .voice-layout {
@@ -2943,8 +3168,8 @@ button {
   display: flex;
   align-items: center;
   gap: 14px;
-  min-width: 330px;
-  flex: 0 1 390px;
+  min-width: 280px;
+  flex: 0 1 350px;
 }
 
 .library-trigger {
@@ -3052,7 +3277,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
@@ -3127,7 +3352,7 @@ button {
   grid-template-columns: minmax(210px, 1fr) auto;
   align-items: center;
   gap: 10px;
-  min-width: 300px;
+  min-width: 240px;
   flex: 1 1 410px;
 }
 
@@ -3174,6 +3399,118 @@ button {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   white-space: nowrap;
+}
+
+.player-volume {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 162px;
+  gap: 10px;
+  min-width: 162px;
+  z-index: 6;
+}
+
+.player-volume .volume-button {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  margin: 0;
+  padding: 0;
+}
+
+.volume-icon {
+  width: 20px;
+  height: 20px;
+  color: rgba(255, 255, 255, 0.82);
+  overflow: visible;
+}
+
+.volume-icon__speaker {
+  fill: currentColor;
+}
+
+.volume-icon__wave,
+.volume-icon__mute {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.volume-slider {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  width: 116px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  opacity: 0.82;
+  pointer-events: auto;
+  transition:
+    opacity 180ms ease,
+    filter 180ms ease;
+}
+
+.player-volume.is-open .volume-slider,
+.player-volume:hover .volume-slider,
+.player-volume:focus-within .volume-slider {
+  opacity: 1;
+  filter: brightness(1.08);
+}
+
+.volume-slider input {
+  position: absolute;
+  inset: 0 42px 0 0;
+  width: auto;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.volume-slider-track {
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.volume-slider-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 229, 170, 0.86), rgba(255, 255, 255, 0.86));
+  box-shadow: 0 0 10px rgba(255, 219, 150, 0.22);
+}
+
+.volume-slider-thumb {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background:
+    radial-gradient(circle at 35% 28%, white, rgba(255, 236, 190, 0.96) 56%, rgba(255, 210, 138, 0.86));
+  box-shadow:
+    0 0 0 4px rgba(255, 211, 143, 0.1),
+    0 4px 10px rgba(60, 30, 9, 0.16);
+}
+
+.volume-value {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  text-align: right;
 }
 
 .ai-play-button {
@@ -3580,6 +3917,19 @@ button {
   border-radius: 999px;
   background:
     linear-gradient(180deg, rgba(255, 236, 198, 0.24), rgba(255, 197, 126, 0.18));
+}
+
+.library-virtual-list {
+  position: relative;
+  width: 100%;
+}
+
+.library-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
 }
 
 .library-scroll-track {
@@ -4630,7 +4980,7 @@ button {
     grid-row: 2;
     z-index: 1;
     display: grid;
-    grid-template-columns: 42px 58px 42px;
+    grid-template-columns: 42px 58px 42px 42px;
     justify-content: start;
     align-items: center;
     gap: 12px;
@@ -4651,12 +5001,6 @@ button {
     color: rgba(255, 248, 234, 0.96);
     font-size: 20px;
     text-shadow: none;
-  }
-
-  .player-controls .control-button--ghost,
-  .player-controls .control-button:nth-child(2),
-  .player-controls .control-button:nth-child(6) {
-    display: none;
   }
 
   .player-controls .control-button--primary {
@@ -4730,20 +5074,26 @@ button {
 /* Right-edge playlist drawer */
 .library-edge-trigger {
   position: fixed;
-  top: 18%;
+  top: 8%;
   right: 0;
   z-index: 18;
   display: grid;
   place-items: center end;
-  width: 22px;
-  height: 64%;
-  padding-right: 3px;
+  /* Closed drawer must not form an invisible click wall over the page. The
+     global edge detector opens it; this handle only accepts input once open. */
+  width: 14px;
+  height: 84%;
+  padding-right: 8px;
+  pointer-events: none;
+}
+
+.library-edge-trigger.is-active {
   pointer-events: auto;
 }
 
 .library-edge-trigger span {
-  width: 4px;
-  height: 72px;
+  width: 5px;
+  height: 112px;
   border-radius: 999px;
   background: linear-gradient(180deg, transparent, var(--song-secondary), var(--song-primary), transparent);
   box-shadow: 0 0 12px color-mix(in srgb, var(--song-secondary) 52%, transparent);
@@ -4772,7 +5122,9 @@ button {
 }
 
 .app .top-controls-card {
+  --top-controls-radius: 28px;
   position: fixed;
+  isolation: isolate;
   z-index: 42;
   top: 52px;
   right: auto;
@@ -4786,7 +5138,108 @@ button {
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  border-radius: var(--top-controls-radius);
   pointer-events: none;
+}
+
+.app :is(.top-controls-card, .player-card, .local-library-drawer) > .glass-edge-highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(
+    from 210deg,
+    rgba(255, 255, 255, 0.025) 0deg,
+    rgba(255, 255, 255, 0.075) 25deg,
+    rgba(255, 255, 255, 0.34) 50deg,
+    rgba(255, 255, 255, 0.11) 72deg,
+    rgba(255, 255, 255, 0.02) 112deg,
+    rgba(255, 255, 255, 0.025) 180deg,
+    rgba(255, 255, 255, 0.075) 205deg,
+    rgba(255, 255, 255, 0.34) 230deg,
+    rgba(255, 255, 255, 0.11) 252deg,
+    rgba(255, 255, 255, 0.02) 292deg,
+    rgba(255, 255, 255, 0.025) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 260ms ease 0ms;
+}
+
+.app :is(.top-controls-card, .player-card, .local-library-drawer) > .glass-specular-highlight {
+  position: absolute;
+  top: 0;
+  left: 8%;
+  z-index: 5;
+  width: 30%;
+  height: 1px;
+  border-radius: 999px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 18%,
+    rgba(255, 255, 255, 0.46) 52%,
+    rgba(255, 255, 255, 0.1) 78%,
+    transparent 100%
+  );
+  filter: blur(0.2px);
+  opacity: 0;
+  transition: opacity 260ms ease 0ms;
+}
+
+.app :is(.top-controls-card, .player-card, .local-library-drawer) > .glass-specular-highlight--opposite {
+  top: auto;
+  right: 8%;
+  bottom: 0;
+  left: auto;
+  transform: rotate(180deg);
+}
+
+.app .top-controls-card.is-open > .glass-edge-highlight {
+  opacity: 0.48;
+  transition-delay: 1250ms;
+}
+
+.app .top-controls-card.is-open > .glass-specular-highlight {
+  opacity: 0.58;
+  transition-delay: 1250ms;
+}
+
+.app .player-card > .glass-edge-highlight {
+  opacity: 0.48;
+}
+
+.app .player-card > .glass-specular-highlight {
+  opacity: 0.58;
+}
+
+.app .local-library-drawer > :is(.glass-edge-highlight, .glass-specular-highlight) {
+  border-radius: 30px;
+}
+
+.app .local-library-drawer.is-open.is-content-ready > .glass-edge-highlight {
+  opacity: 0.48;
+  transition-delay: 1250ms;
+}
+
+.app .local-library-drawer.is-open.is-content-ready > .glass-specular-highlight {
+  opacity: 0.58;
+  transition-delay: 1250ms;
+}
+
+.app .top-controls-card:not(.is-open) > :is(.glass-edge-highlight, .glass-specular-highlight) {
+  opacity: 0;
+  transition-delay: 0ms;
 }
 
 .app .top-controls-card.is-open {
@@ -4883,6 +5336,62 @@ button {
     0 0 10px color-mix(in srgb, var(--song-secondary) 8%, transparent) !important;
 }
 
+.app .player-card :is(.control-button, .ai-play-button) {
+  position: relative;
+  isolation: isolate;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  background: transparent !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.22),
+    inset 0 4px 8px rgba(255, 255, 255, 0.012),
+    inset 0 -6px 10px rgba(2, 5, 12, 0.08) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app .player-card :is(.control-button, .ai-play-button)::before {
+  opacity: 0.16 !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.26),
+    inset 0 -6px 12px rgba(46, 24, 10, 0.04) !important;
+}
+
+.app .player-card :is(.control-button, .ai-play-button)::after {
+  opacity: 0 !important;
+  transform: translateX(-10%) scale(1.03) !important;
+}
+
+.app .player-card :is(.control-button, .ai-play-button):hover {
+  border-color: rgba(255, 244, 220, 0.3) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.012)),
+    linear-gradient(112deg, transparent 10%, rgba(255, 255, 255, 0.04) 31%, transparent 48%),
+    rgba(255, 255, 255, 0.01) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.34),
+    inset 0 -7px 12px rgba(38, 21, 12, 0.08),
+    0 0 8px rgba(255, 226, 177, 0.05) !important;
+}
+
+.app .player-card :is(.control-button, .ai-play-button):hover::before,
+.app .player-card .ai-play-button.is-pressed::before {
+  opacity: 0.3 !important;
+}
+
+.app .player-card :is(.control-button, .ai-play-button):hover::after,
+.app .player-card .ai-play-button.is-pressed::after {
+  opacity: 0.24 !important;
+  transform: translateX(4%) scale(1.05) !important;
+}
+
+.app .player-card .ai-play-button.is-pressed {
+  border-color: rgba(255, 244, 220, 0.34) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.38),
+    inset 0 -7px 12px rgba(38, 21, 12, 0.09),
+    0 0 10px color-mix(in srgb, var(--song-secondary) 8%, transparent) !important;
+}
+
 .app .top-controls-card .mode-switch::before,
 .app .top-controls-card .mode-switch::after {
   display: none !important;
@@ -4903,8 +5412,9 @@ button {
 }
 
 .app .top-controls-card .floating-actions {
-  grid-column: 2;
+  grid-column: 1 / 3;
   grid-row: 2;
+  justify-self: center;
   flex-direction: row;
   gap: 8px;
 }
@@ -4931,7 +5441,7 @@ button {
   position: fixed !important;
   top: 14px !important;
   right: 54px !important;
-  bottom: 14px !important;
+  bottom: 136px !important;
   left: auto !important;
   width: min(440px, calc(100vw - 28px)) !important;
   height: auto !important;
@@ -4954,8 +5464,9 @@ button {
 }
 
 .app .local-library-drawer:not(.is-open) {
-  display: block !important;
-  pointer-events: none !important;
+  /* Do not leave a visually hidden drawer (or any row inside it) in the hit
+     testing tree. This is intentionally not an opacity-only transition. */
+  display: none !important;
 }
 
 .app .local-library-drawer.is-open {
@@ -4983,13 +5494,18 @@ button {
   contain-intrinsic-size: auto 58px;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 11px 0 20px color-mix(in srgb, #ff65c9 9%, transparent),
+    inset -11px 0 20px color-mix(in srgb, #58dfff 8%, transparent),
+    -1px 0 0 color-mix(in srgb, #ff55c8 19%, transparent),
+    1px 0 0 color-mix(in srgb, #52ddff 19%, transparent) !important;
 }
 
 .app .library-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr) auto;
   gap: 12px;
   width: 100%;
   height: 100%;
@@ -4999,8 +5515,10 @@ button {
 }
 
 .app .library-header,
+.app .library-account-strip,
 .app .library-source-tabs,
 .app .library-search,
+.app .library-up-next,
 .app .library-scroll-list,
 .app .library-all-button { grid-column: 1; }
 
@@ -5014,12 +5532,17 @@ button {
   max-width: 230px;
 }
 
-.app .library-source-tabs { grid-row: 2; width: fit-content; }
-.app .library-search { grid-row: 3; width: 100%; }
+.app .library-account-strip { grid-row: 2; }
+.app .library-source-tabs { grid-row: 3; width: fit-content; }
+.app .library-search { grid-row: 4; width: 100%; }
+.app .library-up-next { grid-row: 5; }
+.app .library-ai-candidates { grid-row: 6; }
+.app .library-scroll-list { grid-row: 7; }
+.app .library-all-button { grid-row: 8; }
 .app .library-preview-list { display: none !important; }
 
 .app .library-scroll-list {
-  grid-row: 4;
+  grid-row: 7;
   align-self: stretch;
   width: 100%;
   height: 100%;
@@ -5038,16 +5561,645 @@ button {
   min-height: 58px;
   grid-template-columns: 32px 44px minmax(0, 1fr);
   pointer-events: auto;
+  cursor: pointer;
 }
 
-.app .library-all-button { grid-row: 5; height: 40px; }
+.app .library-all-button { grid-row: 8; height: 40px; }
+
+.library-up-next {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--song-secondary, #b7a0ff) 28%, rgba(255, 255, 255, 0.14));
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 5% 0%, color-mix(in srgb, var(--song-primary, #ff7acb) 18%, transparent), transparent 42%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.025));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 10px 0 20px color-mix(in srgb, var(--song-primary, #ff65c9) 7%, transparent);
+}
+
+.library-ai-candidates {
+  border-color: color-mix(in srgb, var(--song-primary, #ff7acb) 34%, rgba(255, 255, 255, 0.16));
+  background:
+    radial-gradient(circle at 96% 0%, color-mix(in srgb, var(--song-secondary, #85dbff) 16%, transparent), transparent 48%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.018));
+}
+
+.library-up-next-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 20px;
+}
+
+.library-up-next-header > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.library-up-next-header span {
+  color: rgba(255, 244, 225, 0.91);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.library-up-next-header small,
+.library-up-next-info small,
+.library-up-next-more,
+.library-up-next-empty {
+  color: rgba(255, 235, 208, 0.55);
+  font-size: 11px;
+}
+
+.library-up-next-header button,
+.library-up-next-track button,
+.library-queue-add {
+  border: 1px solid rgba(255, 239, 213, 0.18);
+  color: rgba(255, 238, 211, 0.8);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.17);
+}
+
+.library-up-next-header button {
+  min-width: 42px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.library-up-next-header button:disabled {
+  opacity: 0.38;
+}
+
+.library-up-next-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.library-up-next-track {
+  display: grid;
+  grid-template-columns: 16px 28px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.library-up-next-index {
+  color: rgba(255, 231, 192, 0.56);
+  font-size: 11px;
+  text-align: center;
+}
+
+.library-up-next-cover {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(255, 175, 213, 0.76), rgba(115, 183, 255, 0.58));
+  background-position: center;
+  background-size: cover;
+}
+
+.library-up-next-info {
+  display: grid;
+  min-width: 0;
+}
+
+.library-up-next-info strong {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  font-weight: 640;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-up-next-track button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.library-up-next-more,
+.library-up-next-empty {
+  margin: 7px 0 0;
+}
+
+.library-queue-add {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 20px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.app .library-scroll-track,
+.app .library-preview-list .library-track {
+  grid-template-columns: 32px 44px minmax(0, 1fr) 28px;
+}
+
+.library-account-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.library-account-profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.library-account-profile img,
+.library-account-avatar {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.library-account-avatar {
+  display: grid;
+  place-items: center;
+  color: white;
+  background: #d43c33;
+  font-size: 13px;
+}
+
+.library-account-profile div {
+  display: grid;
+  min-width: 0;
+}
+
+.library-account-profile strong,
+.library-account-profile small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-account-profile strong {
+  max-width: 112px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.library-account-profile small,
+.library-account-empty {
+  color: rgba(255, 236, 207, 0.5);
+  font-size: 10px;
+}
+
+.library-account-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.library-account-empty button {
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 236, 202, 0.2);
+  border-radius: 999px;
+  color: rgba(255, 239, 215, 0.78);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.library-account-nav {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  align-items: center;
+}
+
+.library-nav-button,
+.library-import-button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 236, 202, 0.18);
+  border-radius: 999px;
+  color: rgba(255, 239, 215, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.library-nav-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.library-nav-button-liked {
+  color: #ff555d;
+  text-shadow: 0 0 12px rgba(255, 53, 67, 0.48);
+}
+
+.library-nav-button.is-active {
+  border-color: rgba(255, 255, 255, 0.34) !important;
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.library-nav-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.library-import-button {
+  color: rgba(255, 239, 213, 0.86);
+  background: linear-gradient(135deg, rgba(255, 226, 172, 0.15), rgba(255, 255, 255, 0.04));
+}
+
+.library-import-input { display: none; }
+
+.library-playlist-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  margin-bottom: 8px;
+  padding: 7px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 22px;
+  color: rgba(255, 255, 255, 0.9);
+  text-align: left;
+  cursor: pointer;
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: auto 64px;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.library-playlist-cover {
+  width: 48px;
+  height: 48px;
+  border-radius: 13px;
+  background: linear-gradient(145deg, rgba(255, 79, 92, 0.34), rgba(53, 111, 149, 0.28));
+  background-position: center;
+  background-size: cover;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.library-playlist-info {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.library-playlist-info strong,
+.library-playlist-info small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-playlist-info strong { font-size: 13px; }
+.library-playlist-info small { color: rgba(255, 236, 207, 0.52); font-size: 10px; }
+.library-playlist-arrow { color: rgba(255, 255, 255, 0.52); font-size: 24px; text-align: center; }
+
+.library-scroll-track:hover,
+.library-scroll-track:focus-visible,
+.library-playlist-row:hover,
+.library-playlist-row:focus-visible,
+.library-nav-button:hover,
+.library-import-button:hover {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  filter: brightness(1.08) saturate(1.08);
+  outline: none;
+}
+
+/* Bottom-left companion chat dock. It borrows the same optical body language as
+   the playlist drawer, but stays compact so it does not fight the player. */
+.app .chat-panel,
+.app .chat-panel.is-open {
+  position: fixed !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: 146px !important;
+  left: 28px !important;
+  width: min(430px, calc(100vw - 56px)) !important;
+  height: clamp(260px, 34vh, 330px) !important;
+  max-height: calc(100dvh - 190px) !important;
+  z-index: 42 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 30px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  transform: translateY(18px) scale(0.985) !important;
+  opacity: 0 !important;
+  visibility: hidden;
+  pointer-events: none !important;
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(.2, .8, .2, 1),
+    visibility 0ms linear 220ms;
+}
+
+.app .chat-panel.is-open {
+  opacity: 1 !important;
+  visibility: visible;
+  transform: translateY(0) scale(1) !important;
+  pointer-events: auto !important;
+  transition-delay: 0ms;
+}
+
+.app .chat-panel:not(.is-open) + span,
+.app .chat-panel:not(.is-open) + span + span {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.app .chat-panel.is-open + span,
+.app .chat-panel.is-open + span + span {
+  opacity: 1 !important;
+}
+
+.app .chat-panel > .glass,
+.app .chat-panel .glass__warp {
+  width: 100% !important;
+  height: 100% !important;
+  padding: 18px !important;
+  border-radius: inherit !important;
+  overflow: hidden !important;
+  background: transparent !important;
+}
+
+.app .chat-panel .chat-content {
+  z-index: 1;
+}
+
+.app .chat-header {
+  margin-bottom: 10px;
+}
+
+.app .chat-header .sub {
+  margin: 0;
+  color: rgba(255, 236, 207, 0.52);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.app .chat-header span {
+  max-width: 160px;
+  overflow: hidden;
+  color: rgba(255, 236, 207, 0.58);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .chat-messages {
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.app .chat-bubble {
+  max-width: 90%;
+  padding: 9px 11px;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.105), rgba(255, 255, 255, 0.035)),
+    rgba(255, 255, 255, 0.045);
+}
+
+.app .chat-bubble--me {
+  background:
+    linear-gradient(135deg, rgba(255, 226, 172, 0.16), rgba(255, 255, 255, 0.045)),
+    rgba(255, 255, 255, 0.055);
+}
+
+.app .chat-bubble span {
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+
+.app .chat-bubble p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.app .chat-input {
+  display: grid;
+  grid-template-columns: 30px 30px minmax(0, 1fr) 30px;
+  gap: 8px;
+  min-height: 46px;
+  margin-top: 10px;
+  padding: 8px;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)),
+    rgba(255, 255, 255, 0.045);
+}
+
+.app .chat-input textarea {
+  align-self: center;
+  min-height: 24px;
+  max-height: 68px;
+  padding: 1px 0;
+  font-size: 13px;
+}
+
+.app .chat-input button {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border: 1px solid rgba(255, 236, 207, 0.16);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.55), transparent 27%),
+    linear-gradient(135deg, rgba(255, 226, 172, 0.15), rgba(255, 255, 255, 0.045));
+  color: rgba(255, 245, 229, 0.86);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  position: relative;
+  transition: transform 120ms ease, border-color 120ms ease, filter 120ms ease, opacity 120ms ease;
+}
+
+.app .chat-input button:hover:not(:disabled) {
+  border-color: rgba(255, 236, 207, 0.34);
+  filter: brightness(1.1) saturate(1.1);
+  transform: translateY(-1px);
+}
+
+.app .chat-input button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.app .chat-input button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.app .chat-image-input {
+  display: none;
+}
+
+.app .chat-image-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 6px 8px 6px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035)),
+    rgba(255, 255, 255, 0.045);
+  color: rgba(255, 245, 229, 0.82);
+  font-size: 12px;
+}
+
+.app .chat-image-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .chat-image-chip button {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border: 1px solid rgba(255, 236, 207, 0.14);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 245, 229, 0.82);
+  cursor: pointer;
+}
+
+.app .chat-image-button::before {
+  content: '';
+  width: 14px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.app .chat-image-button::after {
+  content: '';
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translate(3px, -2px);
+}
+
+.app .chat-voice-button::before {
+  content: '';
+  width: 8px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  box-sizing: border-box;
+}
+
+.app .chat-voice-button::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 12px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  border-radius: 0 0 999px 999px;
+  transform: translateX(-50%);
+  opacity: 0.9;
+}
+
+.app .chat-panel.is-listening .chat-voice-button,
+.app .chat-voice-button[aria-pressed='true'] {
+  border-color: rgba(255, 210, 150, 0.52);
+  color: rgba(255, 248, 229, 0.96);
+  box-shadow:
+    0 0 0 4px rgba(255, 218, 166, 0.08),
+    0 0 18px rgba(255, 200, 130, 0.24);
+}
+
+.app .chat-send-button::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  transform: rotate(45deg) translate(-1px, 1px);
+}
+
+.app .chat-send-button::after {
+  content: '';
+  position: absolute;
+  width: 13px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-2px);
+}
+
+@media (max-width: 720px) {
+  .app .chat-panel,
+  .app .chat-panel.is-open {
+    left: 18px !important;
+    bottom: 304px !important;
+    width: calc(100vw - 36px) !important;
+    height: clamp(220px, 31dvh, 286px) !important;
+    max-height: calc(100dvh - 340px) !important;
+  }
+
+  .app .chat-panel > .glass {
+    padding: 14px !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .library-account-strip {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .library-account-nav { justify-self: end; }
+}
 
 @media (max-width: 560px) {
   .app .local-library-drawer,
   .app .local-library-drawer.is-open {
     top: 10px !important;
     right: 52px !important;
-    bottom: 10px !important;
+    bottom: 310px !important;
     width: calc(100vw - 82px) !important;
   }
 

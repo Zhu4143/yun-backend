@@ -10,9 +10,11 @@ const FALLBACK_COVER = '/scene.png'
 // Dense enough that the deformed mountain surface reads as continuous rather
 // than as separated rows of dots. 340² stays reasonable for a desktop GPU
 // while providing about 71% more samples than the previous 260² grid.
-const GRID_SIZE = 340
+const GRID_SIZE = 300
 const POINT_COUNT = GRID_SIZE * GRID_SIZE
 const SPECTRUM_BINS = 48
+const RIM_TRAIL_INNER_RADIUS = 2.84
+const RIM_TRAIL_OUTER_RADIUS = 3.62
 const CAMERA_POSITION = [0, 0, 5.6]
 const CAMERA_FOV = 42
 const DEFAULT_BACKGROUND_COLORS = {
@@ -275,8 +277,10 @@ function useCoverBackgroundColors(coverUrl, preloadCoverUrls) {
       }
     }
     const idleId = typeof window.requestIdleCallback === 'function'
-      ? window.requestIdleCallback(preload, { timeout: 1200 })
-      : window.setTimeout(preload, 180)
+      // Covers are nice-to-have decoration. Do not force their network and
+      // canvas work into the first audio playback window.
+      ? window.requestIdleCallback(preload)
+      : window.setTimeout(preload, 1800)
     return () => {
       if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleId)
       else window.clearTimeout(idleId)
@@ -322,8 +326,9 @@ function useCoverTexture(coverUrl) {
   return textureRef
 }
 
-function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible }) {
+function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition }) {
   const materialRef = useRef(null)
+  const rimTrailMaterialRef = useRef(null)
   const pointsRef = useRef(null)
   const groupRef = useRef(null)
   const samplerRef = useRef(null)
@@ -336,9 +341,103 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
   const spectrumTextureRef = useRef(null)
   const voiceSummonAgeRef = useRef(0)
   const previousVoiceOrbVisibleRef = useRef(false)
+  const entryTransitionUntilRef = useRef(0)
   const summonEffectRef = useRef(0)
   const songEffectRef = useRef(0)
   const coverTextureRef = useCoverTexture(coverUrl)
+
+  const rimTrailGeometry = useMemo(() => (
+    new THREE.RingGeometry(RIM_TRAIL_INNER_RADIUS, RIM_TRAIL_OUTER_RADIUS, 112, 1)
+  ), [])
+
+  const rimTrailMaterial = useMemo(() => new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uPlaying: { value: 0 },
+      uEnergy: { value: 0 },
+      uCoverTex: { value: createPlaceholderTexture() },
+    },
+    vertexShader: `
+      varying vec2 vLocalPosition;
+
+      void main() {
+        vLocalPosition = position.xy;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D uCoverTex;
+      uniform float uTime;
+      uniform float uPlaying;
+      uniform float uEnergy;
+      varying vec2 vLocalPosition;
+
+      const float TAU = 6.28318530718;
+
+      float directedTrail(float phase, float head, float length, float softness) {
+        float distanceBehind = fract(head - phase);
+        float body = 1.0 - smoothstep(0.0, length, distanceBehind);
+        return pow(max(body, 0.0), softness);
+      }
+
+      vec3 boostSaturation(vec3 color, float amount) {
+        float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        return max(vec3(0.0), mix(vec3(luminance), color, amount));
+      }
+
+      void main() {
+        float radius = length(vLocalPosition);
+        float radialDistance = clamp(
+          (radius - ${RIM_TRAIL_INNER_RADIUS.toFixed(2)})
+            / ${(RIM_TRAIL_OUTER_RADIUS - RIM_TRAIL_INNER_RADIUS).toFixed(2)},
+          0.0,
+          1.0
+        );
+        float angle = atan(vLocalPosition.y, vLocalPosition.x);
+        float phase = fract(angle / TAU + 0.5);
+        float rotatingHead = fract(uTime * 0.041);
+        float trail = directedTrail(phase, rotatingHead, 0.34, 2.2);
+        trail += directedTrail(phase, fract(rotatingHead + 0.37), 0.23, 2.6) * 0.58;
+        trail += directedTrail(phase, fract(rotatingHead + 0.71), 0.17, 3.0) * 0.34;
+
+        float innerGlow = exp(-pow((radialDistance - 0.10) * 8.5, 2.0));
+        float smokeBody = smoothstep(0.0, 0.16, radialDistance)
+          * (1.0 - smoothstep(0.48, 1.0, radialDistance));
+        float smokeNoise = 0.72
+          + sin(angle * 7.0 - uTime * 0.54 + radialDistance * 15.0) * 0.16
+          + sin(angle * 13.0 + uTime * 0.31 - radialDistance * 9.0) * 0.12;
+        smokeNoise = clamp(smokeNoise, 0.25, 1.0);
+
+        vec2 paletteUv = vec2(cos(angle), sin(angle)) * 0.31 + 0.5;
+        vec3 coverTint = texture2D(uCoverTex, paletteUv).rgb;
+        float tintPeak = max(max(coverTint.r, coverTint.g), coverTint.b);
+        coverTint = mix(vec3(0.12, 0.62, 1.0), coverTint / max(tintPeak, 0.12), 0.84);
+        coverTint = boostSaturation(coverTint, 1.42);
+        vec3 distanceTint = mix(coverTint, vec3(0.02, 0.68, 1.0), smoothstep(0.08, 0.55, radialDistance));
+        distanceTint = mix(distanceTint, vec3(0.78, 0.12, 1.0), smoothstep(0.55, 1.0, radialDistance));
+        distanceTint = boostSaturation(distanceTint, 1.28);
+
+        float mist = innerGlow * (0.17 + trail * 0.31)
+          + smokeBody * smokeNoise * (0.055 + trail * 0.25);
+        float alpha = mist * uPlaying * (0.72 + uEnergy * 0.18);
+        gl_FragColor = vec4(distanceTint * (0.62 + innerGlow * 0.34), alpha);
+      }
+    `,
+  }), [])
+
+  useEffect(() => {
+    const lockEntryView = () => {
+      entryTransitionUntilRef.current = performance.now() + 1900
+      Object.assign(pointerRef.current, { x: 0, y: 0, dragX: 0, dragY: 0 })
+    }
+    window.addEventListener('yun:vinyl-transition-start', lockEntryView)
+    return () => window.removeEventListener('yun:vinyl-transition-start', lockEntryView)
+  }, [pointerRef])
 
   const geometry = useMemo(() => {
     const positions = new Float32Array(POINT_COUNT * 3)
@@ -392,6 +491,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uVoiceSummonAge: { value: 0 },
       uSummonEffect: { value: 0 },
       uSongEffect: { value: 0 },
+      uPortraitTransition: { value: 0 },
     },
     vertexShader: `
       attribute vec2 aUv;
@@ -412,6 +512,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform float uVoiceSummonAge;
       uniform float uSummonEffect;
       uniform float uSongEffect;
+      uniform float uPortraitTransition;
       varying vec2 vUv;
       varying vec2 vTintUv;
       varying float vRadius;
@@ -427,6 +528,11 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       varying float vNoiseGlow;
       varying float vAudioGlow;
       varying float vTerrainSweep;
+      varying float vFresnel;
+      varying float vSpecularFacing;
+      varying float vParticleSeed;
+      varying vec2 vStudioLight;
+      varying vec3 vViewPosition;
 
       mat2 rotate2d(float angle) {
         float s = sin(angle);
@@ -521,12 +627,19 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         float audioGlow = smoothstep(0.015, 0.82, spreadSpectrum + bassTerrain * 0.18);
         audioGlow *= 0.42 + uEnergy * 0.48 + uMid * 0.24;
 
-        float terrainMidline = 0.665;
-        float liquidTop = clamp(terrainMidline + signedTerrain * (0.82 + uMountainEdge * 0.34), 0.595, 0.92);
+        // A broad radial volume turns the existing terrain into a fluid ring
+        // around the label: its silhouette is irregular, but the cover stays
+        // legible at the centre like a physical record beneath liquid glass.
+        float terrainMidline = 0.805;
+        float liquidTop = clamp(
+          terrainMidline + signedTerrain * (0.94 + uMountainEdge * 0.42) + audioHeight * (0.24 + uBass * 0.22),
+          0.61,
+          0.985
+        );
         float radialT = clamp((radius - 0.50) / max(0.001, liquidTop - 0.50), 0.0, 1.0);
-        float edgeSoftness = mix(0.052, 0.022, uMountainPeaks);
-        float mountainBand = smoothstep(0.485, 0.535, radius) * (1.0 - smoothstep(liquidTop - edgeSoftness, liquidTop + edgeSoftness, radius));
-        float mountainDome = pow(sin(radialT * 3.14159265), mix(0.68, 1.28, uMountainPeaks));
+        float edgeSoftness = mix(0.072, 0.034, uMountainPeaks);
+        float mountainBand = smoothstep(0.455, 0.525, radius) * (1.0 - smoothstep(liquidTop - edgeSoftness, liquidTop + edgeSoftness, radius));
+        float mountainDome = pow(sin(radialT * 3.14159265), mix(0.54, 1.04, uMountainPeaks));
         float mountainCrest = smoothstep(0.18, 0.95, radialT) * (1.0 - smoothstep(0.82, 1.0, radialT));
         float surfaceRipple = sin((mountainPhase - uTime * 0.006) * 6.2831853 * 19.0 + radius * 31.0);
         surfaceRipple += sin((mountainPhase + uTime * 0.004) * 6.2831853 * 31.0 - radius * 19.0) * 0.45;
@@ -545,8 +658,8 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         sweepPacket = max(sweepPacket, oppositeSweepPacket);
         float valleyResponse = 1.0 - smoothstep(-0.055, 0.16, signedRelief + audioHeight * 0.35);
         float terrainSweep = mountainBand * sweepPacket * (0.86 + valleyResponse * 1.22);
-        float mountainWave = mountainBand * mountainDome * spectrumLift * (0.90 + uEnergy * 0.20);
-        mountainWave += terrainSweep * 0.50;
+        float mountainWave = mountainBand * mountainDome * spectrumLift * (1.18 + uEnergy * 0.52 + uBass * 0.24);
+        mountainWave += terrainSweep * 0.72;
         mountainWave += mountainBand * mountainCrest * ridgeDetail;
         float audioLift = uBass * 0.16 + uTreble * fine * 0.05;
         float ripple = sin(radius * 34.0 - uTime * 2.8 + angle * 2.0) * 0.018 * (0.35 + uMid);
@@ -655,6 +768,15 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         songDepthScatter = mix(songDepthScatter, songArmSide * sin(songTidalAngle * 2.0) * 1.45, songIsTidal);
         pos.z += transitionBurst * songDepthScatter;
 
+        // Shared vinyl-to-portrait handoff: the existing record particles
+        // break into a deterministic spiral cloud before the portrait gathers.
+        float portraitBreak = smoothstep(0.0, 0.72, uPortraitTransition);
+        float portraitSeed = fract(sin(dot(aUv, vec2(173.3, 269.5))) * 41731.731);
+        vec2 portraitTangent = vec2(-radialDir.y, radialDir.x);
+        pos.xy += radialDir * portraitBreak * (0.35 + portraitSeed * 2.25);
+        pos.xy += portraitTangent * sin(portraitBreak * 3.14159265) * (portraitSeed - 0.5) * 2.8;
+        pos.z += (portraitSeed - 0.5) * portraitBreak * 3.4;
+
         vUv = vec2(cos(angle), sin(angle)) * radius * 0.5 / max(coverR, 0.001) + 0.5;
         float tintAngle = spectrumPhase * 6.2831853;
         vTintUv = vec2(cos(tintAngle), sin(tintAngle)) * 0.28 + 0.5;
@@ -673,8 +795,28 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         vTerrainSweep = terrainSweep;
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-        float pointBase = mix(0.22 + uTreble * 0.32 + groove * 0.07 + mountainWave * 0.12, 0.135 + uTreble * 0.08, coverMask);
-        pointBase += mountainBand * 0.045;
+        // The points form a height field. This analytical normal follows the
+        // existing relief without changing a single particle position.
+        vec3 estimatedNormal = normalize(vec3(
+          -radialDir * (0.11 + mountainWave * 0.42 + ridgeDetail * 0.58),
+          1.0
+        ));
+        vec3 viewNormal = normalize(normalMatrix * estimatedNormal);
+        vec3 viewDirection = normalize(-mvPosition.xyz);
+        float normalViewDot = clamp(dot(viewNormal, viewDirection), 0.0, 1.0);
+        vFresnel = pow(1.0 - normalViewDot, 3.8);
+        vec3 keyDirection = normalize(vec3(-0.48, 0.72, 0.50));
+        vec3 cyanDirection = normalize(vec3(0.78, 0.18, 0.42));
+        vec3 reflectionDirection = reflect(-keyDirection, viewNormal);
+        vSpecularFacing = pow(max(dot(reflectionDirection, viewDirection), 0.0), 42.0);
+        vStudioLight = vec2(
+          pow(max(dot(viewNormal, keyDirection), 0.0), 7.0),
+          pow(max(dot(viewNormal, cyanDirection), 0.0), 11.0)
+        );
+        vParticleSeed = fract(sin(dot(aUv, vec2(127.31, 311.73))) * 43758.5453);
+        vViewPosition = mvPosition.xyz;
+        float pointBase = mix(0.19 + uTreble * 0.22 + groove * 0.055 + mountainWave * 0.09, 0.16 + uTreble * 0.055, coverMask);
+        pointBase += mountainBand * 0.035;
         gl_PointSize = pointBase * (420.0 / -mvPosition.z);
         gl_Position = projectionMatrix * mvPosition;
       }
@@ -683,11 +825,13 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform sampler2D uCoverTex;
       uniform sampler2D uPreviousCoverTex;
       uniform float uBass;
+      uniform float uMid;
       uniform float uTreble;
       uniform float uEnergy;
       uniform float uPlaying;
       uniform float uSongTransition;
       uniform float uTime;
+      uniform float uPortraitTransition;
       varying vec2 vUv;
       varying vec2 vTintUv;
       varying float vRadius;
@@ -703,10 +847,38 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       varying float vNoiseGlow;
       varying float vAudioGlow;
       varying float vTerrainSweep;
+      varying float vFresnel;
+      varying float vSpecularFacing;
+      varying float vParticleSeed;
+      varying vec2 vStudioLight;
+      varying vec3 vViewPosition;
+
+      float hash12(vec2 point) {
+        vec3 p3 = fract(vec3(point.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+      }
+
+      vec3 acesFilmic(vec3 value) {
+        const float a = 2.51;
+        const float b = 0.03;
+        const float c = 2.43;
+        const float d = 0.59;
+        const float e = 0.14;
+        return clamp((value * (a * value + b)) / (value * (c * value + d) + e), 0.0, 1.0);
+      }
+
+      vec3 boostSaturation(vec3 color, float amount) {
+        float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        return max(vec3(0.0), mix(vec3(luminance), color, amount));
+      }
 
       void main() {
         vec2 point = gl_PointCoord - 0.5;
-        float dotMask = smoothstep(0.42, 0.18, length(point));
+        float spriteDistance = length(point);
+        float dotMask = smoothstep(0.43, 0.17, spriteDistance);
+        float spriteCore = 1.0 - smoothstep(0.018, 0.095, spriteDistance);
+        float spriteHalo = (1.0 - smoothstep(0.08, 0.31, spriteDistance)) * (1.0 - spriteCore * 0.72);
         vec2 coverUv = clamp(vUv, 0.004, 0.996);
         vec2 coverTexel = vec2(0.0024);
         float coverMix = smoothstep(0.06, 0.94, uSongTransition);
@@ -719,8 +891,8 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         coverBlur += texture2D(uCoverTex, clamp(coverUv - vec2(0.0, coverTexel.y), 0.004, 0.996)).rgb;
         coverBlur *= 0.25;
         coverBlur = mix(oldCoverSource, coverBlur, coverMix);
-        vec3 cover = clamp(coverSource + (coverSource - coverBlur) * 0.58, 0.0, 1.0);
-        cover = clamp((cover - 0.5) * 1.06 + 0.5, 0.0, 1.0);
+        vec3 cover = clamp(coverSource + (coverSource - coverBlur) * 0.82, 0.0, 1.0);
+        cover = clamp((cover - 0.5) * 1.14 + 0.5, 0.0, 1.0);
         vec2 tintUv = clamp(vTintUv, 0.04, 0.96);
         vec3 oldCoverTint = texture2D(uPreviousCoverTex, tintUv).rgb;
         vec3 newCoverTint = texture2D(uCoverTex, tintUv).rgb;
@@ -730,17 +902,54 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         paletteTint += texture2D(uCoverTex, vec2(0.34, 0.72)).rgb;
         paletteTint += texture2D(uCoverTex, vec2(0.68, 0.68)).rgb;
         paletteTint *= 0.25;
+        // Sample a continuously travelling path through the current artwork.
+        // The path is shared by the entire terrain, so the colour reads as
+        // liquid flowing through one surface instead of particles flickering
+        // independently. Two broad waves prevent a visible repeating seam.
+        float liquidAngle = atan(vTintUv.y - 0.5, vTintUv.x - 0.5);
+        float liquidPhase = liquidAngle * 1.65 + vRadius * 13.5 - uTime * (0.23 + uPlaying * 0.07);
+        liquidPhase += sin(liquidAngle * 3.0 + uTime * 0.11) * 0.72;
+        vec2 liquidSampleUv = vec2(
+          0.5 + cos(liquidPhase) * 0.34,
+          0.5 + sin(liquidPhase * 0.73 + uTime * 0.065) * 0.34
+        );
+        vec3 oldLiquidTint = texture2D(uPreviousCoverTex, clamp(liquidSampleUv, 0.04, 0.96)).rgb;
+        vec3 newLiquidTint = texture2D(uCoverTex, clamp(liquidSampleUv, 0.04, 0.96)).rgb;
+        vec3 movingCoverTint = mix(oldLiquidTint, newLiquidTint, coverMix);
         float coverLum = dot(cover, vec3(0.299, 0.587, 0.114));
-        float playbackGlow = uPlaying * (0.13 + uEnergy * 0.24 + uBass * 0.06);
+        float coverHigh = max(max(cover.r, cover.g), cover.b);
+        float coverLow = min(min(cover.r, cover.g), cover.b);
+        float coverSaturation = (coverHigh - coverLow) / max(coverHigh, 0.08);
+        float paleSurface = smoothstep(0.40, 0.86, coverLum)
+          * (1.0 - smoothstep(0.24, 0.72, coverSaturation));
+        float dimColoredSurface = (1.0 - smoothstep(0.12, 0.38, coverLum))
+          * smoothstep(0.035, 0.20, coverHigh);
+        float surfaceGlow = clamp(paleSurface + dimColoredSurface * 0.62, 0.0, 1.0);
+        float playbackGlow = uPlaying * (0.08 + uEnergy * 0.10 + uBass * 0.025);
         vec3 coverNeutral = vec3(coverLum);
-        vec3 coverDisplay = mix(coverNeutral, cover, 1.0 + uPlaying * 0.24);
-        coverDisplay = clamp(coverDisplay * (0.84 + coverLum * 0.20 + playbackGlow), 0.0, 1.0);
+        vec3 coverDisplay = mix(coverNeutral, cover, 1.34 + uPlaying * 0.22);
+        coverDisplay = clamp(coverDisplay * (1.02 + coverLum * 0.18 + playbackGlow), 0.0, 1.0);
+        coverDisplay = boostSaturation(coverDisplay, 1.16 + uPlaying * 0.10);
+        vec3 liftedSurfaceTint = mix(
+          cover / max(coverHigh, 0.10) * 0.58,
+          vec3(0.92, 0.97, 1.0),
+          paleSurface * 0.72
+        );
+        coverDisplay += liftedSurfaceTint * surfaceGlow * (0.16 + uPlaying * 0.10);
         float tintLum = max(dot(coverTint, vec3(0.299, 0.587, 0.114)), 0.08);
         float paletteLum = max(dot(paletteTint, vec3(0.299, 0.587, 0.114)), 0.06);
         float darkTintBlend = 1.0 - smoothstep(0.055, 0.22, tintLum);
         coverTint = mix(coverTint, paletteTint / paletteLum * 0.34, darkTintBlend * 0.82);
         tintLum = max(dot(coverTint, vec3(0.299, 0.587, 0.114)), 0.08);
         coverTint = mix(coverTint / tintLum * 0.38, coverTint, 0.38);
+        float liquidWave = sin(liquidPhase * 1.37 - uTime * 0.17) * 0.5 + 0.5;
+        vec3 auroraTint = mix(coverTint / tintLum, paletteTint / paletteLum, 0.34 + liquidWave * 0.34);
+        float movingTintLum = max(dot(movingCoverTint, vec3(0.299, 0.587, 0.114)), 0.055);
+        vec3 normalizedMovingTint = movingCoverTint / movingTintLum * 0.48;
+        auroraTint = mix(auroraTint, normalizedMovingTint, 0.30 + liquidWave * 0.26);
+        auroraTint = boostSaturation(auroraTint, 1.72 + uPlaying * 0.12);
+        float auroraHigh = max(max(auroraTint.r, auroraTint.g), auroraTint.b);
+        auroraTint *= min(1.0, 0.94 / max(auroraHigh, 0.001));
         vec3 vinyl = vec3(0.0025, 0.003, 0.0035);
         float grooveBand = smoothstep(0.45, 0.50, vRadius) * (1.0 - smoothstep(0.935, 0.965, vRadius));
         float grooveLine = pow(sin(vRadius * 760.0 + vGroove * 0.55) * 0.5 + 0.5, 9.0);
@@ -751,11 +960,18 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         float ambientGlow = vBaseGlow + vNoiseGlow;
         float musicGlow = smoothstep(0.0, 1.0, vAudioGlow);
         float ringGlow = ambientGlow + musicGlow * (0.42 + uTreble * 0.16);
-        grooveBlack += coverTint * (0.045 + grooveBand * ringGlow * 0.32);
-        grooveBlack += coverTint * vMountainBand * (ambientGlow * 0.30 + musicGlow * 0.72);
-        grooveBlack += coverTint * vMountain * (0.10 + musicGlow * (0.34 + uTreble * 0.30));
-        grooveBlack += coverTint * vTerrainSweep * 0.74;
+        grooveBlack += boostSaturation(coverTint, 1.46) * (0.058 + grooveBand * ringGlow * 0.42);
+        grooveBlack += auroraTint * vMountainBand * (ambientGlow * 0.34 + musicGlow * 0.46);
+        grooveBlack += auroraTint * vMountain * (0.11 + musicGlow * (0.23 + uTreble * 0.075));
+        grooveBlack += auroraTint * vTerrainSweep * 0.31;
         vinyl = mix(vinyl, grooveBlack, grooveBand);
+        // Keep the new light volume strictly outside the central label, so
+        // the cover remains a dark, solid record rather than a lit surface.
+        float outerLiquidMask = smoothstep(0.445, 0.535, vRadius);
+        float liquidVolume = vMountainBand * outerLiquidMask * (0.11 + vMountain * 0.23 + musicGlow * 0.095);
+        float liquidCrest = smoothstep(0.22, 0.94, vMountain + vTerrainSweep * 0.34);
+        vinyl += auroraTint * liquidVolume * (0.24 + liquidCrest * 0.24);
+        vinyl += mix(auroraTint, vec3(0.90, 0.97, 1.0), 0.34) * liquidCrest * vMountainBand * outerLiquidMask * (0.018 + musicGlow * 0.022);
         vinyl += vec3(0.07, 0.072, 0.066) * smoothstep(0.95, 0.965, vRadius);
         vinyl += vec3(0.018, 0.020, 0.021) * vGroove * (1.0 - grooveBand);
         vec3 labelRing = vec3(0.34, 0.35, 0.35) * smoothstep(0.035, 0.006, abs(vRadius - 0.42));
@@ -766,10 +982,52 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         float beatSweepGlow = pow(clamp(vBeatSweep, 0.0, 1.0), 0.72);
         float beatSweepTintLum = max(dot(coverTint, vec3(0.299, 0.587, 0.114)), 0.06);
         vec3 beatSweepTint = coverTint / beatSweepTintLum * 0.72;
-        color += beatSweepTint * beatSweepGlow * (1.02 + uEnergy * 0.42);
-        color += beatSweepTint * pow(beatSweepGlow, 1.55) * 0.46;
+        color += beatSweepTint * beatSweepGlow * (0.20 + uEnergy * 0.035);
+        color += beatSweepTint * pow(beatSweepGlow, 1.9) * 0.11;
         color += labelRing + outerTrackRing;
         color += vec3(0.66, 0.42, 0.22) * uTreble * 0.08 * vGroove;
+
+        // Procedural studio reflections: a broad white softbox and a narrow
+        // cyan edge source create material depth without scene lights.
+        float subjectMask = grooveBand * outerLiquidMask;
+        float materialSurfaceGlow = surfaceGlow * clamp(vCoverMask + subjectMask * 0.72, 0.0, 1.0);
+        color += vec3(0.46, 0.57, 0.68) * vStudioLight.x * subjectMask * 0.20;
+        color += vec3(0.08, 0.52, 0.72) * vStudioLight.y * subjectMask * 0.18;
+
+        // View-dependent rim light. Angular breakup keeps it local instead of
+        // drawing a fixed blue outline around the whole silhouette.
+        float viewAngle = atan(vViewPosition.y, vViewPosition.x);
+        float rimBreakup = 0.34 + 0.66 * pow(sin(viewAngle * 2.35 + uTime * 0.055) * 0.5 + 0.5, 1.7);
+        float rimStrength = vFresnel * rimBreakup * subjectMask;
+        vec3 rimTint = mix(auroraTint, vec3(0.88, 0.96, 1.0), vStudioLight.x * 0.62);
+        color += rimTint * rimStrength * 0.42;
+
+        // A narrow reflection travels slowly across the curved height field.
+        // The core is white, with a compact cyan/ice-blue shoulder and only a
+        // trace of violet dispersion at the brightest edge.
+        float bandMotion = sin(uTime * (0.105 + uMid * 0.005)) * 0.48;
+        float bandCoordinate = dot(normalize(vViewPosition.xy + vec2(0.0001)), normalize(vec2(0.68, 0.73)))
+          + vViewPosition.z * 0.30 - bandMotion;
+        float bandCore = 1.0 - smoothstep(0.018, 0.052, abs(bandCoordinate));
+        float bandShoulder = 1.0 - smoothstep(0.045, 0.145, abs(bandCoordinate));
+        float movingSpecular = subjectMask * (bandShoulder * 0.28 + bandCore * 0.72)
+          * (0.58 + vStudioLight.x * 0.42);
+        vec3 specularTint = mix(auroraTint * 0.78, vec3(0.96, 0.985, 1.0), bandCore);
+        specularTint += vec3(0.045, 0.018, 0.085) * bandCore * smoothstep(0.0, 0.05, bandCoordinate);
+        color += specularTint * movingSpecular * (0.48 + uEnergy * 0.025);
+
+        // Keep the vinyl surface continuous: decorative white particle cores
+        // read as visual noise on bright album artwork.
+        float brightParticle = 0.0;
+        float glintSeed = hash12(vec2(vParticleSeed, floor(viewAngle * 17.0)));
+        float glintCycle = max(0.0, sin(uTime * (0.72 + glintSeed * 0.58) + glintSeed * 31.0));
+        float glintLife = pow(glintCycle, 22.0);
+        float rareGlint = 0.0;
+        color += vec3(0.16, 0.72, 0.96) * spriteHalo * brightParticle * 0.30;
+        color += vec3(0.90, 0.98, 1.0) * spriteCore * brightParticle * 0.92;
+        color += liftedSurfaceTint * spriteHalo * materialSurfaceGlow * (0.18 + uPlaying * 0.12);
+        color += vec3(0.18, 0.78, 1.0) * spriteHalo * rareGlint * 0.90;
+        color += vec3(2.35, 2.46, 2.55) * spriteCore * rareGlint;
         float spindleHole = smoothstep(0.025, 0.032, vRadius);
         float glassRingBody = smoothstep(0.030, 0.037, vRadius)
           * (1.0 - smoothstep(0.050, 0.057, vRadius));
@@ -786,11 +1044,15 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         glassRingColor += vec3(0.88, 0.94, 1.0) * glassRingEdge * (0.08 + ringAngleLight * 0.10);
         color = mix(color, glassRingColor, glassRingBody * 0.78);
         float coverAlpha = 0.82 + uPlaying * 0.05;
-        float alpha = vAlpha * dotMask * mix(0.10 + grooveBand * 0.28 + vMountainBand * (0.12 + uTreble * 0.10) + vMountain * 0.24, coverAlpha, vCoverMask);
+        float alpha = vAlpha * dotMask * mix(0.10 + grooveBand * 0.28 + vMountainBand * (0.21 + uTreble * 0.18 + vMountain * 0.24) + vMountain * 0.34, coverAlpha, vCoverMask);
         alpha += grooveBand * dotMask * (vBaseGlow * 0.025 + vNoiseGlow * 0.018 + vAudioGlow * 0.035);
+        alpha += liquidVolume * dotMask * (0.035 + liquidCrest * 0.055);
         alpha += vTerrainSweep * dotMask * 0.052;
         alpha += vCoverRipple * dotMask * 0.10;
         alpha += beatSweepGlow * dotMask * (0.32 + uEnergy * 0.12);
+        alpha += spriteHalo * materialSurfaceGlow * (0.07 + uPlaying * 0.06);
+        alpha = max(alpha, (spriteCore * 0.86 + spriteHalo * 0.16) * brightParticle * vAlpha);
+        alpha = max(alpha, (spriteCore + spriteHalo * 0.22) * rareGlint * vAlpha);
         float sideViewCompensation = mix(0.16, 1.0, smoothstep(0.06, 0.78, vViewFacing));
         alpha *= mix(sideViewCompensation, 1.0, vCoverMask);
         alpha *= 1.0 - smoothstep(0.965, 1.0, vRadius);
@@ -798,6 +1060,11 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         float glassRingAlpha = glassRingBody * dotMask
           * (0.24 + glassRingEdge * 0.24 + ringAngleLight * 0.08);
         alpha = max(alpha, glassRingAlpha);
+        alpha *= 1.0 - smoothstep(0.18, 0.68, uPortraitTransition);
+        // Tone-map inside this custom shader so high-energy cores retain
+        // cyan/blue/silver transitions instead of clipping to dead white.
+        color = acesFilmic(color * 0.92);
+        color = boostSaturation(color, 1.24);
         gl_FragColor = vec4(color, alpha);
       }
     `,
@@ -811,8 +1078,18 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     samplerRef.current = makeAudioSampler(getFrequencyData, active)
   }, [active, getFrequencyData])
 
+  useEffect(() => {
+    rimTrailMaterialRef.current = rimTrailMaterial
+  }, [rimTrailMaterial])
+
+  useEffect(() => () => {
+    rimTrailGeometry.dispose()
+    rimTrailMaterial.dispose()
+  }, [rimTrailGeometry, rimTrailMaterial])
+
   useFrame((state, delta) => {
-    if (!materialRef.current || !samplerRef.current) return
+    const trailMaterial = rimTrailMaterialRef.current
+    if (!materialRef.current || !trailMaterial || !samplerRef.current) return
     const audio = samplerRef.current.read()
     if (voiceOrbVisible && !previousVoiceOrbVisibleRef.current) {
       voiceSummonAgeRef.current = 0
@@ -834,6 +1111,18 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     materialRef.current.uniforms.uTreble.value = THREE.MathUtils.lerp(materialRef.current.uniforms.uTreble.value, audio.treble, 0.13)
     materialRef.current.uniforms.uEnergy.value = THREE.MathUtils.lerp(materialRef.current.uniforms.uEnergy.value, audio.energy, 0.12)
     materialRef.current.uniforms.uPlaying.value = THREE.MathUtils.lerp(materialRef.current.uniforms.uPlaying.value, active ? 1 : 0, 0.08)
+    trailMaterial.uniforms.uTime.value = state.clock.elapsedTime
+    trailMaterial.uniforms.uPlaying.value = THREE.MathUtils.lerp(
+      trailMaterial.uniforms.uPlaying.value,
+      voiceOrbVisible ? 0 : active ? 1 : 0.48,
+      0.065,
+    )
+    trailMaterial.uniforms.uEnergy.value = THREE.MathUtils.lerp(
+      trailMaterial.uniforms.uEnergy.value,
+      audio.energy,
+      0.1,
+    )
+    materialRef.current.uniforms.uPortraitTransition.value = portraitTransition
     materialRef.current.uniforms.uMountainEdge.value = mountainControls.edge
     materialRef.current.uniforms.uMountainHeight.value = mountainControls.height
     materialRef.current.uniforms.uMountainPeaks.value = mountainControls.peaks
@@ -875,6 +1164,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         hasLoadedCoverRef.current = true
       }
       materialRef.current.uniforms.uCoverTex.value = coverTextureRef.current
+      trailMaterial.uniforms.uCoverTex.value = coverTextureRef.current
     }
     if (groupRef.current) {
       const pointer = pointerRef.current
@@ -883,8 +1173,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         spinRef.current -= Math.PI * 2
         groupRef.current.rotation.z -= Math.PI * 2
       }
-      const targetX = voiceOrbVisible ? 0 : THREE.MathUtils.clamp(pointer.dragY * 1.22 + pointer.y * 0.045, -3.05, 3.05)
-      const targetY = voiceOrbVisible ? 0 : THREE.MathUtils.clamp(pointer.dragX * 1.22 + pointer.x * 0.055, -3.05, 3.05)
+      const entryLocked = performance.now() < entryTransitionUntilRef.current
+      const targetX = voiceOrbVisible || entryLocked ? 0 : THREE.MathUtils.clamp(pointer.dragY * 1.22 + pointer.y * 0.045, -3.05, 3.05)
+      const targetY = voiceOrbVisible || entryLocked ? 0 : THREE.MathUtils.clamp(pointer.dragX * 1.22 + pointer.x * 0.055, -3.05, 3.05)
       const targetZ = spinRef.current + Math.sin(state.clock.elapsedTime * 0.23) * 0.018
       const shakePower = voiceOrbVisible ? 0 : recordShakeRef.current.power
       const shakePhase = recordShakeRef.current.phase
@@ -943,6 +1234,7 @@ const GLASS_ORB_FRAGMENT_SHADER = `
   uniform float uRadius;
   uniform float uTime;
   uniform float uOrbVisibility;
+  uniform float uOrbVoiceLevel;
   uniform vec4 uPlayerRect;
   uniform float uPlayerRadius;
   uniform float uPlayerGlassStrength;
@@ -1405,15 +1697,17 @@ const GLASS_ORB_FRAGMENT_SHADER = `
 
       vec2 refractedLocal = normalXY - vec2(geometricOffset.x * aspect, geometricOffset.y) / max(uRadius, 0.0001) * 0.46;
       refractedLocal += fluidWarp * 0.08;
-      vec4 lightBandStack = internalLightBand(refractedLocal, -0.36, 1.04, vec3(1.00, 0.13, 0.10), 0.0);
-      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, -0.18, 1.15, vec3(1.00, 0.72, 0.10), 1.0));
-      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, 0.00, 1.26, vec3(0.16, 1.00, 0.48), 2.0));
-      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, 0.18, 1.37, vec3(0.12, 0.58, 1.00), 3.0));
-      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, 0.36, 1.48, vec3(0.72, 0.22, 1.00), 4.0));
+      float voicePulse = clamp(uOrbVoiceLevel, 0.0, 1.0);
+      float bandBreath = 1.0 + voicePulse * (0.16 + 0.10 * sin(uTime * 17.0));
+      vec4 lightBandStack = internalLightBand(refractedLocal, -0.36, 1.04 * bandBreath, vec3(1.00, 0.13, 0.10), 0.0);
+      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, -0.18, 1.15 * bandBreath, vec3(1.00, 0.72, 0.10), 1.0));
+      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, 0.00, 1.26 * bandBreath, vec3(0.16, 1.00, 0.48), 2.0));
+      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, 0.18, 1.37 * bandBreath, vec3(0.12, 0.58, 1.00), 3.0));
+      lightBandStack = blendLightBand(lightBandStack, internalLightBand(refractedLocal, 0.36, 1.48 * bandBreath, vec3(0.72, 0.22, 1.00), 4.0));
       vec3 lightBandVolume = lightBandStack.rgb;
       float lightBandAlpha = lightBandStack.a;
       float glassDepthFade = smoothstep(0.99, 0.72, normalizedDistance);
-      color.rgb = mix(color.rgb, lightBandVolume, min(0.88, lightBandAlpha * glassDepthFade * 1.22));
+      color.rgb = mix(color.rgb, lightBandVolume, min(0.92, lightBandAlpha * glassDepthFade * (1.22 + voicePulse * 0.28)));
 
       float shellProjection = smoothstep(0.66, 0.96, normalizedDistance) * (1.0 - smoothstep(0.988, 1.0, normalizedDistance));
       vec2 shellFlow = fluidWarp * mix(0.045, 0.12, shellProjection);
@@ -1812,7 +2106,7 @@ const GLASS_ORB_FRAGMENT_SHADER = `
   }
 `
 
-function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
+function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurStrength }) {
   const { gl, scene, camera, size } = useThree()
   const renderTarget = useFBO({
     depthBuffer: true,
@@ -1830,6 +2124,7 @@ function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
         uRadius: { value: 0.105 },
         uTime: { value: 0 },
         uOrbVisibility: { value: 0 },
+        uOrbVoiceLevel: { value: 0 },
         uPlayerRect: { value: new THREE.Vector4(0, 0, 1, 1) },
         uPlayerRadius: { value: 1 },
         uPlayerGlassStrength: { value: 0 },
@@ -1867,6 +2162,8 @@ function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
   const playerGlassTargetRef = useRef(0)
   const playerOpenProgressRef = useRef(1)
   const uiGlassFrameRef = useRef(0)
+  const renderSizeRef = useRef({ width: 0, height: 0 })
+  const canvasMetricsRef = useRef({ frame: 0, rect: null, scaleX: 1, scaleY: 1, radiusScale: 1 })
   const libraryOpenProgressRef = useRef(0)
   const topControlsOpenProgressRef = useRef(0)
 
@@ -1884,10 +2181,19 @@ function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
     const pixelRatio = gl.getPixelRatio()
     const width = Math.max(1, Math.floor(size.width * pixelRatio))
     const height = Math.max(1, Math.floor(size.height * pixelRatio))
-    const canvasRect = gl.domElement.getBoundingClientRect()
-    const scaleX = width / Math.max(canvasRect.width, 1)
-    const scaleY = height / Math.max(canvasRect.height, 1)
-    const radiusScale = (scaleX + scaleY) * 0.5
+    const canvasMetrics = canvasMetricsRef.current
+    canvasMetrics.frame += 1
+    if (!canvasMetrics.rect || canvasMetrics.frame % 20 === 0) {
+      const canvasRect = gl.domElement.getBoundingClientRect()
+      canvasMetrics.rect = canvasRect
+      canvasMetrics.scaleX = width / Math.max(canvasRect.width, 1)
+      canvasMetrics.scaleY = height / Math.max(canvasRect.height, 1)
+      canvasMetrics.radiusScale = (canvasMetrics.scaleX + canvasMetrics.scaleY) * 0.5
+    }
+    const canvasRect = canvasMetrics.rect
+    const scaleX = canvasMetrics.scaleX
+    const scaleY = canvasMetrics.scaleY
+    const radiusScale = canvasMetrics.radiusScale
     const writeCanvasRect = (uniform, rect) => {
       const centerX = rect.left + rect.width * 0.5
       const centerY = rect.top + rect.height * 0.5
@@ -1900,7 +2206,10 @@ function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
       )
     }
     const opticalField = opticalFieldController.opticalField
-    renderTarget.setSize(width, height)
+    if (renderSizeRef.current.width !== width || renderSizeRef.current.height !== height) {
+      renderTarget.setSize(width, height)
+      renderSizeRef.current = { width, height }
+    }
 
     gl.setRenderTarget(renderTarget)
     gl.clear()
@@ -1912,6 +2221,12 @@ function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
     pass.material.uniforms.uSphere.value.set(0.5, 0.5)
     pass.material.uniforms.uRadius.value = 104 * pixelRatio / Math.max(1, Math.min(width, height))
     pass.material.uniforms.uTime.value = state.clock.elapsedTime
+    pass.material.uniforms.uOrbVoiceLevel.value = THREE.MathUtils.damp(
+      pass.material.uniforms.uOrbVoiceLevel.value,
+      THREE.MathUtils.clamp(voiceLevel, 0, 1),
+      18,
+      delta,
+    )
     pass.material.uniforms.uOpticalIntensity.value = opticalField.intensity
     pass.material.uniforms.uOpticalDistortion.value = opticalField.distortion
     pass.material.uniforms.uOpticalFlow.value = opticalField.flow
@@ -2062,7 +2377,7 @@ function LiquidGlassOrbPass({ visible, topFogStrength, topBlurStrength }) {
   return null
 }
 
-function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible }) {
+function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition }) {
   return (
     <>
       <ambientLight intensity={0.45} />
@@ -2074,8 +2389,9 @@ function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mo
         pointerRef={pointerRef}
         mountainControls={mountainControls}
         voiceOrbVisible={voiceOrbVisible}
+        portraitTransition={portraitTransition}
       />
-      <LiquidGlassOrbPass visible={voiceOrbVisible} topFogStrength={topFogStrength} topBlurStrength={topBlurStrength} />
+      <LiquidGlassOrbPass visible={voiceOrbVisible} voiceLevel={voiceOrbLevel} topFogStrength={topFogStrength} topBlurStrength={topBlurStrength} />
     </>
   )
 }
@@ -2092,11 +2408,17 @@ export default function ParticleVinylBackground({
   topBlurStrength = 8,
   viewLocked = false,
   voiceOrbVisible = false,
+  voiceOrbLevel = 0,
+  onReady,
+  portraitTransition = 0,
+  quality = 'high',
 }) {
   const pointerRef = useRef(opticalFieldController.state)
   const { colors: backgroundColors, source: paletteSource } = useCoverBackgroundColors(coverUrl, preloadCoverUrls)
   const [showFlowBackground, setShowFlowBackground] = useState(true)
-  const [showRecord, setShowRecord] = useState(true)
+  // Flow gives the opening screen its visual identity; defer the much heavier
+  // 115k-point record mesh until the first controls have been painted.
+  const [showRecord, setShowRecord] = useState(false)
   const [debugMode, setDebugMode] = useState(false)
   const [debugFlowStrength, setDebugFlowStrength] = useState(1)
   const [pauseFlow, setPauseFlow] = useState(false)
@@ -2129,10 +2451,10 @@ export default function ParticleVinylBackground({
     }
   }, [backgroundBrightness, backgroundColors])
   const flowSettings = useMemo(() => ({
-    baseFlowSpeed: debugMode ? 0.036 : 0.022,
-    baseWarpStrength: debugMode ? 0.22 : 0.14,
-    baseBreathAmount: 0.045,
-    baseDriftAmount: debugMode ? 0.052 : 0.035,
+    baseFlowSpeed: quality === 'low' ? 0.012 : debugMode ? 0.036 : 0.022,
+    baseWarpStrength: quality === 'low' ? 0.07 : debugMode ? 0.22 : 0.14,
+    baseBreathAmount: quality === 'low' ? 0.018 : 0.045,
+    baseDriftAmount: quality === 'low' ? 0.014 : debugMode ? 0.052 : 0.035,
     leftDarkness: 0.38,
     vignetteStrength: 0.32,
     debugFlowStrength,
@@ -2140,10 +2462,31 @@ export default function ParticleVinylBackground({
     showBaseFlow,
     showTransitionBurst,
     debugView,
-    audioReactiveAmount: active ? 0.24 : 0,
-  }), [active, debugBurstStrength, debugFlowStrength, debugMode, debugView, showBaseFlow, showTransitionBurst])
+    audioReactiveAmount: active && quality !== 'low' ? 0.24 : 0,
+  }), [active, debugBurstStrength, debugFlowStrength, debugMode, debugView, quality, showBaseFlow, showTransitionBurst])
   const resolvedCoverUrl = coverUrl || FALLBACK_COVER
   const flowTrackKey = paletteSource === resolvedCoverUrl ? (trackKey || resolvedCoverUrl) : ''
+  const recordDpr = quality === 'low'
+    ? [0.5, 0.7]
+    : quality === 'medium'
+      ? [0.65, 0.85]
+      : [0.85, 1.12]
+
+  useEffect(() => {
+    let cancelled = false
+    const revealRecord = () => {
+      if (!cancelled) setShowRecord(true)
+    }
+    const idleId = typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(revealRecord, { timeout: 700 })
+      : window.setTimeout(revealRecord, 360)
+
+    return () => {
+      cancelled = true
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleId)
+      else window.clearTimeout(idleId)
+    }
+  }, [])
 
   useEffect(() => {
     const app = document.querySelector('.app')
@@ -2270,7 +2613,7 @@ export default function ParticleVinylBackground({
 
   return (
     <div className="particle-vinyl-background" style={backgroundStyle}>
-      {showFlowBackground && (
+      {showFlowBackground && quality !== 'low' && (
         <div className="flow-field-layer" aria-hidden="true">
           <FlowFieldBackground
             colors={flowColors}
@@ -2278,6 +2621,7 @@ export default function ParticleVinylBackground({
             settings={flowSettings}
             paused={pauseFlow}
             forceTransitionSignal={forceTransitionSignal}
+            quality={quality}
           />
         </div>
       )}
@@ -2285,9 +2629,15 @@ export default function ParticleVinylBackground({
         <div className="record-canvas-layer" aria-hidden="true">
           <Canvas
             camera={{ position: CAMERA_POSITION, fov: CAMERA_FOV }}
-            dpr={[1.5, 2]}
-            gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
-            onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
+            dpr={recordDpr}
+            gl={{ antialias: false, alpha: true, powerPreference: 'high-performance' }}
+            onCreated={({ gl }) => {
+              gl.setClearColor(0x000000, 0)
+              gl.outputColorSpace = THREE.SRGBColorSpace
+              gl.toneMapping = THREE.ACESFilmicToneMapping
+              gl.toneMappingExposure = 0.9
+              window.requestAnimationFrame(() => window.requestAnimationFrame(() => onReady?.()))
+            }}
           >
             <ParticleVinylScene
               active={active}
@@ -2298,6 +2648,8 @@ export default function ParticleVinylBackground({
               topFogStrength={topFogStrength}
               topBlurStrength={topBlurStrength}
               voiceOrbVisible={voiceOrbVisible}
+              voiceOrbLevel={voiceOrbLevel}
+              portraitTransition={portraitTransition}
             />
           </Canvas>
         </div>

@@ -22,6 +22,7 @@ export class PlayerCore {
 
   playTrack = (...args) => this.controls.playTrack(...args)
 
+  setVolume = (...args) => this.controls.setVolume(...args)
+
   setPlaybackMode = (...args) => this.controls.setPlaybackMode(...args)
 }
-

@@ -8,9 +8,37 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.env
+server/data/moss_model_config.local.json
+server/data/moss_doubao_tts_config.local.json
+tools/moss-tts-service/model/*.pth
+tools/moss-tts-service/outputs/
+*.wav
+server/data/netease-cookie.txt
+
+# Yun Telemetry runtime data (append-only event log + aggregator snapshot).
+server/data/yun_telemetry.ndjson
+server/data/yun_telemetry.ndjson.*.rotated
+server/data/yun_signals.json
+server/data/yun_requirement_backlog.json
+server/data/yun_requirement_decisions.json
+server/data/yun_feedback_profile.json
+server/data/yun-agent/
 dist
 dist-ssr
+release
+.electron-dist-cache
 *.local
+
+# Local SpeechBrain model cache and the enrolled voiceprint are device-private.
+yun-desktop-agent/voiceprint-service/.venv/
+yun-desktop-agent/voiceprint-service/data/
+yun-desktop-agent/voiceprint-service/models/
+
+# GPU local speech runtime and downloaded model weights stay on this machine.
+yun-desktop-agent/local-speech-service/.venv/
+yun-desktop-agent/local-speech-service/models/
+yun-desktop-agent/local-speech-service/cache/
 
 # Editor directories and files
 .vscode/*

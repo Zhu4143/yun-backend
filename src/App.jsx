@@ -1,24 +1,42 @@
-﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import LiquidGlass from 'liquid-glass-react'
 import { lazy, Suspense } from 'react'
-import { analyzeMusicLibraryTags, fetchMusicLibrary, scanMusicLibrary } from './api/yunApi'
-import { searchNeteaseSongs } from './api/neteaseApi'
+import { analyzeMusicLibraryTags, fetchMusicLibrary, importMusicFiles, scanMusicLibrary } from './api/yunApi'
+import { fetchNeteaseMe, fetchNeteasePlaylistTracks, searchNeteaseSongs } from './api/neteaseApi'
+import { requestRadioPrefetch } from './api/radioApi'
+import { configureYunProModel } from './api/yunModelApi'
 import { useLocalPlayer } from './hooks/useLocalPlayer'
 import { useYunChat } from './hooks/useYunChat'
 import { useYunMemory } from './hooks/useYunMemory'
 import { useYunVoice } from './hooks/useYunVoice'
+import { useYunAgent } from './hooks/useYunAgent'
+import { useCowAgentYunBridge } from './hooks/useCowAgentYunBridge'
+import { useYunWakeWord } from './hooks/useYunWakeWord'
+import { useAsrWakeWord } from './hooks/useAsrWakeWord'
+import { useYunBargeIn } from './hooks/useYunBargeIn'
+import { useVoiceSessionController } from './hooks/useVoiceSessionController'
+import { usePersistentAudioCapture } from './hooks/usePersistentAudioCapture'
+import { useFullDuplexPhysicalTest } from './hooks/useFullDuplexPhysicalTest'
 import { createYunLegacyPlayerAdapter } from './player/adapters/yunLegacyPlayerAdapter'
 import { PlayerProvider } from './player/react/PlayerProvider'
+import { usePlayerObserver } from './telemetry/playerObserver'
+import { useTtsObserver } from './telemetry/ttsObserver'
 import FloatingLyrics from './components/FloatingLyrics'
 import LyricForegroundFog from './components/LyricForegroundFog'
 import VoicePickupGlass from './components/VoicePickupGlass'
+import AsrSettingsPanel from './components/AsrSettingsPanel'
 import VictoryGestureWake from './components/VictoryGestureWake'
 import './App.css'
 
 const ParticleVinylBackground = lazy(() => import('./components/ParticleVinylBackground'))
 const MOUNTAIN_SETTINGS_STORAGE_KEY = 'yun-particle-vinyl-mountain-settings'
 const MOUNTAIN_SETTINGS_LOCK_KEY = 'yun-particle-vinyl-settings-locked'
+const VISUAL_QUALITY_STORAGE_KEY = 'yun-visual-quality'
 const DEFAULT_MOUNTAIN_CONTROLS = { edge: 0.68, height: 0.36, peaks: 0.42, speed: 0.006 }
+// Keep large NetEase playlists inexpensive. A row is 54px high with a 9px
+// gap; the extra pixels prevent a blank edge from small layout differences.
+const LIBRARY_SCROLL_ROW_HEIGHT = 65
+const LIBRARY_SCROLL_OVERSCAN = 6
 
 function getInitialMountainSettings() {
   try {
@@ -46,6 +64,51 @@ function formatTime(seconds) {
   const restSeconds = Math.floor(seconds % 60)
 
   return `${String(minutes).padStart(2, '0')}:${String(restSeconds).padStart(2, '0')}`
+}
+
+function normalizeVoiceTranscript(transcript) {
+  const text = String(transcript || '')
+    .trim()
+    // Native KWS keeps pre-roll so ASR commonly returns the wake phrase too.
+    // Remove it before either the fast local command router or DeepSeek sees
+    // the actual user request.
+    .replace(/^(?:小昀|小云|晓云|小韵|小芸|小允|老赢|角蝇)[，,、\s]*/i, '')
+  const compact = text.replace(/[\s，。！？、,.!?~…]/g, '')
+
+  // Chromium may emit a complete short phrase twice in one final recognition result.
+  // This only cleans the transcript before it is sent to the intent model; it never decides an action.
+  if (compact.length >= 2 && compact.length % 2 === 0) {
+    const half = compact.slice(0, compact.length / 2)
+    if (half === compact.slice(compact.length / 2)) return half
+  }
+
+  // ASR can yield only punctuation from room noise, a speaker tail, or a
+  // dropped frame. Such a result is never a command and must not wake a chat.
+  return /[\p{L}\p{N}]/u.test(text) ? text : ''
+}
+
+function isCompanionCallEnd(text) {
+  const compact = String(text || '').replace(/[\s，。！？、,.!?~…]/g, '')
+  return /^(没事了|不用了|先这样|挂了吧|结束对话)(小昀|小云|晓云|小韵)?$/.test(compact)
+}
+
+function isLikelyTtsEcho(transcript, recentSpokenText) {
+  const compact = (value) => String(value || '').toLowerCase().replace(/[\s，。！？、,.!?~…]/g, '')
+  const heard = compact(transcript)
+  const spoken = compact(recentSpokenText)
+
+  return heard.length >= 2 && spoken.length >= 2 && (spoken.includes(heard) || heard.includes(spoken))
+}
+
+function isWakeAcknowledgementEcho(transcript, acknowledgement) {
+  const compact = (value) => String(value || '').toLowerCase().replace(/[\s，。！？、,.!?~…]/g, '')
+  const heard = compact(transcript)
+  const spoken = compact(acknowledgement)
+
+  // Wake acknowledgements can be just one syllable (such as “嗯？”), so the
+  // general TTS matcher intentionally does not cover all of them. Keep this
+  // comparison exact: “我听着，帮我放歌” must still be treated as a command.
+  return Boolean(heard && spoken && heard === spoken)
 }
 
 function getSongTags(song) {
@@ -96,7 +159,13 @@ const sceneLibraryCovers = [
 ]
 
 const RESPONSE_MODE_KEY = 'yun_response_mode'
-const PERSONA_MODE_KEY = 'yun_persona_mode'
+// Browser echo cancellation has already removed most speaker bleed. Keep this
+// short so a person can answer naturally as soon as Yun finishes speaking.
+const COMPANION_ECHO_GUARD_MS = 900
+const WAKE_ACK_ECHO_GUARD_MS = 80
+const TTS_ECHO_FINGERPRINT_MS = 5000
+const MAX_VOICE_RETRY_ATTEMPTS = 3
+const WAKE_ACKNOWLEDGEMENTS = ['嗯？', '哼？', '怎么了？', '叫我？', '我听着。', '嗯，怎么啦？', '在呢。']
 const DEFAULT_SONG_THEME = {
   '--song-primary': 'hsl(210 34% 42%)',
   '--song-secondary': 'hsl(196 62% 68%)',
@@ -328,14 +397,9 @@ const responseModes = [
   { id: 'silent', label: '专注' },
 ]
 
-const personaModes = [
-  { id: 'warm', label: '昀' },
-  { id: 'zhudongyu', label: '东宇' },
-]
-
 const voiceOptions = [
-  { id: 'S_5U82YXa42', label: 'soft voice', description: '柔和陪伴' },
-  { id: 'zh_female_xiaohe_uranus_bigtts', label: '小荷女声', description: '清亮自然' },
+  { id: 'S_5U82YXa42', label: 'soft voice', description: '温柔陪伴女声（豆包）' },
+  { id: 'zh_female_xiaohe_uranus_bigtts', label: '小荷女声', description: '清亮自然女声（豆包）' },
 ]
 
 const playbackModeOptions = [
@@ -357,19 +421,19 @@ const memoryModeOptions = [
   { id: 'deep', label: '认真陪你' },
 ]
 
-const COVER_SWEEP_DURATION = 2100
-const COVER_SWEEP_LINE_WIDTH = 2
-const COVER_SWEEP_GLOW_WIDTH = 34
-const COVER_SWEEP_START_LINE = {
-  from: { x: 158, y: 635 },
-  to: { x: 171, y: 895 },
-}
-const COVER_SWEEP_END_LINE = {
-  from: { x: 1181, y: 617 },
-  to: { x: 1194, y: 805 },
+function getWallpaperRuntime() {
+  const params = new URLSearchParams(window.location.search)
+  const wallpaperMode = params.get('wallpaper') === '1' || params.get('wallpaper') === 'true'
+  const qualityParam = params.get('quality') || window.localStorage.getItem(VISUAL_QUALITY_STORAGE_KEY)
+  const constrainedDevice = Number(navigator.hardwareConcurrency || 8) <= 4
+  const quality = ['low', 'medium', 'high'].includes(qualityParam)
+    ? qualityParam
+    : constrainedDevice ? 'low' : 'medium'
+
+  return { wallpaperMode, quality }
 }
 
-function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', preloadCoverUrls = [], getFrequencyData, mountainControls, backgroundBrightness, topFogStrength, topBlurStrength, viewLocked, voiceOrbVisible }) {
+function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', preloadCoverUrls = [], getFrequencyData, mountainControls, backgroundBrightness, topFogStrength, topBlurStrength, viewLocked, voiceOrbVisible, voiceOrbLevel = 0, onReady, quality = 'high' }) {
   return (
     <div className="bg-image">
       <Suspense fallback={null}>
@@ -385,6 +449,9 @@ function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', prel
           topBlurStrength={topBlurStrength}
           viewLocked={viewLocked}
           voiceOrbVisible={voiceOrbVisible}
+          voiceOrbLevel={voiceOrbLevel}
+          onReady={onReady}
+          quality={quality}
         />
       </Suspense>
     </div>
@@ -395,12 +462,6 @@ function getInitialResponseMode() {
   const savedMode = localStorage.getItem(RESPONSE_MODE_KEY)
 
   return responseModes.some((mode) => mode.id === savedMode) ? savedMode : 'companion'
-}
-
-function getInitialPersonaMode() {
-  const savedMode = localStorage.getItem(PERSONA_MODE_KEY)
-
-  return personaModes.some((mode) => mode.id === savedMode) ? savedMode : 'warm'
 }
 
 function getSongCoverUrl(song, fallbackCover) {
@@ -439,8 +500,27 @@ function shouldIgnorePlaybackShortcut(target) {
   return Boolean(target.closest('input, textarea, select, button, [contenteditable="true"]'))
 }
 
-function App() {
+function App({ onVisualReady }) {
+  const [{ wallpaperMode, quality: initialVisualQuality }] = useState(getWallpaperRuntime)
+  const [visualQuality, setVisualQuality] = useState(initialVisualQuality)
+  // Let React paint the controls before the two WebGL renderers begin shader
+  // compilation. Without this gap, a cold start can look like a frozen black
+  // window even though the rest of the interface is already ready.
+  const [visualBooted, setVisualBooted] = useState(false)
+
+  const updateVisualQuality = useCallback((quality) => {
+    if (!['low', 'medium', 'high'].includes(quality)) return
+    setVisualQuality(quality)
+    window.localStorage.setItem(VISUAL_QUALITY_STORAGE_KEY, quality)
+    const url = new URL(window.location.href)
+    url.searchParams.set('quality', quality)
+    window.history.replaceState({}, '', url)
+  }, [])
   const [activePanel, setActivePanel] = useState(null)
+  const [proModelSetupVisible, setProModelSetupVisible] = useState(true)
+  const [proModelForm, setProModelForm] = useState({ apiKey: '', baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' })
+  const [proModelStatus, setProModelStatus] = useState('')
+  const [isApplyingProModel, setIsApplyingProModel] = useState(false)
   const [libraryQuery, setLibraryQuery] = useState('')
   const [librarySource, setLibrarySource] = useState('local')
   const [libraryTracks, setLibraryTracks] = useState([])
@@ -449,20 +529,37 @@ function App() {
   const [libraryError, setLibraryError] = useState('')
   const [libraryListReady, setLibraryListReady] = useState(false)
   const [libraryEdgeOpen, setLibraryEdgeOpen] = useState(false)
+  const [chatDockOpen, setChatDockOpen] = useState(false)
   const [topControlsOpen, setTopControlsOpen] = useState(false)
+  const [isWebFullscreen, setIsWebFullscreen] = useState(() => Boolean(document.fullscreenElement))
   const [neteaseResults, setNeteaseResults] = useState([])
   const [neteaseStatus, setNeteaseStatus] = useState('idle')
   const [neteaseError, setNeteaseError] = useState('')
+  const [neteaseMe, setNeteaseMe] = useState(null)
+  const [neteaseAccountStatus, setNeteaseAccountStatus] = useState('idle')
+  const [neteaseLibraryView, setNeteaseLibraryView] = useState('songs')
+  const [activeNeteasePlaylist, setActiveNeteasePlaylist] = useState(null)
+  const [libraryScrollTop, setLibraryScrollTop] = useState(0)
+  const [isImportingMusic, setIsImportingMusic] = useState(false)
+  const musicImportInputRef = useRef(null)
+  const libraryScrollListRef = useRef(null)
+  const neteaseRequestRef = useRef(0)
   const [isAnalyzingLibrary, setIsAnalyzingLibrary] = useState(false)
   const [panelContentVisible, setPanelContentVisible] = useState(true)
   const [pendingMorph, setPendingMorph] = useState(null)
   const [morphLayer, setMorphLayer] = useState(null)
   const [pressedPanel, setPressedPanel] = useState(null)
-  const [sceneCoverPage, setSceneCoverPage] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
+  const [chatImageFile, setChatImageFile] = useState(null)
   const [responseMode, setResponseModeState] = useState(getInitialResponseMode)
-  const [personaMode, setPersonaModeState] = useState(getInitialPersonaMode)
-  const [uiMode, setUiMode] = useState('normal')
+  const applyResponseMode = useCallback((mode) => {
+    if (!responseModes.some((item) => item.id === mode)) return false
+    setResponseModeState(mode)
+    localStorage.setItem(RESPONSE_MODE_KEY, mode)
+    return true
+  }, [])
+  const personaMode = 'warm'
+  const [uiMode, setUiMode] = useState('immersive')
   const [mountainPanelOpen, setMountainPanelOpen] = useState(false)
   const [initialMountainSettings] = useState(getInitialMountainSettings)
   const [mountainControls, setMountainControls] = useState(initialMountainSettings.mountainControls)
@@ -472,12 +569,58 @@ function App() {
   const [mountainSettingsLocked, setMountainSettingsLocked] = useState(() => window.localStorage.getItem(MOUNTAIN_SETTINGS_LOCK_KEY) === 'true')
   const [viewLocked, setViewLocked] = useState(() => window.localStorage.getItem('yun-particle-vinyl-view-locked') === 'true')
   const [voiceInputActive, setVoiceInputActive] = useState(false)
+  const [nativeCommandListening, setNativeCommandListening] = useState(false)
+  const [nativeCommandTranscribing, setNativeCommandTranscribing] = useState(false)
+  const [voiceVisualActive, setVoiceVisualActive] = useState(false)
+  const [voiceVisualActivityAt, setVoiceVisualActivityAt] = useState(0)
+  const [nativeVoiceLevel, setNativeVoiceLevel] = useState(0)
+  const [companionCallActive, setCompanionCallActive] = useState(false)
+  const [voiceCallStatus, setVoiceCallStatus] = useState('idle')
+  const [voiceResumeDelayMs, setVoiceResumeDelayMs] = useState(320)
+  const [wakeAcknowledging, setWakeAcknowledging] = useState(false)
+  const wasSpeakingRef = useRef(false)
+  const bargeInRef = useRef(false)
+  const echoGuardUntilRef = useRef(0)
+  const nextSpeechEchoGuardMsRef = useRef(null)
+  const voiceRetryAttemptsRef = useRef(0)
+  const previousWakeAcknowledgementRef = useRef(-1)
+  const wakeAcknowledgementInFlightRef = useRef(false)
+  const wakeAcknowledgementEchoRef = useRef({ text: '', expiresAt: 0 })
   const [gestureCameraEnabled, setGestureCameraEnabled] = useState(false)
   const [gestureCameraStatus, setGestureCameraStatus] = useState('off')
+  const [volumeControlOpen, setVolumeControlOpen] = useState(false)
   const [immersivePlayerVisible, setImmersivePlayerVisible] = useState(false)
   const immersivePlayerTimerRef = useRef(null)
   const libraryEdgeTimerRef = useRef(null)
+  const chatDockTimerRef = useRef(null)
   const topControlsTimerRef = useRef(null)
+  const speakingOpticsRef = useRef(null)
+
+  // Native wake events arrive over a separate websocket.  If that connection
+  // drops halfway through a turn, the normal final/error event never reaches
+  // React. Keep one small, authoritative reset so the wake affordance can
+  // never trap the rest of the player UI.
+  const resetNativeWakeUi = useCallback((status = 'idle') => {
+    setNativeCommandListening(false)
+    setNativeCommandTranscribing(false)
+    setVoiceInputActive(false)
+    setVoiceVisualActive(false)
+    setNativeVoiceLevel(0)
+    setCompanionCallActive(false)
+    setWakeAcknowledging(false)
+    setVoiceCallStatus(status)
+  }, [])
+
+  useEffect(() => {
+    let timer = 0
+    const frame = window.requestAnimationFrame(() => {
+      timer = window.setTimeout(() => setVisualBooted(true), 120)
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
+    }
+  }, [])
 
   const revealImmersivePlayer = useCallback(() => {
     if (uiMode !== 'immersive') return
@@ -500,6 +643,27 @@ function App() {
   }, [immersivePlayerVisible, revealImmersivePlayer, uiMode])
 
   useEffect(() => () => window.clearTimeout(immersivePlayerTimerRef.current), [])
+
+  useEffect(() => {
+    const syncFullscreenState = () => setIsWebFullscreen(Boolean(document.fullscreenElement))
+
+    document.addEventListener('fullscreenchange', syncFullscreenState)
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
+  }, [])
+
+  const toggleWebFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+        return
+      }
+
+      await document.documentElement.requestFullscreen()
+    } catch (error) {
+      console.warn('Unable to change fullscreen state.', error)
+    }
+  }, [])
+
   const spaceHoldTimerRef = useRef(0)
   const spaceHoldTriggeredRef = useRef(false)
   const spacePressActiveRef = useRef(false)
@@ -508,12 +672,28 @@ function App() {
   const libraryTriggerRef = useRef(null)
   const playModeTriggerRef = useRef(null)
   const chatMessagesRef = useRef(null)
+  const chatImageInputRef = useRef(null)
   const autoNextReactionRef = useRef('')
-  const sceneCoverOverlayRef = useRef(null)
-  const sceneCoverSlotRefs = useRef([])
-  const coverSweepFrameRef = useRef(0)
+  const radioPrefetchRef = useRef('')
+  const radioPrefetchingRef = useRef(false)
+  const radioPrefetchRetryTimerRef = useRef(0)
+  const [radioPrefetchRetryNonce, setRadioPrefetchRetryNonce] = useState(0)
+  // This is deliberately separate from chat recommendations. A radio batch
+  // has already been shown/planned, so it must be excluded from the next
+  // prefetch even before the listener reaches those tracks.
+  const [radioRecommendationHistory, setRadioRecommendationHistory] = useState([])
 
-  const legacyPlayer = useLocalPlayer(libraryTracks)
+  const startCompanionCall = useCallback(({ listenImmediately = true } = {}) => {
+    voiceRetryAttemptsRef.current = 0
+    setVoiceResumeDelayMs(120)
+    setVoiceCallStatus('listening')
+    setCompanionCallActive(true)
+    setVoiceVisualActive(true)
+    setVoiceVisualActivityAt(Date.now())
+    setVoiceInputActive(listenImmediately)
+  }, [])
+
+  const legacyPlayer = usePlayerObserver(useLocalPlayer(libraryTracks))
   const {
     audioRef,
     currentSong,
@@ -521,14 +701,26 @@ function App() {
     currentTime,
     playbackMode,
     lastAutoNextSong,
+    upNextTracks,
+    autoUpNextTracks,
     playSong,
+    playSongFromQueue,
     pausePlayback,
     togglePlayPause,
     playNext,
     playPrevious,
     seekTo,
+    musicDuckingController,
     setPlaybackMode,
     readAudioFrequencyData,
+    setQueuedNextSong,
+    enqueueUpNext,
+    removeUpNext,
+    clearUpNext,
+    setAutoUpNext,
+    removeAutoUpNext,
+    clearAutoUpNext,
+    clearPlaybackQueue,
   } = legacyPlayer
   const [playerCore] = useState(() => createYunLegacyPlayerAdapter())
   const playerState = playerCore.updateLegacy(legacyPlayer)
@@ -536,14 +728,256 @@ function App() {
     playerCore.flush()
   })
   useEffect(() => () => playerCore.dispose(), [playerCore])
-  const yunVoice = useYunVoice({ musicAudioRef: audioRef })
+  // Headless voice lifecycle authority. It deliberately does not own UI,
+  // microphone hardware, or the existing conversation/MCP routes.
+  const voiceSession = useVoiceSessionController()
+  const voiceController = voiceSession.controller
+  const handleVoiceCaptureStart = useCallback(() => {
+    voiceController.userSpeechStarted()
+    setVoiceCallStatus('listening')
+  }, [voiceController])
+  const handleVoiceCaptureStop = useCallback(() => {
+    voiceController.userSpeechEnded()
+  }, [voiceController])
+  const yunVoice = useTtsObserver(useYunVoice({ musicAudioRef: audioRef, musicDuckingController }))
   const voiceSettings = yunVoice.settings
+  const yunVoiceIsActive = yunVoice.isPreparingSpeech || yunVoice.isSpeaking
+  const nativeVoiceOrbVisible = nativeCommandListening && !nativeCommandTranscribing && !yunVoiceIsActive
+  // The central liquid-glass orb belongs exclusively to the listening turn.
+  // During Yun's reply, leave that space clear and use the existing outer
+  // speaking ribbon instead.
+  const voiceVisualVisible = nativeVoiceOrbVisible || (companionCallActive && voiceVisualActive && !yunVoiceIsActive)
+  const voiceOrbLevel = nativeVoiceOrbVisible ? nativeVoiceLevel : 0
+
+  useEffect(() => {
+    const optics = speakingOpticsRef.current
+    if (!optics || !yunVoice.isSpeaking) return undefined
+
+    let frameId = 0
+    let smoothedLevel = 0
+
+    const updateMusicPulse = () => {
+      const frequencyData = isPlaying ? readAudioFrequencyData() : null
+      let bassEnergy = 0
+
+      if (frequencyData?.length) {
+        // The first few FFT bins carry the kick and bass movement that reads
+        // as a musical pulse, rather than the harsher motion of high notes.
+        const bassBinCount = Math.max(6, Math.floor(frequencyData.length * 0.055))
+        for (let index = 1; index < bassBinCount; index += 1) {
+          bassEnergy += frequencyData[index] / 255
+        }
+        bassEnergy /= Math.max(1, bassBinCount - 1)
+      }
+
+      // Fast attacks make each kick visibly brighten the field; the slower
+      // release leaves a short luminous tail instead of a metronomic blink.
+      const targetLevel = Math.max(0, Math.min(1, (bassEnergy - 0.035) / 0.24))
+      const smoothing = targetLevel > smoothedLevel ? 0.54 : 0.105
+      smoothedLevel += (targetLevel - smoothedLevel) * smoothing
+      const pulse = smoothedLevel
+      optics.style.setProperty('--speaking-pulse', pulse.toFixed(3))
+      optics.style.setProperty('--speaking-glow-blur', `${22 + pulse * 38}px`)
+      optics.style.setProperty('--speaking-glow-spread', `${3 + pulse * 9}px`)
+      optics.style.setProperty('--speaking-inner-glow', `${13 + pulse * 20}px`)
+      optics.style.setProperty('--speaking-band-blur', `${2.4 - pulse * 0.9}px`)
+      optics.style.setProperty('--speaking-band-saturation', (1.28 + pulse * 0.78).toFixed(3))
+      optics.style.setProperty('--speaking-band-brightness', (0.58 + pulse * 1.05).toFixed(3))
+      optics.style.setProperty('--speaking-ring-opacity', (0.32 + pulse * 0.68).toFixed(3))
+      optics.style.setProperty('--speaking-tint-opacity', (0.12 + pulse * 0.48).toFixed(3))
+      optics.style.setProperty('--speaking-tint-saturation', (1.02 + pulse * 0.16).toFixed(3))
+      optics.style.setProperty('--speaking-tint-brightness', (0.99 + pulse * 0.06).toFixed(3))
+      frameId = window.requestAnimationFrame(updateMusicPulse)
+    }
+
+    updateMusicPulse()
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      ;[
+        '--speaking-pulse',
+        '--speaking-glow-blur',
+        '--speaking-glow-spread',
+        '--speaking-inner-glow',
+        '--speaking-band-blur',
+        '--speaking-band-saturation',
+        '--speaking-band-brightness',
+        '--speaking-ring-opacity',
+        '--speaking-tint-opacity',
+        '--speaking-tint-saturation',
+        '--speaking-tint-brightness',
+      ].forEach((property) => optics.style.removeProperty(property))
+    }
+  }, [isPlaying, readAudioFrequencyData, yunVoice.isSpeaking])
+
+  const wakeVoiceInput = useCallback(async (source = 'browser', inlineCommand = '') => {
+    if (wakeAcknowledgementInFlightRef.current) return
+
+    voiceController.wakeDetected()
+    const previousIndex = previousWakeAcknowledgementRef.current
+    let nextIndex = Math.floor(Math.random() * WAKE_ACKNOWLEDGEMENTS.length)
+    if (WAKE_ACKNOWLEDGEMENTS.length > 1 && nextIndex === previousIndex) {
+      nextIndex = (nextIndex + 1) % WAKE_ACKNOWLEDGEMENTS.length
+    }
+    previousWakeAcknowledgementRef.current = nextIndex
+    const acknowledgement = WAKE_ACKNOWLEDGEMENTS[nextIndex]
+    // The native engine owns a continuous microphone stream and its own
+    // pre-roll. Its AEC receives the acknowledgement render reference, so the
+    // user can still speak immediately after this short cue.
+    if (source === 'native') {
+      // Native owns this command turn end-to-end; do not arm the browser
+      // companion-call loop or it will reopen a competing microphone stream
+      // after transcription completes.
+      setCompanionCallActive(false)
+      setVoiceInputActive(false)
+      setVoiceVisualActive(true)
+      setNativeCommandListening(true)
+      setNativeCommandTranscribing(false)
+      setVoiceCallStatus('正在听')
+      // Native ASR keeps listening while this cue plays. AEC usually removes
+      // it, but retain an exact, per-wake fingerprint as a final safety net.
+      wakeAcknowledgementEchoRef.current = {
+        text: acknowledgement,
+        expiresAt: Date.now() + TTS_ECHO_FINGERPRINT_MS,
+      }
+      // The acknowledgement is played through the native full-duplex engine,
+      // whose render reference is fed to AEC.  Do not await generation here:
+      // the user must be able to continue directly with a command, and can
+      // interrupt this short cue at any time.
+      void yunVoice.speakText(acknowledgement, { force: true, allowBargeIn: false }).catch(() => {})
+      return
+    }
+
+    // Browser fallback recognizes a complete speech segment, so the wake word
+    // and command may already be present in the same transcript. Hand that
+    // command straight to the normal DeepSeek path instead of opening a new
+    // recorder after the user's words have already passed.
+    if (inlineCommand) {
+      setCompanionCallActive(false)
+      setVoiceInputActive(false)
+      setVoiceVisualActive(false)
+      setNativeCommandListening(false)
+      setWakeAcknowledging(false)
+      window.dispatchEvent(new CustomEvent('yun-browser-inline-command', {
+        detail: { text: inlineCommand },
+      }))
+      return
+    }
+
+    wakeAcknowledgementInFlightRef.current = true
+    // Begin browser capture on the wake event itself. The acknowledgement is a
+    // parallel cue only; it must never gate the user's next spoken words.
+    startCompanionCall({ listenImmediately: true })
+    setNativeCommandListening(false)
+    setWakeAcknowledging(true)
+    setVoiceCallStatus('聆听中')
+
+    try {
+      // The acknowledgement itself is already fingerprint-filtered below. Use a
+      // very short guard so the user can speak naturally as soon as it ends.
+      nextSpeechEchoGuardMsRef.current = WAKE_ACK_ECHO_GUARD_MS
+      wakeAcknowledgementEchoRef.current = {
+        text: acknowledgement,
+        expiresAt: Date.now() + TTS_ECHO_FINGERPRINT_MS,
+      }
+      await yunVoice.speakText(acknowledgement, {
+        force: true,
+        allowBargeIn: false,
+      })
+    } finally {
+      wakeAcknowledgementInFlightRef.current = false
+      setWakeAcknowledging(false)
+    }
+  }, [startCompanionCall, voiceController, yunVoice])
+  const handleBargeInCandidate = useCallback(({ rms, aecMode }) => {
+    // PHASE 4 only proves that post-AEC capture can see a candidate while
+    // playback is active. The cancellation action is intentionally deferred
+    // to the dedicated barge-in phase.
+    console.debug('[BARGE-IN] candidate detected', { rms, aecMode })
+    setVoiceCallStatus('检测到讲话')
+  }, [])
+  const handleNativeBargeIn = useCallback(() => {
+    if (!yunVoice.isSpeaking || voiceInputActive) return
+    // The native engine has already opened an ASR turn from the first user
+    // frame. Stop only Yun's output; never pause the user's music.
+    yunVoice.stopSpeaking()
+    setCompanionCallActive(false)
+    setVoiceInputActive(false)
+    setNativeCommandListening(true)
+    setNativeCommandTranscribing(false)
+    setVoiceVisualActive(false)
+    setVoiceCallStatus('正在听你说')
+  }, [voiceInputActive, yunVoice])
+  const bargeIn = useYunBargeIn({
+    enabled: yunVoice.isSpeaking && yunVoice.isSpeechInterruptible && !voiceInputActive,
+    onCandidate: handleBargeInCandidate,
+  })
+
+  useEffect(() => {
+    if (wasSpeakingRef.current && !yunVoice.isSpeaking && !bargeInRef.current) {
+      const guardMs = nextSpeechEchoGuardMsRef.current ?? COMPANION_ECHO_GUARD_MS
+      echoGuardUntilRef.current = Date.now() + guardMs
+      nextSpeechEchoGuardMsRef.current = null
+    }
+    if (!yunVoice.isSpeaking) bargeInRef.current = false
+    wasSpeakingRef.current = yunVoice.isSpeaking
+  }, [yunVoice.isSpeaking])
+
+  useEffect(() => {
+    let responseId = voiceController.getSnapshot().responseId
+    if (yunVoice.isPreparingSpeech && !responseId) {
+      responseId = voiceController.startResponse()
+    }
+    if (yunVoice.isSpeaking) voiceController.outputStarted(responseId)
+    if (!yunVoice.isPreparingSpeech && !yunVoice.isSpeaking && responseId) {
+      voiceController.outputEnded(responseId)
+    }
+  }, [voiceController, yunVoice.isPreparingSpeech, yunVoice.isSpeaking])
+
+  const asrWakeWord = useAsrWakeWord({
+    // The shared capture stream stays alive while Yun speaks. This only skips
+    // wake-word compute during an explicit command turn, never microphone I/O.
+    suspended: voiceInputActive,
+    onWake: wakeVoiceInput,
+  })
+  const wakeWord = useYunWakeWord({
+    // Never open two independent microphone recognizers at once. Local/remote
+    // ASR takes precedence whenever the user enables it.
+    suspended: voiceInputActive || yunVoiceIsActive || asrWakeWord.enabled || asrWakeWord.nativeActive,
+    onWake: wakeVoiceInput,
+    // Wake by the spoken name alone. Anyone nearby can call Yun; no voice
+    // print enrollment or speaker verification is required.
+    voiceprintEnabled: false,
+  })
+  const audioCapture = usePersistentAudioCapture({
+    // Native engine already owns the physical mic while it is healthy. Do not
+    // open Chromium capture in parallel and steal/duplicate the same input.
+    enabled: (!asrWakeWord.nativeActive && asrWakeWord.enabled) || companionCallActive || yunVoiceIsActive,
+  })
+  const duplexPhysicalTest = useFullDuplexPhysicalTest({ manager: audioCapture.manager })
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined
+    window.yunVoiceDiagnostics = audioCapture.metrics
+    return () => { delete window.yunVoiceDiagnostics }
+  }, [audioCapture.metrics])
+  const [asrSettingsOpen, setAsrSettingsOpen] = useState(false)
   const yunMemory = useYunMemory()
+  const yunAgent = useYunAgent({
+    player: legacyPlayer,
+    voice: yunVoice,
+    libraryTracks,
+    currentSong,
+  })
   const {
     messages: chatMessages,
     isThinking: chatIsThinking,
+    playHistory,
+    recentRecommendations,
     sendMessage: sendChatMessage,
     reactToSongChange,
+    prefetchSongReaction,
+    rememberPlayedSong,
+    resolveSkillCandidate,
+    appendRemoteTurn,
   } = useYunChat({
     currentSong,
     libraryTracks,
@@ -551,43 +985,256 @@ function App() {
       audioRef,
       currentSong,
       playSong,
+      playSongFromQueue,
+      clearPlaybackQueue,
       pausePlayback,
       togglePlayPause,
       playNext,
       playPrevious,
       seekTo,
+      setPlaybackMode,
+      setResponseMode: applyResponseMode,
+      setQueuedNextSong,
+      setAutoUpNext,
     },
     voice: yunVoice,
     responseMode,
     personaMode,
     musicSource: librarySource,
     memory: yunMemory,
+    agent: yunAgent,
+  })
+  useCowAgentYunBridge({
+    player: legacyPlayer,
+    voice: yunVoice,
+    currentSong,
+    playHistory,
+    recentRecommendations,
+    onRemoteTurn: appendRemoteTurn,
+    onRemoteOutcome: ({ reply }) => appendRemoteTurn({ reply }),
   })
   const selectedVoiceOption = voiceOptions.find((option) => option.id === voiceSettings.voice)
   const selectedVoiceLabel = selectedVoiceOption?.label || 'custom voice'
 
-  const setResponseMode = useCallback((mode) => {
-    if (!responseModes.some((item) => item.id === mode)) return
-
-    setResponseModeState(mode)
-    localStorage.setItem(RESPONSE_MODE_KEY, mode)
-  }, [])
-
-  const setPersonaMode = useCallback((mode) => {
-    if (!personaModes.some((item) => item.id === mode)) return
-
-    setPersonaModeState(mode)
-    localStorage.setItem(PERSONA_MODE_KEY, mode)
-  }, [])
+  const setResponseMode = applyResponseMode
 
   const selectPlaybackMode = useCallback((mode) => {
     setPlaybackMode(mode)
     setActivePanel(null)
   }, [setPlaybackMode])
 
-  const stopVoiceInput = useCallback(() => {
-    setVoiceInputActive(false)
+  const handleVoiceRecognitionError = useCallback((error) => {
+    const labels = {
+      'not-allowed': '麦克风权限被拒绝',
+      'service-not-allowed': '语音识别服务不可用',
+      unsupported: '当前环境不支持语音识别',
+      network: '语音识别网络异常',
+      'audio-capture': '麦克风暂不可用',
+      'start-failed': '语音识别启动失败',
+      'no-speech': '没有识别到语音',
+    }
+    setVoiceCallStatus(labels[error] || '语音识别异常')
   }, [])
+
+  const handleVoiceSilenceTimeout = useCallback((event = {}) => {
+    const reason = event?.reason || 'silence'
+    const error = event?.error || ''
+    const fatal = ['not-allowed', 'service-not-allowed', 'unsupported', 'microphone-denied'].includes(error || reason)
+    const retryable = ['network', 'audio-capture', 'start-failed', 'recognition-failed', 'recognition-error'].includes(error || reason)
+
+    setVoiceInputActive(false)
+    if (fatal) {
+      setCompanionCallActive(false)
+      return
+    }
+
+    if (retryable) {
+      const attempts = voiceRetryAttemptsRef.current + 1
+      voiceRetryAttemptsRef.current = attempts
+      if (attempts >= MAX_VOICE_RETRY_ATTEMPTS) {
+        setVoiceCallStatus('语音连接失败，请手动重新开始')
+        setCompanionCallActive(false)
+        return
+      }
+      setVoiceCallStatus(`连接重试 ${attempts}/${MAX_VOICE_RETRY_ATTEMPTS}`)
+      setVoiceResumeDelayMs(Math.min(4000, 800 * attempts))
+      return
+    }
+
+    // Silence is expected in a phone-like companion call. Wait a little, then
+    // reopen the next recognition turn without consuming the error budget.
+    setVoiceCallStatus('等待你说话')
+    setVoiceResumeDelayMs(650)
+  }, [])
+
+  const handleVoiceTranscript = useCallback((transcript) => {
+    const text = normalizeVoiceTranscript(transcript)
+    setVoiceInputActive(false)
+    setChatDraft('')
+    voiceRetryAttemptsRef.current = 0
+    setVoiceResumeDelayMs(320)
+    const wakeAcknowledgementEcho = wakeAcknowledgementEchoRef.current
+    const isWakeAcknowledgementEchoed = Date.now() < wakeAcknowledgementEcho.expiresAt
+      && isWakeAcknowledgementEcho(text, wakeAcknowledgementEcho.text)
+    const isWithinEchoWindow = Date.now() < echoGuardUntilRef.current
+    const isRecentTtsEcho = Date.now() - yunVoice.lastSpeechEndedAt < TTS_ECHO_FINGERPRINT_MS
+      && isLikelyTtsEcho(text, yunVoice.recentSpokenText)
+    if (isWakeAcknowledgementEchoed || (isWithinEchoWindow && isLikelyTtsEcho(text, yunVoice.recentSpokenText)) || isRecentTtsEcho) {
+      // The microphone can still hear the last syllables from Yun's speaker
+      // output. Also reject a matching TTS phrase that arrives after the
+      // timing guard, which is common with laptop speakers.
+      setVoiceCallStatus('已过滤回声')
+      setVoiceResumeDelayMs(900)
+      return 'echo'
+    }
+    if (isCompanionCallEnd(text)) {
+      setCompanionCallActive(false)
+      yunVoice.stopSpeaking()
+      return
+    }
+    if (!text) return
+    setVoiceCallStatus(chatIsThinking ? '已听到，优先处理这句' : '理解中')
+    voiceController.startResponse()
+    sendChatMessage(text)
+    return 'submitted'
+  }, [chatIsThinking, sendChatMessage, voiceController, yunVoice])
+
+  const handleVoiceInterimTranscript = useCallback((transcript) => {
+    setChatDraft(transcript)
+    setVoiceVisualActive(true)
+    setVoiceVisualActivityAt(Date.now())
+  }, [])
+
+  useEffect(() => {
+    const handleNativeTranscript = (event) => {
+      const text = String(event.detail?.text || '').trim()
+      const isInlineBrowserCommand = event.type === 'yun-browser-inline-command'
+      // Ignore a late final event from a previous native session. Without this
+      // gate, a stale punctuation-only ASR result could enter chat after the
+      // wake UI had already returned to idle.
+      if (!isInlineBrowserCommand && !nativeCommandListening && !nativeCommandTranscribing) return
+      resetNativeWakeUi('idle')
+      if (text) {
+        const result = handleVoiceTranscript(text)
+        // The native stream is continuous. If the final transcript was only
+        // Yun's own acknowledgement, keep this listening turn open for the
+        // user's actual command instead of forcing another wake-up.
+        if (result === 'echo') {
+          setNativeCommandListening(true)
+          setNativeCommandTranscribing(false)
+          setVoiceVisualActive(true)
+          setVoiceCallStatus('正在听')
+        }
+      }
+      else {
+        setVoiceCallStatus(event.detail?.reason === 'command_timeout' ? '没有听清，请重新唤醒' : '没有听清，请再说一次')
+      }
+    }
+    const handleNativeTranscribing = () => {
+      setNativeCommandTranscribing(true)
+      // The full-screen awakening field is only an input affordance. Once
+      // audio has been handed to ASR it must disappear, even if the backend
+      // recognizer is slow or fails to answer.
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('正在转写')
+    }
+    const handleNativeAsrError = (event) => {
+      resetNativeWakeUi('语音转写失败，请再试一次')
+      console.error('[NATIVE ASR] transcription failed', event.detail)
+    }
+    const handleNativeVoiceLevel = (event) => setNativeVoiceLevel(Number(event.detail?.level || 0))
+    window.addEventListener('yun-native-asr-final', handleNativeTranscript)
+    window.addEventListener('yun-browser-inline-command', handleNativeTranscript)
+    window.addEventListener('yun-native-asr-transcribing', handleNativeTranscribing)
+    window.addEventListener('yun-native-asr-error', handleNativeAsrError)
+    window.addEventListener('yun-native-barge-in', handleNativeBargeIn)
+    window.addEventListener('yun-native-voice-level', handleNativeVoiceLevel)
+    return () => {
+      window.removeEventListener('yun-native-asr-final', handleNativeTranscript)
+      window.removeEventListener('yun-browser-inline-command', handleNativeTranscript)
+      window.removeEventListener('yun-native-asr-transcribing', handleNativeTranscribing)
+      window.removeEventListener('yun-native-asr-error', handleNativeAsrError)
+      window.removeEventListener('yun-native-barge-in', handleNativeBargeIn)
+      window.removeEventListener('yun-native-voice-level', handleNativeVoiceLevel)
+    }
+  }, [handleNativeBargeIn, handleVoiceTranscript, nativeCommandListening, nativeCommandTranscribing, resetNativeWakeUi])
+
+  useEffect(() => {
+    if (!nativeCommandListening || nativeCommandTranscribing) return undefined
+
+    // The sidecar normally sends an asr_partial event before it calls the
+    // recognizer. If that event never arrives (for example, a dropped native
+    // websocket), do not leave the command UI stuck in “listening” forever.
+    const timeout = window.setTimeout(() => {
+      resetNativeWakeUi('没有听清，请重新唤醒')
+    }, 7500)
+    return () => window.clearTimeout(timeout)
+  }, [nativeCommandListening, nativeCommandTranscribing, resetNativeWakeUi])
+
+  useEffect(() => {
+    if (!nativeCommandTranscribing) return undefined
+
+    // ASR is normally local and fast, but a model/service failure must not
+    // leave the companion call in a permanent “正在转写” state.
+    const timeout = window.setTimeout(() => {
+      resetNativeWakeUi('语音转写超时，请重新唤醒')
+    }, 9000)
+    return () => window.clearTimeout(timeout)
+  }, [nativeCommandTranscribing, resetNativeWakeUi])
+
+  useEffect(() => {
+    if (!nativeCommandListening || nativeCommandTranscribing) return undefined
+
+    // Never let the large wake ring become a permanent wallpaper. Listening
+    // can continue in the native engine, but after this short visual window
+    // the UI returns to its calm background until ASR has a concrete result.
+    const visualTimeout = window.setTimeout(() => {
+      setVoiceVisualActive(false)
+    }, 5200)
+    return () => window.clearTimeout(visualTimeout)
+  }, [nativeCommandListening, nativeCommandTranscribing])
+
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key !== 'Escape') return
+      if (!nativeCommandListening && !nativeCommandTranscribing && !voiceVisualActive) return
+      event.preventDefault()
+      resetNativeWakeUi('已退出语音唤醒')
+    }
+    window.addEventListener('keydown', handleEscape, true)
+    return () => window.removeEventListener('keydown', handleEscape, true)
+  }, [nativeCommandListening, nativeCommandTranscribing, resetNativeWakeUi, voiceVisualActive])
+
+  useEffect(() => {
+    if (!companionCallActive || !voiceInputActive || nativeCommandListening || nativeCommandTranscribing || wakeAcknowledging || chatIsThinking || yunVoiceIsActive) {
+      return undefined
+    }
+
+    // A companion turn is short and intentional: if the user does not begin
+    // replying within two seconds, end the call and return to wake-word mode.
+    const idleTimer = window.setTimeout(() => {
+      setVoiceInputActive(false)
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('idle')
+      setCompanionCallActive(false)
+    }, 2000)
+    return () => window.clearTimeout(idleTimer)
+  }, [chatIsThinking, companionCallActive, nativeCommandListening, nativeCommandTranscribing, voiceInputActive, voiceVisualActivityAt, wakeAcknowledging, yunVoiceIsActive])
+
+  useEffect(() => {
+    if (!companionCallActive || nativeCommandListening || nativeCommandTranscribing || wakeAcknowledging || voiceInputActive || chatIsThinking || yunVoiceIsActive) {
+      return undefined
+    }
+
+    // Web Speech naturally ends after a quiet gap. Keep the companion call
+    // alive by reopening the next listening turn instead of ending the session.
+    const echoDelay = Math.max(0, echoGuardUntilRef.current - Date.now())
+    const resumeTimer = window.setTimeout(() => {
+      setVoiceResumeDelayMs(120)
+      setVoiceInputActive(true)
+    }, Math.max(voiceResumeDelayMs, 120, echoDelay))
+    return () => window.clearTimeout(resumeTimer)
+  }, [chatIsThinking, companionCallActive, nativeCommandListening, nativeCommandTranscribing, voiceInputActive, voiceResumeDelayMs, wakeAcknowledging, yunVoiceIsActive])
 
   const openLibraryFromEdge = useCallback(() => {
     window.clearTimeout(libraryEdgeTimerRef.current)
@@ -608,17 +1255,54 @@ function App() {
     window.clearTimeout(libraryEdgeTimerRef.current)
   }, [])
 
-  const scheduleEdgeLibraryClose = useCallback(() => {
-    if (!libraryEdgeOpen) return
-    window.clearTimeout(libraryEdgeTimerRef.current)
-    libraryEdgeTimerRef.current = window.setTimeout(() => {
-      setLibraryEdgeOpen(false)
-      setActivePanel((panel) => (panel === 'library' ? null : panel))
-      setPanelContentVisible(true)
-    }, 860)
-  }, [libraryEdgeOpen])
-
   useEffect(() => () => window.clearTimeout(libraryEdgeTimerRef.current), [])
+
+  const openChatDock = useCallback(() => {
+    window.clearTimeout(chatDockTimerRef.current)
+    setChatDockOpen(true)
+  }, [])
+
+  const keepChatDockOpen = useCallback(() => {
+    window.clearTimeout(chatDockTimerRef.current)
+  }, [])
+
+  const scheduleChatDockClose = useCallback(() => {
+    window.clearTimeout(chatDockTimerRef.current)
+    chatDockTimerRef.current = window.setTimeout(() => {
+      setChatDockOpen(false)
+    }, 760)
+  }, [])
+
+  useEffect(() => () => window.clearTimeout(chatDockTimerRef.current), [])
+
+  useEffect(() => {
+    const detectLeftBottomCorner = (event) => {
+      if (event.clientX <= 170 && window.innerHeight - event.clientY <= 210) {
+        openChatDock()
+        return
+      }
+
+      if (!chatDockOpen) return
+
+      const chatPanel = document.querySelector('.chat-panel.is-open')
+      const panelRect = chatPanel?.getBoundingClientRect()
+      const activeInside = chatPanel?.contains(document.activeElement)
+      const pointerInsidePanel = panelRect
+        && event.clientX >= panelRect.left
+        && event.clientX <= panelRect.right
+        && event.clientY >= panelRect.top
+        && event.clientY <= panelRect.bottom
+
+      if (activeInside || pointerInsidePanel) {
+        keepChatDockOpen()
+        return
+      }
+
+      scheduleChatDockClose()
+    }
+    window.addEventListener('pointermove', detectLeftBottomCorner, { passive: true })
+    return () => window.removeEventListener('pointermove', detectLeftBottomCorner)
+  }, [chatDockOpen, keepChatDockOpen, openChatDock, scheduleChatDockClose])
 
   useEffect(() => {
     const detectRightEdge = (event) => {
@@ -674,19 +1358,17 @@ function App() {
     return () => window.removeEventListener('pointermove', detectTopEdge)
   }, [keepTopControlsOpen, openTopControls, scheduleTopControlsClose, topControlsOpen])
 
-  const wakeVoiceInput = useCallback(() => {
-    setVoiceInputActive(true)
-  }, [])
-
   const playSongWithPodcastReaction = useCallback(async (song, trigger = 'user_play') => {
-    const result = await playSong(song)
+    const result = song?.source === 'netease'
+      ? await playSongFromQueue(song, neteaseResults)
+      : (clearPlaybackQueue(), await playSong(song))
 
     if (result?.ok) {
       reactToSongChange(result.song || song, trigger)
     }
 
     return result
-  }, [playSong, reactToSongChange])
+  }, [clearPlaybackQueue, neteaseResults, playSong, playSongFromQueue, reactToSongChange])
 
   const playNextWithPodcastReaction = useCallback(async () => {
     const result = await playerCore.next()
@@ -723,6 +1405,21 @@ function App() {
   // Edge pointer movement may retrigger the reveal state, but must never blank
   // an already rendered list.
   const drawerTracks = librarySource === 'netease' ? neteaseResults : visibleLibraryTracks
+  const virtualTrackRange = useMemo(() => {
+    const viewportHeight = libraryScrollListRef.current?.clientHeight || 286
+    const start = Math.max(0, Math.floor(libraryScrollTop / LIBRARY_SCROLL_ROW_HEIGHT) - LIBRARY_SCROLL_OVERSCAN)
+    const end = Math.min(
+      drawerTracks.length,
+      Math.ceil((libraryScrollTop + viewportHeight) / LIBRARY_SCROLL_ROW_HEIGHT) + LIBRARY_SCROLL_OVERSCAN,
+    )
+    return { start, end: Math.max(start, end) }
+  }, [drawerTracks.length, libraryScrollTop])
+  const virtualDrawerTracks = drawerTracks.slice(virtualTrackRange.start, virtualTrackRange.end)
+  const waitingTracks = upNextTracks
+  const aiCandidateTracks = autoUpNextTracks
+  const clearWaitingTracks = useCallback(() => {
+    clearUpNext()
+  }, [clearUpNext])
 
   const searchOnlineMusic = useCallback(async () => {
     const keywords = libraryQuery.trim()
@@ -732,18 +1429,23 @@ function App() {
     }
 
     setLibrarySource('netease')
+    setNeteaseLibraryView('songs')
+    setActiveNeteasePlaylist(null)
     setNeteaseStatus('loading')
     setNeteaseError('')
     setNeteaseResults([])
+    const requestId = ++neteaseRequestRef.current
 
     try {
       const songs = await searchNeteaseSongs(keywords, { limit: 12 })
+      if (requestId !== neteaseRequestRef.current) return
       setNeteaseResults(songs)
       setNeteaseStatus('ready')
       if (!songs.length) {
         setNeteaseError('没有找到当前可播放的网易云歌曲')
       }
     } catch (error) {
+      if (requestId !== neteaseRequestRef.current) return
       setNeteaseStatus('error')
       setNeteaseError(error instanceof Error ? error.message : '网易云搜索失败')
     }
@@ -780,6 +1482,95 @@ function App() {
       setLibraryError(error instanceof Error ? error.message : '曲库扫描失败')
     }
   }, [])
+
+  const loadNeteaseAccount = useCallback(async () => {
+    if (neteaseAccountStatus === 'loading') return
+    setNeteaseAccountStatus('loading')
+    try {
+      const account = await fetchNeteaseMe()
+      setNeteaseMe(account)
+      setNeteaseAccountStatus('ready')
+    } catch {
+      setNeteaseMe(null)
+      setNeteaseAccountStatus('error')
+    }
+  }, [neteaseAccountStatus])
+
+  useEffect(() => {
+    if (activePanel !== 'library' || neteaseAccountStatus !== 'idle') return undefined
+    const timer = window.setTimeout(loadNeteaseAccount, 0)
+    return () => window.clearTimeout(timer)
+  }, [activePanel, loadNeteaseAccount, neteaseAccountStatus])
+
+  useEffect(() => {
+    const syncNeteaseAccount = (event) => {
+      if (event.detail?.provider !== 'netease') return
+      setNeteaseMe(null)
+      setNeteaseAccountStatus('idle')
+    }
+    window.addEventListener('yun:login-submit', syncNeteaseAccount)
+    return () => window.removeEventListener('yun:login-submit', syncNeteaseAccount)
+  }, [])
+
+  const openNeteasePlaylist = useCallback(async (playlist) => {
+    setLibrarySource('netease')
+    setNeteaseLibraryView('songs')
+    setActiveNeteasePlaylist(playlist)
+    setNeteaseStatus('loading')
+    setNeteaseError('')
+    const requestId = ++neteaseRequestRef.current
+    try {
+      const songs = await fetchNeteasePlaylistTracks(playlist.id)
+      if (requestId !== neteaseRequestRef.current) return
+      setNeteaseResults(songs)
+      setNeteaseStatus('ready')
+      setNeteaseError(songs.length ? '' : `${playlist.name}暂时没有歌曲`)
+    } catch (error) {
+      if (requestId !== neteaseRequestRef.current) return
+      setNeteaseStatus('error')
+      setNeteaseError(error instanceof Error ? error.message : '网易云歌单读取失败')
+    }
+  }, [])
+
+  const openNeteasePlaylists = useCallback(() => {
+    ++neteaseRequestRef.current
+    setLibrarySource('netease')
+    setNeteaseLibraryView('playlists')
+    setActiveNeteasePlaylist(null)
+    setNeteaseError('')
+  }, [])
+
+  const handleLibraryScroll = useCallback((event) => {
+    setLibraryScrollTop(event.currentTarget.scrollTop)
+  }, [])
+
+  useEffect(() => {
+    setLibraryScrollTop(0)
+    if (libraryScrollListRef.current) libraryScrollListRef.current.scrollTop = 0
+  }, [librarySource, neteaseLibraryView, activeNeteasePlaylist?.id])
+
+  const likedNeteasePlaylist = neteaseMe?.playlists?.find((playlist) => playlist.liked)
+
+  const importSelectedMusic = useCallback(async (event) => {
+    const files = event.target.files
+    if (!files?.length || isImportingMusic) return
+    setIsImportingMusic(true)
+    setLibraryStatus('loading')
+    setLibraryError('')
+    try {
+      const library = await importMusicFiles(files)
+      setLibraryTracks(library.songs)
+      setLibraryCount(library.count ?? library.songs.length)
+      setLibrarySource('local')
+      setLibraryStatus('ready')
+    } catch (error) {
+      setLibraryStatus('error')
+      setLibraryError(error instanceof Error ? error.message : '导入歌曲失败')
+    } finally {
+      setIsImportingMusic(false)
+      event.target.value = ''
+    }
+  }, [isImportingMusic])
 
   const analyzeMusicLibrary = useCallback(async () => {
     if (isAnalyzingLibrary) return
@@ -838,7 +1629,10 @@ function App() {
   }), [])
 
   useEffect(() => {
-    const timer = window.setTimeout(loadMusicLibrary, 0)
+    // The library is only rendered after the drawer is opened. Reading and
+    // normalizing its JSON on the first event-loop turn competes with initial
+    // layout and WebGL setup, so leave the first screen responsive first.
+    const timer = window.setTimeout(loadMusicLibrary, 520)
 
     return () => {
       window.clearTimeout(timer)
@@ -859,6 +1653,11 @@ function App() {
   }, [chatMessages, chatIsThinking])
 
   useEffect(() => {
+    if (!lastAutoNextSong?.song) return
+    rememberPlayedSong(lastAutoNextSong.song)
+  }, [lastAutoNextSong, rememberPlayedSong])
+
+  useEffect(() => {
     if (responseMode !== 'podcast' || !lastAutoNextSong?.song) {
       return
     }
@@ -871,6 +1670,97 @@ function App() {
 
     reactToSongChange(lastAutoNextSong.song, 'auto_next')
   }, [lastAutoNextSong, reactToSongChange, responseMode])
+
+  useEffect(() => {
+    const keepsAiQueueFull = playbackMode === 'ai_recommend'
+    const supportsRadioPrefetch = responseMode === 'podcast' || keepsAiQueueFull || playbackMode === 'companion_continue'
+    const songKey = currentSong?.id || currentSong?.fileUrl || ''
+    const minimumQueue = keepsAiQueueFull || playbackMode === 'companion_continue' ? 3 : 1
+    const shouldTopUp = autoUpNextTracks.length < minimumQueue
+
+    // AI recommendation mode owns a standing three-track safety buffer. It
+    // starts filling as soon as there is a current song, rather than waiting
+    // for playback progress, so a completed queue never leaves an empty slot.
+    if (!supportsRadioPrefetch || !songKey || !shouldTopUp || (!keepsAiQueueFull && !isPlaying) || radioPrefetchingRef.current) {
+      return undefined
+    }
+
+    const prefetchKey = `${songKey}:${autoUpNextTracks.length}`
+    if (radioPrefetchRef.current === prefetchKey) return undefined
+    radioPrefetchRef.current = prefetchKey
+    radioPrefetchingRef.current = true
+    let cancelled = false
+    let receivedCandidates = false
+    const retry = () => {
+      if (cancelled || !keepsAiQueueFull) return
+      window.clearTimeout(radioPrefetchRetryTimerRef.current)
+      radioPrefetchRetryTimerRef.current = window.setTimeout(() => {
+        setRadioPrefetchRetryNonce((value) => value + 1)
+      }, 700)
+    }
+
+    const recommendationExclusions = [
+      ...recentRecommendations,
+      ...radioRecommendationHistory,
+    ]
+    requestRadioPrefetch({ currentSong, playHistory, recentRecommendations: recommendationExclusions, playbackMode })
+      .then((response) => {
+        if (cancelled) return
+        const candidates = Array.isArray(response?.playbackPlan?.candidates)
+          ? response.playbackPlan.candidates
+          : []
+        const tracks = candidates
+          .map((suggested) => suggested?.id ? libraryTracks.find((item) => item.id === suggested.id) || suggested : null)
+          .filter((track) => track?.fileUrl)
+        if (tracks.length) {
+          receivedCandidates = true
+          const playedIds = [
+            currentSong?.id,
+            currentSong?.providerId,
+            ...playHistory.flatMap((song) => [song?.id, song?.providerId]),
+            ...recentRecommendations.flatMap((item) => [item?.song?.id, item?.song?.providerId, item?.id, item?.providerId]),
+          ].filter(Boolean)
+          setAutoUpNext(tracks, { excludeSongIds: playedIds, maxItems: 6 })
+          setRadioRecommendationHistory((current) => {
+            const planned = tracks.map((song) => ({
+              id: song.id,
+              providerId: song.providerId,
+              title: song.title,
+              artist: song.artist,
+            }))
+            const next = [...planned, ...current]
+            return next
+              .filter((song, index, items) => items.findIndex((item) => String(item.providerId || item.id || '') === String(song.providerId || song.id || '')) === index)
+              .slice(0, 72)
+          })
+          // Auto-up-next owns this recommendation batch. Keeping the same
+          // first item in the legacy one-track slot would replay it after the
+          // visible queue has been consumed.
+          setQueuedNextSong(null)
+          if (responseMode === 'podcast') prefetchSongReaction(tracks[0], 'auto_next')
+        } else {
+          retry()
+        }
+      })
+      .catch(() => {
+        retry()
+      }).finally(() => {
+        radioPrefetchingRef.current = false
+        // The state update above can render while this request is still marked
+        // busy. Trigger one fast post-request pass after it becomes idle so a
+        // queue with fewer than three candidates is topped up immediately.
+        radioPrefetchRef.current = ''
+        if (!cancelled && receivedCandidates) {
+          window.setTimeout(() => setRadioPrefetchRetryNonce((value) => value + 1), 120)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [autoUpNextTracks.length, currentSong, isPlaying, libraryTracks, playbackMode, playHistory, prefetchSongReaction, radioPrefetchRetryNonce, radioRecommendationHistory, recentRecommendations, responseMode, setAutoUpNext, setQueuedNextSong])
+
+  useEffect(() => () => window.clearTimeout(radioPrefetchRetryTimerRef.current), [])
 
   const getRect = useCallback((element) => {
     const rect = element.getBoundingClientRect()
@@ -1071,168 +1961,27 @@ function App() {
     })
   }, [libraryTracks])
   const [sceneCoverItems, setSceneCoverItems] = useState(() => getSceneCoverItemsForPage(0))
-  const [coverSweep, setCoverSweep] = useState(null)
-  const isCoverSweeping = Boolean(coverSweep)
   useEffect(() => {
-    if (!isCoverSweeping) {
-      const frame = window.requestAnimationFrame(() => {
-        setSceneCoverItems(getSceneCoverItemsForPage(sceneCoverPage))
-      })
-
-      return () => {
-        window.cancelAnimationFrame(frame)
-      }
-    }
-
-    return undefined
-  }, [getSceneCoverItemsForPage, isCoverSweeping, sceneCoverPage])
-  useEffect(() => () => {
-    if (coverSweepFrameRef.current) {
-      cancelAnimationFrame(coverSweepFrameRef.current)
-    }
-  }, [])
-  const startCoverSweep = useCallback((nextCovers, nextPage) => {
-    if (coverSweepFrameRef.current) {
-      cancelAnimationFrame(coverSweepFrameRef.current)
-      coverSweepFrameRef.current = 0
-    }
-
-    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    if (prefersReducedMotion || !sceneCoverOverlayRef.current) {
-      setSceneCoverItems(nextCovers)
-      setSceneCoverPage(nextPage)
-      setCoverSweep(null)
-      return
-    }
-
-    let startTime = 0
-    const easeInOutCubic = (value) => (
-      value < 0.5 ? 4 * value * value * value : 1 - ((-2 * value + 2) ** 3) / 2
-    )
-    const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
-    const interpolatePoint = (from, to, progress) => ({
-      x: from.x + (to.x - from.x) * progress,
-      y: from.y + (to.y - from.y) * progress,
+    const frame = window.requestAnimationFrame(() => {
+      setSceneCoverItems(getSceneCoverItemsForPage(0))
     })
-    const getLineXAtY = (line, y) => {
-      const lineHeight = line.to.y - line.from.y
-      if (Math.abs(lineHeight) < 0.001) {
-        return line.from.x
-      }
 
-      const yProgress = (y - line.from.y) / lineHeight
-      return line.from.x + (line.to.x - line.from.x) * yProgress
-    }
-    const buildCardClipPath = (node, line) => {
-      if (!node) {
-        return 'polygon(0 0, 0 0, 0 100%, 0 100%)'
-      }
-
-      const rect = node.getBoundingClientRect()
-      const topX = clamp(getLineXAtY(line, rect.top) - rect.left, 0, rect.width)
-      const bottomX = clamp(getLineXAtY(line, rect.bottom) - rect.left, 0, rect.width)
-      const topPercent = (topX / rect.width) * 100
-      const bottomPercent = (bottomX / rect.width) * 100
-
-      return `polygon(0 0, ${topPercent}% 0, ${bottomPercent}% 100%, 0 100%)`
-    }
-    const readSweepFrame = (progress) => {
-      const overlayRect = sceneCoverOverlayRef.current.getBoundingClientRect()
-      const cardRects = sceneCoverSlotRefs.current
-        .slice(0, sceneTestCovers.length)
-        .map((node) => node?.getBoundingClientRect())
-        .filter(Boolean)
-
-      if (!cardRects.length) {
-        return null
-      }
-
-      const left = Math.min(...cardRects.map((rect) => rect.left))
-      const right = Math.max(...cardRects.map((rect) => rect.right))
-      const line = {
-        from: interpolatePoint(COVER_SWEEP_START_LINE.from, COVER_SWEEP_END_LINE.from, progress),
-        to: interpolatePoint(COVER_SWEEP_START_LINE.to, COVER_SWEEP_END_LINE.to, progress),
-      }
-      const lineDx = line.to.x - line.from.x
-      const lineDy = line.to.y - line.from.y
-      const lineLength = Math.hypot(lineDx, lineDy)
-      const lineAngle = Math.atan2(lineDy, lineDx) * 180 / Math.PI - 90
-
-      return {
-        nextCovers,
-        clipPaths: sceneCoverSlotRefs.current
-          .slice(0, sceneTestCovers.length)
-          .map((node) => buildCardClipPath(node, line)),
-        lineStyle: {
-          '--sweep-x': `${line.from.x - overlayRect.left}px`,
-          '--sweep-top': `${line.from.y - overlayRect.top}px`,
-          '--sweep-height': `${lineLength}px`,
-          '--sweep-angle': `${lineAngle}deg`,
-          '--sweep-line-width': `${COVER_SWEEP_LINE_WIDTH}px`,
-          '--sweep-glow-width': `${COVER_SWEEP_GLOW_WIDTH}px`,
-        },
-        bounds: { left, right },
-      }
-    }
-    const firstRects = sceneCoverSlotRefs.current
-      .slice(0, sceneTestCovers.length)
-      .map((node) => node?.getBoundingClientRect())
-      .filter(Boolean)
-
-    if (!firstRects.length) {
-      setSceneCoverItems(nextCovers)
-      setSceneCoverPage(nextPage)
-      setCoverSweep(null)
-      return
-    }
-    const animate = (time) => {
-      if (!startTime) {
-        startTime = time
-      }
-
-      const elapsed = time - startTime
-      const eased = easeInOutCubic(clamp(elapsed / COVER_SWEEP_DURATION, 0, 1))
-      const frame = readSweepFrame(eased)
-
-      if (frame) {
-        setCoverSweep(frame)
-      }
-
-      if (elapsed < COVER_SWEEP_DURATION) {
-        coverSweepFrameRef.current = requestAnimationFrame(animate)
-        return
-      }
-
-      coverSweepFrameRef.current = 0
-      setSceneCoverItems(nextCovers)
-      setSceneCoverPage(nextPage)
-      setCoverSweep(null)
-    }
-
-    const initialFrame = readSweepFrame(0)
-    if (initialFrame) {
-      setCoverSweep(initialFrame)
-    }
-    coverSweepFrameRef.current = requestAnimationFrame(animate)
-  }, [])
-  const refreshSceneCovers = () => {
-    if (libraryTracks.length <= sceneTestCovers.length || isCoverSweeping) {
-      return
-    }
-
-    const maxPage = Math.ceil(libraryTracks.length / sceneTestCovers.length)
-    const nextPage = (sceneCoverPage + 1) % maxPage
-    startCoverSweep(getSceneCoverItemsForPage(nextPage), nextPage)
-  }
+    return () => window.cancelAnimationFrame(frame)
+  }, [getSceneCoverItemsForPage])
   const submitChatMessage = () => {
     const text = chatDraft.trim()
 
-    if (!text || chatIsThinking) {
+    if (!text && !chatImageFile) {
       return
     }
 
     setChatDraft('')
-    sendChatMessage(text)
+    const imageFile = chatImageFile
+    setChatImageFile(null)
+    if (chatImageInputRef.current) {
+      chatImageInputRef.current.value = ''
+    }
+    sendChatMessage(text, imageFile ? { imageFile } : undefined)
   }
 
   useEffect(() => {
@@ -1288,6 +2037,15 @@ function App() {
   }, [togglePlayPause])
 
   const displayedTags = getSongTags(currentSong)
+
+  useEffect(() => {
+    if (!currentSong?.id || !isPlaying) return
+    void fetch('/api/yun/listening-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'record', song: currentSong, playedAt: Date.now() }),
+    }).catch(() => {})
+  }, [currentSong?.id, isPlaying])
   const memoryStripTracks = useMemo(() => {
     const tracks = []
     const seenIds = new Set()
@@ -1314,6 +2072,7 @@ function App() {
   const progressPercent = playerState.duration ? Math.min(100, (playerState.currentTime / playerState.duration) * 100) : 0
   const backgroundCoverUrl = getSongCoverUrl(currentSong, sceneCoverItems[0]?.coverUrl || sceneTestCovers[0])
   const songThemeStyle = useSongTheme(backgroundCoverUrl)
+  const volumePercent = Math.round((Number.isFinite(playerState.volume) ? playerState.volume : 1) * 100)
   const morphStyle = morphLayer
     ? {
         left: `${morphRect.left}px`,
@@ -1324,35 +2083,57 @@ function App() {
       }
     : undefined
 
+  const applyProModelConfig = useCallback(async (event) => {
+    event.preventDefault()
+    if (!proModelForm.apiKey.trim() || isApplyingProModel) return
+    setIsApplyingProModel(true)
+    setProModelStatus('正在验证 Pro 模型连接…')
+    try {
+      await configureYunProModel(proModelForm)
+      setProModelForm((form) => ({ ...form, apiKey: '' }))
+      setProModelStatus('')
+      setProModelSetupVisible(false)
+    } catch (error) {
+      setProModelStatus(error instanceof Error ? error.message : 'Pro 模型连接失败，请重试。')
+    } finally {
+      setIsApplyingProModel(false)
+    }
+  }, [isApplyingProModel, proModelForm])
+
   return (
     <PlayerProvider core={playerCore}>
     <main
-      className={`app${uiMode === 'immersive' ? ' immersive-mode' : ' normal-mode'}${activePanel === 'library' ? ' library-open' : ''}${activePanel === 'memory' ? ' memory-settings-open' : ''}${activePanel === 'voice' ? ' voice-open' : ''}${activePanel === 'playMode' ? ' play-mode-open' : ''}${panelContentVisible ? '' : ' panel-content-hidden'}${morphLayer ? ' is-morphing' : ''}`}
+      className={`app${uiMode === 'immersive' ? ' immersive-mode' : ' normal-mode'}${wallpaperMode ? ' wallpaper-mode' : ''}${isWebFullscreen ? ' web-fullscreen' : ''} quality-${visualQuality}${activePanel === 'library' ? ' library-open' : ''}${activePanel === 'memory' ? ' memory-settings-open' : ''}${activePanel === 'voice' ? ' voice-open' : ''}${activePanel === 'playMode' ? ' play-mode-open' : ''}${panelContentVisible ? '' : ' panel-content-hidden'}${morphLayer ? ' is-morphing' : ''}`}
       style={songThemeStyle}
     >
-      <AnimatedBackground
-        active={playerState.isPlaying}
-        coverUrl={backgroundCoverUrl}
-        trackKey={playerState.currentTrack?.id || playerState.currentTrack?.url || playerState.currentTrack?.path || `${playerState.currentTrack?.title || ''}-${playerState.currentTrack?.artist || ''}`}
-        preloadCoverUrls={backgroundPreloadCoverUrls}
-        getFrequencyData={readAudioFrequencyData}
-        mountainControls={mountainControls}
-        backgroundBrightness={backgroundBrightness}
-        topFogStrength={topFogStrength}
-        topBlurStrength={topBlurStrength}
-        viewLocked={viewLocked}
-        voiceOrbVisible={voiceInputActive}
-      />
+      {visualBooted && (
+        <AnimatedBackground
+          active={playerState.isPlaying}
+          coverUrl={backgroundCoverUrl}
+          trackKey={playerState.currentTrack?.id || playerState.currentTrack?.url || playerState.currentTrack?.path || `${playerState.currentTrack?.title || ''}-${playerState.currentTrack?.artist || ''}`}
+          preloadCoverUrls={backgroundPreloadCoverUrls}
+          getFrequencyData={readAudioFrequencyData}
+          mountainControls={mountainControls}
+          backgroundBrightness={backgroundBrightness}
+          topFogStrength={topFogStrength}
+          topBlurStrength={topBlurStrength}
+          viewLocked={viewLocked}
+          voiceOrbVisible={voiceVisualVisible}
+          voiceOrbLevel={voiceOrbLevel}
+          onReady={onVisualReady}
+          quality={visualQuality}
+        />
+      )}
       <div
-        className={`yun-awakening-optics${voiceInputActive ? ' is-active' : ''}`}
+        className={`yun-awakening-optics${voiceVisualVisible ? ' is-active' : ''}`}
         aria-hidden="true"
       />
       <div
+        ref={speakingOpticsRef}
         className={`yun-speaking-optics${yunVoice.isSpeaking ? ' is-active' : ''}`}
         aria-hidden="true"
       >
-        <span className="yun-speaking-optics__side yun-speaking-optics__side--left" />
-        <span className="yun-speaking-optics__side yun-speaking-optics__side--right" />
+        <span className="yun-speaking-optics__ring" />
         <span className="yun-speaking-optics__tint" />
       </div>
       <div
@@ -1360,7 +2141,6 @@ function App() {
         aria-hidden="true"
         onPointerEnter={openLibraryFromEdge}
         onPointerMove={keepEdgeLibraryOpen}
-        onPointerLeave={scheduleEdgeLibraryClose}
       ><span /></div>
       <div
         className={`top-controls-edge-trigger${topControlsOpen ? ' is-active' : ''}`}
@@ -1370,16 +2150,13 @@ function App() {
         onPointerLeave={scheduleTopControlsClose}
       />
       <FloatingLyrics currentSong={currentSong} currentTime={currentTime} active={isPlaying} />
-      <LyricForegroundFog />
-      <div className={`scene-cover-overlay${isCoverSweeping ? ' is-sweeping' : ''}`} ref={sceneCoverOverlayRef}>
+      {visualQuality === 'high' && <LyricForegroundFog quality={visualQuality} />}
+      <div className="scene-cover-overlay">
         <div className="scene-cover-stage">
           {sceneCoverItems.map((item, index) => (
             <div
               className={`scene-cover-slot scene-cover-slot--${index + 1}${item.track?.id === currentSong?.id ? ' is-active' : ''}`}
               key={`scene-cover-${index + 1}`}
-              ref={(node) => {
-                sceneCoverSlotRefs.current[index] = node
-              }}
               role="button"
               tabIndex={item.track ? 0 : -1}
               aria-label={item.track ? `播放 ${item.track.title}` : '默认封面'}
@@ -1396,17 +2173,6 @@ function App() {
               }}
             >
               <img className="scene-cover-image scene-cover-image--current" src={item.coverUrl} alt="" draggable="false" />
-              {coverSweep?.nextCovers?.[index] && (
-                <img
-                  className="scene-cover-image scene-cover-image--next"
-                  src={coverSweep.nextCovers[index].coverUrl}
-                  alt=""
-                  draggable="false"
-                  style={{
-                    clipPath: coverSweep.clipPaths[index],
-                  }}
-                />
-              )}
               {item.track && (
                 <div className="scene-cover-meta">
                   <span className="scene-cover-title">{item.track.title}</span>
@@ -1416,7 +2182,6 @@ function App() {
             </div>
           ))}
         </div>
-        {coverSweep && <div className="scene-cover-sweep-line" aria-hidden="true" style={coverSweep.lineStyle} />}
       </div>
       <div
         className={`immersive-player-handle${immersivePlayerVisible ? ' is-expanded' : ''}`}
@@ -1465,6 +2230,9 @@ function App() {
         onPointerMove={keepTopControlsOpen}
         onPointerLeave={scheduleTopControlsClose}
       >
+        <span className="glass-edge-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight glass-specular-highlight--opposite" aria-hidden="true" />
         <div className="top-controls-content">
           <div className="mode-switch">
             <div className="mode-options">
@@ -1475,22 +2243,6 @@ function App() {
                   key={mode.id}
                   aria-pressed={responseMode === mode.id}
                   onClick={() => setResponseMode(mode.id)}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="persona-switch">
-            <div className="persona-options">
-              {personaModes.map((mode) => (
-                <button
-                  className={`persona-option${personaMode === mode.id ? ' active' : ''}`}
-                  type="button"
-                  key={mode.id}
-                  aria-pressed={personaMode === mode.id}
-                  onClick={() => setPersonaMode(mode.id)}
                 >
                   {mode.label}
                 </button>
@@ -1511,6 +2263,15 @@ function App() {
               })}
             >
               {uiMode === 'immersive' ? '普通' : '沉浸'}
+            </button>
+            <button
+              className={`action-button fullscreen-toggle${isWebFullscreen ? ' is-active' : ''}`}
+              type="button"
+              aria-label={isWebFullscreen ? '退出全屏' : '全屏打开网页'}
+              aria-pressed={isWebFullscreen}
+              onClick={toggleWebFullscreen}
+            >
+              {isWebFullscreen ? '退出全屏' : '全屏'}
             </button>
             <button className={`action-button${pressedPanel === 'voice' ? ' is-pressed' : ''}`} type="button" aria-label="声音" aria-expanded={activePanel === 'voice'} ref={voiceTriggerRef} onClick={() => togglePanel('voice')}>声</button>
             <button className={`action-button${pressedPanel === 'memory' ? ' is-pressed' : ''}`} type="button" aria-label="设置" aria-expanded={activePanel === 'memory'} ref={memoryTriggerRef} onClick={() => togglePanel('memory')}>设</button>
@@ -1746,7 +2507,12 @@ function App() {
       <VoicePickupGlass
         headless
         active={voiceInputActive}
-        onSilenceTimeout={stopVoiceInput}
+        onCaptureStart={handleVoiceCaptureStart}
+        onCaptureStop={handleVoiceCaptureStop}
+        onSilenceTimeout={handleVoiceSilenceTimeout}
+        onTranscript={handleVoiceTranscript}
+        onInterimTranscript={handleVoiceInterimTranscript}
+        onRecognitionError={handleVoiceRecognitionError}
       />
       <VictoryGestureWake
         enabled={gestureCameraEnabled}
@@ -1780,6 +2546,96 @@ function App() {
               >
                 {voiceSettings.enabled ? '开' : '关'}
               </button>
+            </div>
+            <div className="voice-row">
+              <span className="voice-row-label">浏览器备用唤醒</span>
+              <button
+                className={`voice-toggle${wakeWord.enabled ? ' is-on' : ''}`}
+                type="button"
+                aria-pressed={wakeWord.enabled}
+                aria-label={wakeWord.enabled ? '关闭浏览器备用唤醒' : '开启浏览器备用唤醒'}
+                onClick={() => {
+                  const next = !wakeWord.enabled
+                  wakeWord.setEnabled(next)
+                  if (next) asrWakeWord.setEnabled(false)
+                }}
+              >
+                {wakeWord.enabled ? '开' : '关'}
+              </button>
+              <span className="voice-value">{({ listening: '备用模式：等“小昀”', paused: '暂停', verifying: '唤醒中', woken: '已唤醒', denied: '麦克风未授权', unsupported: '环境不支持', error: '重试中', off: '关闭' })[wakeWord.status] || '启动中'}</span>
+            </div>
+            <div className="voice-row">
+              <span className="voice-row-label">主唤醒：本机“小昀”</span>
+              <button
+                className={`voice-toggle${asrWakeWord.enabled ? ' is-on' : ''}`}
+                type="button"
+                aria-pressed={asrWakeWord.enabled}
+                aria-label={asrWakeWord.enabled ? '关闭本地关键词唤醒' : '开启本地关键词唤醒'}
+                onClick={() => {
+                  const next = !asrWakeWord.enabled
+                  asrWakeWord.setEnabled(next)
+                  if (next) wakeWord.setEnabled(false)
+                }}
+              >
+                {asrWakeWord.enabled ? '开' : '关'}
+              </button>
+              <span className="voice-value-asr-wrap">
+              <span className="voice-value">{({ 'native-listening': '原生引擎正在等“小昀”', listening: '正在等“小昀”', paused: '暂停', recognizing: '识别中', woken: '已唤醒', 'not-detected': '未听清“小昀”', denied: '麦克风未授权', unsupported: '环境不支持', unconfigured: '识别服务未就绪', off: '关闭' })[asrWakeWord.status] || '启动中'}</span>
+                <button
+                  className="voice-value-asr-set"
+                  type="button"
+                  onClick={() => setAsrSettingsOpen((open) => !open)}
+                >
+                  设置
+                </button>
+              </span>
+            </div>
+            {asrSettingsOpen && (
+              <AsrSettingsPanel
+                className="voice-asr-settings"
+                onConfiguredChange={() => asrWakeWord.refreshConfig()}
+              />
+            )}
+            <div className="voice-row">
+              <span className="voice-row-label">说话可打断</span>
+              <span className="voice-value">{({ listening: '侦听中', candidate: '检测到讲话', denied: '未授权', unsupported: '不支持', off: '待命' })[bargeIn.status] || '待命'}</span>
+            </div>
+            <div className="voice-row">
+              <span className="voice-row-label">全双工物理测试</span>
+              <button
+                className="voice-toggle"
+                type="button"
+                disabled={duplexPhysicalTest.active}
+                onClick={() => duplexPhysicalTest.start((text) => yunVoice.speakText(text, { force: true, allowBargeIn: false }))}
+              >
+                {duplexPhysicalTest.active ? '测试中' : '开始'}
+              </button>
+              {duplexPhysicalTest.report && (
+                <button className="voice-value-asr-set" type="button" onClick={duplexPhysicalTest.download}>下载结果</button>
+              )}
+              <span className="voice-value">{({ baseline: '安静 3 秒', baseline_warning: '基线异常，继续测试', ai_only: '播放基线', user_prompt: '请说“等等，我正在测试打断”', complete: duplexPhysicalTest.report?.result || '完成', idle: '待命' })[duplexPhysicalTest.phase] || duplexPhysicalTest.phase}</span>
+            </div>
+            <div className="voice-row">
+              <span className="voice-row-label">陪伴通话</span>
+              <button
+                className={`voice-toggle${companionCallActive ? ' is-on' : ''}`}
+                type="button"
+                aria-pressed={companionCallActive}
+                onClick={() => {
+                  if (companionCallActive) {
+                    setVoiceInputActive(false)
+                    setVoiceVisualActive(false)
+                    setVoiceCallStatus('idle')
+                    yunVoice.stopSpeaking()
+                    setCompanionCallActive(false)
+                    return
+                  }
+                  startCompanionCall()
+                }}
+              >
+                {companionCallActive ? '通话中' : '开始'}
+              </button>
+              <span className="voice-value">{companionCallActive ? ({ listening: '正在听', '等待你说话': '等待你说话', '理解中': '正在理解', '回应中': '小昀正在回应' }[voiceCallStatus] || voiceCallStatus) : (voiceCallStatus === 'idle' ? '唤醒后自动开启' : voiceCallStatus)}</span>
             </div>
             <div className="voice-row">
               <span className="voice-row-label">音色</span>
@@ -1868,7 +2724,7 @@ function App() {
                 value={voiceSettings.voice}
                 spellCheck="false"
                 onChange={(event) => yunVoice.updateSettings({ voice: event.target.value.trim() })}
-                placeholder="S_xxx 或 speaker"
+                placeholder="输入豆包音色 ID"
               />
             </label>
           </div>
@@ -1911,6 +2767,35 @@ function App() {
             />
           </div>
 
+          <div className="memory-settings-row memory-settings-row--section">
+            <span>视觉画质</span>
+            <span className="voice-value">{visualQuality === 'low' ? '流畅' : visualQuality === 'high' ? '高画质' : '推荐'}</span>
+          </div>
+          <div className="memory-mode-options" aria-label="视觉画质">
+            {[
+              { id: 'low', label: '流畅' },
+              { id: 'medium', label: '推荐' },
+              { id: 'high', label: '高画质' },
+            ].map((option) => (
+              <button
+                className={`memory-mode-button${visualQuality === option.id ? ' active' : ''}`}
+                type="button"
+                key={option.id}
+                aria-pressed={visualQuality === option.id}
+                onClick={() => updateVisualQuality(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="memory-mode-description">
+            {visualQuality === 'low'
+              ? '优先保持流畅，减少动态光场与渲染像素。'
+              : visualQuality === 'high'
+                ? '开启完整歌词雾化与更高渲染精度，显卡占用更高。'
+                : '平衡画面和流畅度，适合作为日常默认。'}
+          </p>
+
           <p className="memory-settings-status">{yunMemory.summary}</p>
 
           <div className="memory-mode-options" aria-label="记忆模式">
@@ -1937,6 +2822,49 @@ function App() {
             <button type="button" onClick={yunMemory.clearRecentMemory}>清空近期</button>
           </div>
 
+          {proModelSetupVisible && (
+            <form className="pro-model-config" onSubmit={applyProModelConfig}>
+              <div className="memory-settings-row memory-settings-row--section">
+                <span>连接 Pro 模型</span>
+                <span className="voice-value">DeepSeek</span>
+              </div>
+              <p>仅发送到本机服务进行验证；验证成功后会保存到本机 .env（已被 Git 忽略），不会写入前端或浏览器存储。</p>
+              <label>
+                Base URL
+                <input
+                  value={proModelForm.baseUrl}
+                  onChange={(event) => setProModelForm((form) => ({ ...form, baseUrl: event.target.value }))}
+                  autoComplete="off"
+                  required
+                />
+              </label>
+              <label>
+                Pro 模型名
+                <input
+                  value={proModelForm.model}
+                  onChange={(event) => setProModelForm((form) => ({ ...form, model: event.target.value }))}
+                  autoComplete="off"
+                  required
+                />
+              </label>
+              <label className="pro-model-config-key">
+                API Key
+                <input
+                  type="password"
+                  value={proModelForm.apiKey}
+                  onChange={(event) => setProModelForm((form) => ({ ...form, apiKey: event.target.value }))}
+                  placeholder="仅在提交时使用"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+              <button type="submit" disabled={isApplyingProModel}>
+                {isApplyingProModel ? '验证中…' : '验证并保存启用'}
+              </button>
+              {proModelStatus && <small role="status">{proModelStatus}</small>}
+            </form>
+          )}
+
           <div className="memory-settings-row memory-settings-row--footer">
             <span>允许 AI 控制播放形式</span>
             <span className="memory-toggle is-on" aria-label="允许 AI 控制播放形式：开" />
@@ -1952,12 +2880,18 @@ function App() {
         elasticity={0.35}
         cornerRadius={32}
         padding="22px"
-        className="chat-panel"
+        className={`chat-panel${chatDockOpen ? ' is-open' : ''}${voiceInputActive ? ' is-listening' : ''}`}
+        onMouseEnter={keepChatDockOpen}
+        onMouseLeave={scheduleChatDockClose}
+        onFocus={openChatDock}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) scheduleChatDockClose()
+        }}
       >
         <div className="chat-content">
           <div className="chat-header">
             <p className="sub">YUN COMPANION</p>
-            <span>soft voice</span>
+            <span>{voiceInputActive ? 'listening' : selectedVoiceLabel}</span>
           </div>
           <div className="chat-messages" ref={chatMessagesRef}>
             {chatMessages.map((message) => (
@@ -1965,18 +2899,74 @@ function App() {
                 className={`chat-bubble ${message.role === 'user' ? 'chat-bubble--me' : 'chat-bubble--yun'}`}
                 key={message.id}
               >
-                <span>{message.role === 'user' ? '我' : personaMode === 'zhudongyu' ? '东宇' : '昀'}</span>
+                <span>{message.role === 'user' ? '我' : '昀'}</span>
                 <p>{message.content}</p>
+                {message.skillCandidate && (
+                  <div className="chat-skill-candidate">
+                    {message.skillCandidate.status === 'proposed' ? (
+                      <>
+                        <small>这类操作已经成功完成 {message.skillCandidate.successCount} 次。要保存成快捷 Skill 吗？</small>
+                        <div>
+                          <button type="button" onClick={() => resolveSkillCandidate(message.skillCandidate.id, 'approved')}>保存快捷方式</button>
+                          <button type="button" onClick={() => resolveSkillCandidate(message.skillCandidate.id, 'rejected')}>暂不保存</button>
+                        </div>
+                      </>
+                    ) : (
+                      <small>{message.skillCandidate.status === 'approved' ? '已保存为本地快捷 Skill。' : '未保存这条候选 Skill。'}</small>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
             {chatIsThinking && (
               <div className="chat-bubble chat-bubble--yun chat-bubble--thinking">
-                <span>{personaMode === 'zhudongyu' ? '东宇' : '昀'}</span>
-                <p>{personaMode === 'zhudongyu' ? '东宇正在想……' : '昀正在想……'}</p>
+                <span>昀</span>
+                <p>昀正在想……</p>
               </div>
             )}
           </div>
+          {chatImageFile && (
+            <div className="chat-image-chip">
+              <span>{chatImageFile.name}</span>
+              <button
+                type="button"
+                aria-label="移除图片"
+                onClick={() => {
+                  setChatImageFile(null)
+                  if (chatImageInputRef.current) {
+                    chatImageInputRef.current.value = ''
+                  }
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <div className="chat-input">
+            <button
+              className="chat-voice-button"
+              type="button"
+              aria-label={voiceInputActive ? '停止语音输入' : '语音输入'}
+              aria-pressed={voiceInputActive}
+              onClick={() => setVoiceInputActive((current) => !current)}
+            />
+            <button
+              className="chat-image-button"
+              type="button"
+              aria-label="上传图片给昀"
+              onClick={() => chatImageInputRef.current?.click()}
+              disabled={chatIsThinking}
+            />
+            <input
+              ref={chatImageInputRef}
+              className="chat-image-input"
+              type="file"
+              accept="image/*"
+              onChange={(event) => {
+                const file = event.target.files?.[0] || null
+                setChatImageFile(file)
+              }}
+            />
             <textarea
               aria-label="和昀聊天"
               placeholder="慢慢说，我在这里"
@@ -1991,10 +2981,11 @@ function App() {
               }}
             />
             <button
+              className="chat-send-button"
               type="button"
               aria-label="发送给昀"
               onClick={submitChatMessage}
-              disabled={!chatDraft.trim() || chatIsThinking}
+              disabled={(!chatDraft.trim() && !chatImageFile) || chatIsThinking}
             />
           </div>
         </div>
@@ -2050,6 +3041,9 @@ function App() {
         onPointerMove={revealImmersivePlayer}
         onPointerDown={revealImmersivePlayer}
       >
+        <span className="glass-edge-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight glass-specular-highlight--opposite" aria-hidden="true" />
         <div className="player-content">
           <div className="player-meta">
             <div
@@ -2061,24 +3055,9 @@ function App() {
               <h2>{displayedSong.title}</h2>
               <p>{displayedSong.artist}</p>
             </div>
-            <button
-              className={`library-trigger${pressedPanel === 'library' ? ' is-pressed' : ''}`}
-              type="button"
-              aria-label="打开本地曲库"
-              aria-expanded={activePanel === 'library'}
-              ref={libraryTriggerRef}
-              onClick={() => {
-                setLibraryEdgeOpen(false)
-                togglePanel('library')
-              }}
-            >
-              曲库
-            </button>
           </div>
 
           <div className="player-controls" aria-label="播放控制">
-            <button className="control-button control-button--ghost" aria-label="Like">♡</button>
-            <button className="control-button control-button--ghost" aria-label="More">...</button>
             <button className="control-button" type="button" aria-label="Previous" onClick={playPreviousWithPodcastReaction}>‹</button>
             <button
               className="control-button control-button--primary"
@@ -2089,7 +3068,7 @@ function App() {
               {playerState.isPlaying ? 'Ⅱ' : '▶'}
             </button>
             <button className="control-button" type="button" aria-label="Next" onClick={playNextWithPodcastReaction}>›</button>
-            <button className="control-button control-button--ghost" aria-label="Repeat">↻</button>
+            <button className="control-button" aria-label="Repeat">↻</button>
           </div>
 
           <div className="player-progress" aria-label="Playback progress">
@@ -2113,6 +3092,49 @@ function App() {
             </div>
             <p className="time-code">{formatTime(playerState.currentTime)} / {formatTime(playerState.duration)}</p>
           </div>
+          <div className={`player-volume${volumeControlOpen ? ' is-open' : ''}`}>
+            <button
+              className="control-button volume-button"
+              type="button"
+              aria-label={`音量 ${volumePercent}%`}
+              aria-expanded={volumeControlOpen}
+              onClick={() => {
+                setVolumeControlOpen(true)
+                playerCore.setVolume(playerState.volume <= 0.01 ? 0.72 : 0)
+              }}
+            >
+              <svg className="volume-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path className="volume-icon__speaker" d="M4 9.5h4.2L13 5.4v13.2l-4.8-4.1H4z" />
+                {playerState.volume <= 0.01 ? (
+                  <>
+                    <path className="volume-icon__mute" d="M17 9l4 4" />
+                    <path className="volume-icon__mute" d="M21 9l-4 4" />
+                  </>
+                ) : (
+                  <>
+                    <path className="volume-icon__wave volume-icon__wave--one" d="M16 9.4c.9 1.2.9 4 0 5.2" />
+                    {playerState.volume >= 0.5 && <path className="volume-icon__wave volume-icon__wave--two" d="M18.4 7.2c1.9 2.4 1.9 7.2 0 9.6" />}
+                  </>
+                )}
+              </svg>
+            </button>
+            <label className="volume-slider" aria-label="播放音量" onPointerDown={() => setVolumeControlOpen(true)}>
+              <span className="volume-slider-track">
+                <span className="volume-slider-fill" style={{ width: `${volumePercent}%` }} />
+                <span className="volume-slider-thumb" style={{ left: `${volumePercent}%` }} />
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={volumePercent}
+                onChange={(event) => playerCore.setVolume(Number(event.target.value) / 100)}
+                onFocus={() => setVolumeControlOpen(true)}
+              />
+              <span className="volume-value">{volumePercent}%</span>
+            </label>
+          </div>
           <button
             className={`ai-play-button${pressedPanel === 'playMode' ? ' is-pressed' : ''}`}
             type="button"
@@ -2123,26 +3145,6 @@ function App() {
           >
             {playbackModeLabels[playbackMode] || 'AI推荐播放'}
           </button>
-          <LiquidGlass
-            displacementScale={40}
-            blurAmount={0.01}
-            saturation={160}
-            aberrationIntensity={3}
-            elasticity={0.35}
-            cornerRadius={999}
-            padding="0"
-            className="scene-cover-refresh"
-          >
-            <button
-              className="scene-cover-refresh-button"
-              type="button"
-              aria-label="换一组歌曲封面"
-              onClick={refreshSceneCovers}
-              disabled={libraryTracks.length <= sceneTestCovers.length || isCoverSweeping}
-            >
-              ↻
-            </button>
-          </LiquidGlass>
         </div>
       </div>
 
@@ -2150,8 +3152,10 @@ function App() {
         className={`local-library-drawer${activePanel === 'library' ? ' is-open' : ''}${libraryListReady ? ' is-content-ready' : ''}`}
         onPointerEnter={keepEdgeLibraryOpen}
         onPointerMove={keepEdgeLibraryOpen}
-        onPointerLeave={scheduleEdgeLibraryClose}
       >
+        <span className="glass-edge-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight glass-specular-highlight--opposite" aria-hidden="true" />
         <div className="library-content">
           <div className="library-header">
             <div>
@@ -2159,8 +3163,10 @@ function App() {
               <p className="library-live-count">
                 {librarySource === 'netease'
                   ? neteaseStatus === 'loading'
-                    ? '正在搜索网易云…'
-                    : `在线结果 ${neteaseResults.length} 首`
+                    ? '正在读取网易云…'
+                    : neteaseLibraryView === 'playlists'
+                      ? `我的歌单 ${neteaseMe?.playlists?.length || 0} 个`
+                      : `在线结果 ${neteaseResults.length} 首`
                   : libraryStatus === 'loading'
                     ? '正在读取曲库…'
                     : `曲库共 ${libraryCount} 首`}
@@ -2192,7 +3198,7 @@ function App() {
                 disabled={!libraryQuery.trim() || neteaseStatus === 'loading'}
                 onClick={searchOnlineMusic}
               >
-                {neteaseStatus === 'loading' ? '搜索中' : '网易云'}
+                {neteaseStatus === 'loading' ? '搜索中' : '搜索'}
               </button>
               <button
                 className="library-close-button"
@@ -2205,12 +3211,65 @@ function App() {
             </div>
           </div>
 
+          <div className="library-account-strip">
+            {neteaseMe?.loggedIn ? (
+              <>
+                <div className="library-account-profile">
+                  {neteaseMe.avatar ? <img src={neteaseMe.avatar} alt="" /> : <span className="library-account-avatar">云</span>}
+                  <div>
+                    <strong>{neteaseMe.nickname}</strong>
+                    <small>{neteaseMe.vipType > 0 ? `VIP ${neteaseMe.vipType}` : '网易云用户'}</small>
+                  </div>
+                </div>
+                <div className="library-account-nav" aria-label="网易云曲库导航">
+                  <button
+                    type="button"
+                    className="library-nav-button library-nav-button-liked"
+                    aria-label="打开我喜欢的音乐"
+                    title="我喜欢的音乐"
+                    disabled={!likedNeteasePlaylist}
+                    onClick={() => likedNeteasePlaylist && openNeteasePlaylist(likedNeteasePlaylist)}
+                  >
+                    <span aria-hidden="true">♥</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`library-nav-button${neteaseLibraryView === 'playlists' ? ' is-active' : ''}`}
+                    aria-label="打开我的歌单"
+                    title="我的歌单"
+                    onClick={openNeteasePlaylists}
+                  >
+                    <span aria-hidden="true">☰</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <span className="library-account-empty">
+                {neteaseAccountStatus === 'loading'
+                  ? '正在读取网易云账户…'
+                  : neteaseAccountStatus === 'error'
+                    ? '账户信息读取失败'
+                    : '登录网易云后显示个人歌单'}
+                {neteaseAccountStatus === 'error' && (
+                  <button type="button" onClick={loadNeteaseAccount}>重试</button>
+                )}
+              </span>
+            )}
+            <button type="button" className="library-import-button" disabled={isImportingMusic} onClick={() => musicImportInputRef.current?.click()}>
+              {isImportingMusic ? '导入中' : '导入歌曲'}
+            </button>
+            <input ref={musicImportInputRef} className="library-import-input" type="file" accept="audio/*,.mp3,.flac,.wav,.m4a,.aac,.ogg" multiple onChange={importSelectedMusic} />
+          </div>
+
           <div className="library-source-tabs" aria-label="选择音乐来源">
             <button
               className={`library-source-tab${librarySource === 'local' ? ' is-active' : ''}`}
               type="button"
               aria-pressed={librarySource === 'local'}
-              onClick={() => setLibrarySource('local')}
+              onClick={() => {
+                setLibrarySource('local')
+                clearPlaybackQueue()
+              }}
             >
               本地
             </button>
@@ -2218,7 +3277,7 @@ function App() {
               className={`library-source-tab${librarySource === 'netease' ? ' is-active' : ''}`}
               type="button"
               aria-pressed={librarySource === 'netease'}
-              onClick={() => setLibrarySource('netease')}
+              onClick={openNeteasePlaylists}
             >
               网易云
             </button>
@@ -2239,6 +3298,59 @@ function App() {
               }}
             />
           </label>
+
+          <section className="library-up-next" aria-label="待播放歌单">
+            <div className="library-up-next-header">
+              <div>
+                <span>待播放</span>
+                <small>{waitingTracks.length} 首</small>
+              </div>
+              <button type="button" disabled={!waitingTracks.length} onClick={clearWaitingTracks}>清空</button>
+            </div>
+            {waitingTracks.length ? (
+              <div className="library-up-next-list">
+                {waitingTracks.slice(0, 3).map((track, index) => (
+                  <article className="library-up-next-track" key={`up-next-manual-${track.id || `${track.title}-${track.artist}`}`}>
+                    <span className="library-up-next-index">{index + 1}</span>
+                    <span className="library-up-next-cover" style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined} aria-hidden="true" />
+                    <span className="library-up-next-info">
+                      <strong>{track.title}</strong>
+                      <small>{track.artist}</small>
+                    </span>
+                    <button type="button" aria-label={`从待播放移除 ${track.title}`} onClick={() => removeUpNext(track)}>×</button>
+                  </article>
+                ))}
+                {waitingTracks.length > 3 && <p className="library-up-next-more">还有 {waitingTracks.length - 3} 首等待播放</p>}
+              </div>
+            ) : (
+              <p className="library-up-next-empty">点击歌曲右侧的 ＋ 加入待播放</p>
+            )}
+          </section>
+
+          {aiCandidateTracks.length > 0 && (
+            <section className="library-up-next library-ai-candidates" aria-label="AI 续播候选">
+              <div className="library-up-next-header">
+                <div>
+                  <span>AI 续播候选</span>
+                  <small>{aiCandidateTracks.length} 首</small>
+                </div>
+                <button type="button" onClick={clearAutoUpNext}>换一批</button>
+              </div>
+              <div className="library-up-next-list">
+                {aiCandidateTracks.slice(0, 3).map((track, index) => (
+                  <article className="library-up-next-track" key={`ai-candidate-${track.id || `${track.title}-${track.artist}`}`}>
+                    <span className="library-up-next-index">{index + 1}</span>
+                    <span className="library-up-next-cover" style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined} aria-hidden="true" />
+                    <span className="library-up-next-info">
+                      <strong>{track.title}</strong>
+                      <small>{track.artist} · 昀已规划</small>
+                    </span>
+                    <button type="button" aria-label={`从 AI 候选移除 ${track.title}`} onClick={() => removeAutoUpNext(track)}>×</button>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
 
           <div className="library-preview-list">
             {librarySource === 'local' && libraryStatus === 'error' && (
@@ -2263,15 +3375,13 @@ function App() {
               </div>
             )}
             {drawerTracks.slice(0, 4).map((track) => (
-              <article className="library-track" key={track.id || `${track.title}-${track.artist}`}>
-                <button
-                  className="library-play-button"
-                  type="button"
-                  aria-label={`播放 ${track.title}`}
-                  onClick={() => playSongWithPodcastReaction(track)}
-                >
-                  ▶
-                </button>
+              <article className="library-track" key={track.id || `${track.title}-${track.artist}`} role="button" tabIndex={0} onClick={() => playSongWithPodcastReaction(track)} onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  playSongWithPodcastReaction(track)
+                }
+              }}>
+                <span className="library-play-button" aria-hidden="true">▶</span>
                 <div
                   className={`library-cover ${track.cover || ''}`}
                   style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined}
@@ -2280,6 +3390,19 @@ function App() {
                   <h3>{track.title}</h3>
                   <p>{track.artist}</p>
                 </div>
+                <button
+                  className="library-queue-add"
+                  type="button"
+                  aria-label={`加入待播放 ${track.title}`}
+                  title="加入待播放"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    enqueueUpNext(track)
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  +
+                </button>
               </article>
             ))}
           </div>
@@ -2287,35 +3410,68 @@ function App() {
           <div
             className="library-scroll-list"
             aria-label="全部歌曲列表"
+            ref={libraryScrollListRef}
+            onScroll={handleLibraryScroll}
             onPointerEnter={keepEdgeLibraryOpen}
             onPointerMove={keepEdgeLibraryOpen}
           >
-            {drawerTracks.map((track) => (
-              <article className="library-scroll-track" key={`scroll-${track.id || `${track.title}-${track.artist}`}`}>
-                <button
-                  className="library-play-button"
-                  type="button"
-                  aria-label={`播放 ${track.title}`}
-                  onClick={() => playSongWithPodcastReaction(track)}
-                >
-                  ▶
+            {librarySource === 'netease' && neteaseLibraryView === 'playlists' ? (
+              (neteaseMe?.playlists || []).map((playlist) => (
+                <button className="library-playlist-row" type="button" key={playlist.id} onClick={() => openNeteasePlaylist(playlist)}>
+                  <span className="library-playlist-cover" style={playlist.coverUrl ? { backgroundImage: `url(${playlist.coverUrl})` } : undefined} aria-hidden="true" />
+                  <span className="library-playlist-info">
+                    <strong>{playlist.liked ? '我喜欢的音乐' : playlist.name}</strong>
+                    <small>{playlist.trackCount} 首</small>
+                  </span>
+                  <span className="library-playlist-arrow" aria-hidden="true">›</span>
                 </button>
-                <div
-                  className={`library-cover ${track.cover || ''}`}
-                  style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined}
-                />
-                <div className="library-track-info">
-                  <h3>{track.title}</h3>
-                  <p>{track.artist}</p>
-                </div>
-              </article>
-            ))}
+              ))
+            ) : (
+              <div className="library-virtual-list" style={{ height: `${drawerTracks.length * LIBRARY_SCROLL_ROW_HEIGHT}px` }}>
+                {virtualDrawerTracks.map((track, index) => {
+                  const rowIndex = virtualTrackRange.start + index
+                  return (
+                    <article className="library-scroll-track library-virtual-row" style={{ transform: `translateY(${rowIndex * LIBRARY_SCROLL_ROW_HEIGHT}px)` }} key={`scroll-${track.id || `${track.title}-${track.artist}`}`} role="button" tabIndex={0} onClick={() => playSongWithPodcastReaction(track)} onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        playSongWithPodcastReaction(track)
+                      }
+                    }}>
+                      <span className="library-play-button" aria-hidden="true">▶</span>
+                      <div
+                        className={`library-cover ${track.cover || ''}`}
+                        style={track.coverUrl ? { backgroundImage: `url(${track.coverUrl})` } : undefined}
+                      />
+                      <div className="library-track-info">
+                        <h3>{track.title}</h3>
+                        <p>{track.artist}</p>
+                      </div>
+                      <button
+                        className="library-queue-add"
+                        type="button"
+                        aria-label={`加入待播放 ${track.title}`}
+                        title="加入待播放"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          enqueueUpNext(track)
+                        }}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        +
+                      </button>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
           </div>
 
           <button className="library-all-button" type="button">
             <span className="library-all-count">
               {librarySource === 'netease'
-                ? `在线结果（${neteaseResults.length}）`
+                ? neteaseLibraryView === 'playlists'
+                  ? `我的歌单（${neteaseMe?.playlists?.length || 0}）`
+                  : `${activeNeteasePlaylist?.name || '在线结果'}（${neteaseResults.length}）`
                 : `查看全部歌曲（${libraryCount}）`}
             </span>
           </button>

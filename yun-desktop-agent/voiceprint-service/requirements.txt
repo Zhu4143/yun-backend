@@ -1,0 +1,7 @@
+speechbrain==1.1.0
+torch==2.13.0
+torchaudio==2.11.0
+fastapi==0.140.0
+uvicorn==0.51.0
+soundfile==0.14.0
+python-multipart==0.0.22

@@ -24,6 +24,10 @@ export default function VoicePickupGlass({
   onCaptureStop,
   onLevelChange,
   onSilenceTimeout,
+  onTranscript,
+  onInterimTranscript,
+  onRecognitionError,
+  submitDelayMs = 550,
 }) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [permissionState, setPermissionState] = useState('idle')
@@ -40,8 +44,28 @@ export default function VoicePickupGlass({
   const hasDetectedVoiceRef = useRef(false)
   const silenceNotifiedRef = useRef(false)
   const noiseFloorRef = useRef(0.018)
+  const recognitionRef = useRef(null)
+  const transcriptRef = useRef('')
+  const transcriptDeliveredRef = useRef(false)
+  const submitTimerRef = useRef(0)
+  const recognitionErrorRef = useRef('')
 
   const stopCapture = useCallback(() => {
+    window.clearTimeout(submitTimerRef.current)
+    submitTimerRef.current = 0
+    const recognition = recognitionRef.current
+    recognitionRef.current = null
+    if (recognition) {
+      recognition.onresult = null
+      recognition.onerror = null
+      recognition.onend = null
+      try {
+        recognition.abort()
+      } catch {
+        // The recognition service may already have stopped itself.
+      }
+    }
+
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
@@ -57,6 +81,8 @@ export default function VoicePickupGlass({
     hasDetectedVoiceRef.current = false
     silenceNotifiedRef.current = false
     noiseFloorRef.current = 0.018
+    transcriptRef.current = ''
+    transcriptDeliveredRef.current = false
     opticalFieldController.setVoiceActive(false)
 
     if (audioContextRef.current?.state !== 'closed') {
@@ -68,6 +94,81 @@ export default function VoicePickupGlass({
     setLevel(0)
     onCaptureStop?.()
   }, [onCaptureStop])
+
+  const startRecognition = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    recognitionErrorRef.current = ''
+    if (!SpeechRecognition) {
+      recognitionErrorRef.current = 'unsupported'
+      onRecognitionError?.('unsupported')
+      return false
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'zh-CN'
+    // Chromium's continuous mode can hold final results indefinitely. A
+    // single turn still emits interim text in real time, then finalizes when
+    // the speaker pauses, which is the reliable conversational boundary.
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.maxAlternatives = 1
+    transcriptRef.current = ''
+    transcriptDeliveredRef.current = false
+
+    const deliverTranscript = () => {
+      const transcript = transcriptRef.current.trim()
+      if (!transcript || transcriptDeliveredRef.current) return false
+      transcriptDeliveredRef.current = true
+      onTranscript?.(transcript)
+      return true
+    }
+
+    const scheduleDelivery = () => {
+      window.clearTimeout(submitTimerRef.current)
+      submitTimerRef.current = window.setTimeout(() => {
+        if (deliverTranscript()) stopCapture()
+      }, submitDelayMs)
+    }
+
+    recognition.onresult = (event) => {
+      let finalText = ''
+      let interimText = ''
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const text = event.results[index][0]?.transcript || ''
+        if (event.results[index].isFinal) finalText += text
+        else interimText += text
+      }
+      if (finalText) transcriptRef.current = `${transcriptRef.current} ${finalText}`.trim()
+      const liveTranscript = `${transcriptRef.current} ${interimText}`.trim()
+      if (liveTranscript) onInterimTranscript?.(liveTranscript)
+      if (finalText) scheduleDelivery()
+    }
+
+    recognition.onerror = (event) => {
+      if (event.error === 'aborted') return
+      const error = event.error || 'recognition-failed'
+      onRecognitionError?.(error)
+      stopCapture()
+      onSilenceTimeout?.({ reason: 'recognition-error', error })
+    }
+
+    recognition.onend = () => {
+      if (recognitionRef.current !== recognition) return
+      if (!deliverTranscript()) onSilenceTimeout?.({ reason: 'recognition-ended' })
+      stopCapture()
+    }
+
+    recognitionRef.current = recognition
+    try {
+      recognition.start()
+      return true
+    } catch {
+      recognitionRef.current = null
+      recognitionErrorRef.current = 'start-failed'
+      onRecognitionError?.('start-failed')
+      return false
+    }
+  }, [onInterimTranscript, onRecognitionError, onSilenceTimeout, onTranscript, stopCapture, submitDelayMs])
 
   const readLevel = useCallback(() => {
     const analyser = analyserRef.current
@@ -128,6 +229,25 @@ export default function VoicePickupGlass({
 
     try {
       setPermissionState('requesting')
+      // The application-level microphone is owned by AudioCaptureManager.
+      // Headless companion turns use browser recognition only for transcript
+      // delivery and must not open/close a competing MediaStream.
+      if (headless) {
+        setIsCapturing(true)
+        setPermissionState('granted')
+        opticalFieldController.setVoiceActive(true)
+        captureStartedAtRef.current = performance.now()
+        lastVoiceAtRef.current = 0
+        hasDetectedVoiceRef.current = false
+        silenceNotifiedRef.current = false
+        onCaptureStart?.()
+        if (!startRecognition()) {
+          const error = recognitionErrorRef.current || 'start-failed'
+          stopCapture()
+          onSilenceTimeout?.({ reason: error, error })
+        }
+        return
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -160,12 +280,18 @@ export default function VoicePickupGlass({
       noiseFloorRef.current = 0.018
       onCaptureStart?.(stream)
       rafRef.current = requestAnimationFrame(() => readLevelRef.current?.())
+      if (!startRecognition()) {
+        const error = recognitionErrorRef.current || 'start-failed'
+        stopCapture()
+        onSilenceTimeout?.({ reason: error, error })
+      }
     } catch {
       setPermissionState('denied')
       stopCapture()
-      onSilenceTimeout?.()
+      onRecognitionError?.('not-allowed')
+      onSilenceTimeout?.({ reason: 'microphone-denied', error: 'microphone-denied' })
     }
-  }, [disabled, isCapturing, onCaptureStart, onSilenceTimeout, stopCapture])
+  }, [disabled, headless, isCapturing, onCaptureStart, onRecognitionError, onSilenceTimeout, startRecognition, stopCapture])
 
   const toggleCapture = useCallback(() => {
     if (isCapturing) {

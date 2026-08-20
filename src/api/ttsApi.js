@@ -1,6 +1,6 @@
 export async function synthesizeSpeech({
   text,
-  voice = 'S_5U82YXa42',
+  voice = 'zh_female_xiaohe_uranus_bigtts',
   speed = 1,
   volume = 1,
 }) {

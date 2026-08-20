@@ -132,13 +132,15 @@ function ForegroundFogQuad() {
   )
 }
 
-export default function LyricForegroundFog() {
+export default function LyricForegroundFog({ quality = 'high' }) {
+  const dpr = quality === 'medium' ? [0.75, 1] : [1, 1.5]
+
   return (
     <div className="lyric-foreground-fog" aria-hidden="true">
       <Canvas
         orthographic
         camera={{ position: [0, 0, 1], near: 0, far: 2 }}
-        dpr={[1, 1.5]}
+        dpr={dpr}
         gl={{ antialias: false, alpha: true, powerPreference: 'high-performance' }}
         onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
       >

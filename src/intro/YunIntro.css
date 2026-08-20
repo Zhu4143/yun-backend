@@ -1,0 +1,611 @@
+.yun-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  color: rgba(232, 243, 242, 0.9);
+  background: #010203;
+  opacity: 1;
+  transition: opacity 830ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.yun-intro__base {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: radial-gradient(ellipse at 50% 48%, #071014 0%, #030709 46%, #010203 100%);
+}
+
+.yun-intro__water-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  opacity: 1;
+  pointer-events: none;
+}
+
+.yun-intro::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 59% 44%, rgba(83, 119, 119, 0.045), transparent 28%),
+    linear-gradient(105deg, rgba(255, 255, 255, 0.018), transparent 26% 76%, rgba(110, 143, 143, 0.015));
+}
+
+.yun-intro-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 1;
+  transition: opacity 700ms ease, filter 700ms ease;
+}
+
+.yun-intro-replay {
+  position: absolute;
+  right: 24px;
+  bottom: 22px;
+  z-index: 8;
+  padding: 9px 14px;
+  border: 1px solid rgba(166, 219, 214, 0.22);
+  border-radius: 999px;
+  color: rgba(214, 238, 235, 0.72);
+  background: rgba(7, 16, 18, 0.58);
+  backdrop-filter: blur(14px);
+  font: 500 12px/1 Inter, 'PingFang SC', sans-serif;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.yun-intro-replay:hover {
+  color: rgba(235, 250, 248, 0.96);
+  border-color: rgba(166, 219, 214, 0.46);
+  background: rgba(12, 28, 30, 0.72);
+}
+
+.yun-intro-vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: inset 0 0 180px 54px rgba(0, 0, 0, 0.7);
+  background: linear-gradient(180deg, rgba(1, 3, 4, 0.34), transparent 28% 70%, rgba(0, 1, 2, 0.44));
+}
+
+.yun-intro-brand {
+  --yun-reveal: 0%;
+  position: absolute;
+  left: 56%;
+  top: 47%;
+  z-index: 5;
+  display: flex;
+  width: min(520px, 44vw);
+  flex-direction: column;
+  align-items: flex-start;
+  transform: translate(-50%, -46%) scale(0.97);
+  opacity: 0;
+  filter: blur(18px);
+  clip-path: inset(0 calc(100% - var(--yun-reveal)) 0 0);
+  transition:
+    clip-path 680ms cubic-bezier(0.2, 0.72, 0.18, 1),
+    opacity 680ms ease,
+    filter 680ms ease,
+    transform 680ms cubic-bezier(0.2, 0.72, 0.18, 1),
+    left 720ms cubic-bezier(0.2, 0.72, 0.18, 1);
+}
+
+.phase-reveal .yun-intro-brand,
+.phase-ready .yun-intro-brand {
+  --yun-reveal: 100%;
+  opacity: 1;
+  filter: blur(0);
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.yun-intro-mark {
+  position: relative;
+  margin: 0 0 12px -5px;
+  color: rgba(226, 238, 236, 0.92);
+  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+  font-size: clamp(92px, 9.6vw, 154px);
+  font-weight: 300;
+  line-height: 0.86;
+  letter-spacing: -0.08em;
+  text-shadow: 0 2px 20px rgba(140, 177, 174, 0.08);
+}
+
+.yun-intro-mark::after {
+  content: '';
+  position: absolute;
+  left: 14%;
+  bottom: -18px;
+  width: 82%;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(186, 211, 208, 0.3), transparent);
+}
+
+.yun-intro-kicker {
+  margin: 24px 0 8px;
+  color: rgba(178, 206, 203, 0.38);
+  font-family: Inter, 'PingFang SC', sans-serif;
+  font-size: 10px;
+  font-weight: 560;
+  letter-spacing: 0.26em;
+}
+
+.yun-intro h1 {
+  margin: 0;
+  color: rgba(220, 234, 232, 0.64);
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: clamp(15px, 1.35vw, 20px);
+  font-weight: 300;
+  letter-spacing: 0.18em;
+}
+
+.yun-intro-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 34px;
+  opacity: 0;
+  filter: blur(8px);
+  transform: translateY(12px);
+  pointer-events: none;
+  transition: opacity 600ms ease 240ms, filter 600ms ease 240ms, transform 600ms cubic-bezier(0.2, 0.7, 0.2, 1) 240ms;
+}
+
+.phase-ready .yun-intro-actions {
+  opacity: 1;
+  filter: blur(0);
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.yun-intro-primary-wrap {
+  position: relative;
+  flex: 0 0 132px;
+  width: 132px;
+  height: 44px;
+}
+
+.yun-intro-primary-wrap > * {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.yun-intro-primary-glass {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(183, 213, 210, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(143, 179, 176, 0.055) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13), 0 12px 32px rgba(0, 0, 0, 0.24) !important;
+}
+
+.yun-intro-primary-glass > .glass,
+.yun-intro-primary-glass .glass__warp {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: inherit !important;
+}
+
+.yun-intro-primary-glass .glass > div,
+.yun-login-panel .glass > div {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.yun-intro-primary-glass button,
+.yun-intro-login-button {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  color: rgba(226, 239, 237, 0.84);
+  background: transparent;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 13px;
+  font-weight: 420;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.yun-intro-primary-glass button {
+  position: absolute;
+  inset: 0;
+}
+
+.yun-intro-primary-glass button:hover {
+  background: rgba(196, 221, 218, 0.055);
+}
+
+.yun-intro-login-button {
+  width: 92px;
+  height: 44px;
+  border: 1px solid rgba(168, 198, 195, 0.1);
+  border-radius: 999px;
+  color: rgba(202, 221, 219, 0.54);
+  transition: color 200ms ease, border-color 200ms ease, background 200ms ease;
+}
+
+.yun-intro-login-button:hover {
+  color: rgba(228, 240, 238, 0.82);
+  border-color: rgba(183, 213, 210, 0.24);
+  background: rgba(142, 177, 175, 0.035);
+}
+
+.yun-intro button:focus-visible,
+.yun-intro input:focus-visible {
+  outline: 1px solid rgba(185, 221, 217, 0.56);
+  outline-offset: 3px;
+}
+
+.yun-intro button:disabled {
+  cursor: default;
+}
+
+.yun-login-shell {
+  position: absolute;
+  top: 50%;
+  right: 8vw;
+  z-index: 7;
+  width: min(390px, calc(100vw - 48px));
+  transform: translate(36px, -50%) scale(0.985);
+  opacity: 0;
+  filter: blur(12px);
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 650ms ease, filter 650ms ease, transform 720ms cubic-bezier(0.2, 0.72, 0.18, 1), visibility 0s linear 720ms;
+}
+
+.yun-login-shell.is-open {
+  transform: translate(0, -50%) scale(1);
+  opacity: 1;
+  filter: blur(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 120ms, 120ms, 120ms, 0s;
+}
+
+.yun-login-glass-wrap {
+  position: relative;
+  width: 100%;
+  height: 480px;
+}
+
+.yun-login-glass-wrap > * {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.yun-login-panel {
+  overflow: hidden !important;
+  border: 1px solid rgba(178, 207, 204, 0.17) !important;
+  border-radius: 32px !important;
+  background: rgba(10, 18, 20, 0.28) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.11), 0 28px 70px rgba(0, 0, 0, 0.34) !important;
+}
+
+.yun-login-panel > .glass,
+.yun-login-panel .glass__warp {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: inherit !important;
+}
+
+.yun-login-form {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  display: grid;
+  gap: 19px;
+  padding: 34px;
+}
+
+.yun-login-heading p {
+  margin: 0 0 9px;
+  color: rgba(154, 188, 185, 0.4);
+  font-size: 9px;
+  letter-spacing: 0.24em;
+}
+
+.yun-login-heading h2 {
+  margin: 0 0 6px;
+  color: rgba(229, 240, 238, 0.87);
+  font-size: 25px;
+  font-weight: 360;
+  letter-spacing: 0.08em;
+}
+
+.yun-login-heading > span,
+.yun-login-note {
+  color: rgba(184, 207, 204, 0.42);
+  font-size: 12px;
+}
+
+.yun-netease-login {
+  gap: 15px;
+}
+
+.yun-netease-qr-wrap,
+.yun-netease-account {
+  display: grid;
+  place-items: center;
+  min-height: 224px;
+  border: 1px solid rgba(201, 60, 72, 0.16);
+  border-radius: 22px;
+  background: rgba(4, 8, 10, 0.3);
+}
+
+.yun-netease-qr-wrap {
+  align-content: center;
+  gap: 10px;
+}
+
+.yun-netease-qr {
+  box-sizing: border-box;
+  width: 176px;
+  height: 176px;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+}
+
+.yun-netease-qr-wrap p {
+  margin: 0;
+  color: rgba(217, 229, 228, 0.62);
+  font-size: 11px;
+}
+
+.yun-netease-qr-loading {
+  width: 148px;
+  height: 148px;
+  border: 1px solid rgba(232, 236, 235, 0.12);
+  border-radius: 16px;
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.025) 30%, rgba(255, 255, 255, 0.09) 48%, rgba(255, 255, 255, 0.025) 66%);
+  background-size: 220% 100%;
+  animation: yun-login-loading 1.4s linear infinite;
+}
+
+.yun-netease-account {
+  align-content: center;
+  gap: 9px;
+}
+
+.yun-netease-account img,
+.yun-netease-avatar-placeholder {
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.yun-netease-avatar-placeholder {
+  display: grid;
+  place-items: center;
+  color: white;
+  background: #d43c33;
+  font-size: 28px;
+}
+
+.yun-netease-account strong {
+  color: rgba(238, 244, 243, 0.9);
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.yun-netease-account span {
+  color: rgba(188, 209, 206, 0.5);
+  font-size: 11px;
+}
+
+@keyframes yun-login-loading {
+  to { background-position: -220% 0; }
+}
+
+.yun-login-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.yun-login-form label > span {
+  color: rgba(194, 218, 215, 0.52);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.yun-login-form input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(179, 209, 206, 0.13);
+  border-radius: 14px;
+  color: rgba(230, 240, 239, 0.84);
+  background: rgba(2, 7, 8, 0.28);
+  font: inherit;
+}
+
+.yun-login-form input::placeholder {
+  color: rgba(176, 198, 196, 0.25);
+}
+
+.yun-login-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.yun-login-actions button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(177, 209, 206, 0.15);
+  border-radius: 999px;
+  color: rgba(210, 228, 226, 0.66);
+  background: rgba(134, 169, 166, 0.035);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.yun-login-actions .yun-login-submit {
+  border-color: rgba(184, 218, 214, 0.25);
+  color: rgba(231, 241, 240, 0.86);
+  background: rgba(153, 188, 185, 0.09);
+}
+
+.yun-login-note {
+  margin: -3px 0 0;
+  font-size: 10px;
+  text-align: right;
+}
+
+.is-login-open .yun-intro-brand {
+  left: 35%;
+  opacity: 0.72;
+  transform: translate(-50%, -50%) scale(0.985);
+}
+
+.is-login-open .yun-intro-canvas {
+  opacity: 0.76;
+  filter: brightness(0.8);
+}
+
+.yun-intro-footnote {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  z-index: 5;
+  margin: 0;
+  color: rgba(174, 198, 196, 0.24);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 800ms ease 600ms;
+}
+
+.phase-ready .yun-intro-footnote {
+  opacity: 1;
+}
+
+.yun-intro.is-exiting {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.yun-intro.is-exiting .yun-intro-brand,
+.yun-intro.is-exiting .yun-login-shell {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.97);
+  filter: blur(8px);
+}
+
+.yun-intro.is-transitioning .yun-intro-brand,
+.yun-intro.is-transitioning .yun-intro-footnote,
+.yun-intro.is-transitioning .yun-intro-replay {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 320ms;
+}
+
+.yun-intro.is-static .yun-intro-canvas {
+  display: none;
+}
+
+.yun-intro.is-static .yun-intro-brand {
+  transition-duration: 520ms;
+}
+
+@media (max-width: 760px) {
+  .yun-intro-brand {
+    left: 50%;
+    top: 43%;
+    width: calc(100vw - 54px);
+    align-items: center;
+    text-align: center;
+  }
+
+  .yun-intro-mark {
+    margin-left: -10px;
+    font-size: clamp(86px, 30vw, 126px);
+  }
+
+  .yun-intro-kicker {
+    font-size: 8px;
+  }
+
+  .yun-intro h1 {
+    font-size: 14px;
+  }
+
+  .yun-intro-actions {
+    margin-top: 28px;
+  }
+
+  .is-login-open .yun-intro-brand {
+    top: 21%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.76);
+    opacity: 0.32;
+  }
+
+  .yun-login-shell {
+    top: auto;
+    right: 18px;
+    bottom: 22px;
+    width: calc(100vw - 36px);
+    transform: translateY(28px) scale(0.985);
+  }
+
+  .yun-login-shell.is-open {
+    transform: translateY(0) scale(1);
+  }
+
+  .yun-login-form {
+    gap: 15px;
+    padding: 25px;
+  }
+
+  .yun-login-glass-wrap {
+    height: min(480px, calc(100dvh - 38px));
+  }
+
+  .yun-intro-footnote {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yun-intro,
+  .yun-intro *,
+  .yun-intro *::before,
+  .yun-intro *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 240ms !important;
+    transition-delay: 0ms !important;
+  }
+}

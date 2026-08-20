@@ -55,6 +55,20 @@ export async function scanMusicLibrary() {
   }
 }
 
+export async function importMusicFiles(files) {
+  const selected = Array.from(files || [])
+  for (const file of selected) {
+    const response = await fetch(`/api/music/import?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data.ok) throw new Error(data.error || `导入 ${file.name} 失败`)
+  }
+  return scanMusicLibrary()
+}
+
 export async function analyzeMusicLibraryTags({ limit = 80 } = {}) {
   const response = await fetch(`/api/music/analyze-tags?limit=${encodeURIComponent(limit)}`, {
     method: 'POST',
