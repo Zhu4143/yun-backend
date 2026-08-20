@@ -29,6 +29,32 @@
 .record-canvas-layer {
   z-index: 1;
   background: transparent;
+  isolation: isolate;
+}
+
+/* A broad, quiet smoke bed makes the record feel seated in the scene instead
+   of cut out against the flow field. It lives below the WebGL canvas, so it
+   never darkens the artwork or competes with the glass controls. */
+.record-canvas-layer::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  left: 51%;
+  top: 53%;
+  width: min(108vw, 1640px);
+  height: min(94vh, 1040px);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0.9;
+  filter: blur(42px);
+  background:
+    radial-gradient(ellipse 46% 52% at 49% 53%, rgba(0, 0, 0, 0.56) 0%, rgba(1, 4, 10, 0.38) 33%, rgba(3, 8, 17, 0.16) 56%, transparent 78%),
+    radial-gradient(ellipse 36% 44% at 68% 45%, rgba(20, 32, 62, 0.18) 0%, transparent 76%);
+}
+
+.record-canvas-layer > canvas {
+  position: relative;
+  z-index: 1;
 }
 
 .particle-vinyl-background canvas,
