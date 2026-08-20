@@ -151,7 +151,7 @@ function extractLyricLookup(message) {
   // 一下”， rather than requiring the user to say a fixed phrase like
   // “这首副歌有”.  A search intent is still mandatory, so ordinary lyric
   // discussion does not unexpectedly start a song search.
-  const hasLookupIntent = /(?:帮我|给我|能不能)?(?:找|搜|识别|查)(?:一下)?(?:这首|这句|这段)?(?:歌|歌曲)?|(?:这句|这段).{0,8}(?:什么歌|哪首歌)|(?:什么|哪)首歌/.test(raw)
+  const hasLookupIntent = /(?:帮我|给我|能不能)?(?:找|搜|识别|查)(?:一下)?(?:这首|这句|这段)?(?:歌|歌曲)?|(?:这句|这段).{0,8}(?:什么歌|哪首歌)|(?:什么|哪|哪个).{0,4}(?:歌|首)|(?:我记得|听到).{0,16}(?:有|叫|唱).{5,}/.test(raw)
   if (!hasLookupIntent) return ''
   const quoted = raw.match(/[《“"]([^》”"]{5,160})[》”"]/)
   if (quoted?.[1]) return quoted[1].trim()
@@ -179,7 +179,7 @@ async function playNeteaseFromLyricFragment(lyrics, player, responseMode) {
     if (!resolved.verified || !resolved.song) {
       return {
         handled: true,
-        reply: '这句歌词我还不能可靠地对应到一首歌，所以先不乱放。你再多说半句歌词，或者告诉我歌手/语言，我马上继续找。',
+        reply: '这句我还没敢随便认。你再给我半句歌词，或者说一下歌手/语言，我陪你把它找出来。',
         skipTts: responseMode === 'silent',
       }
     }
@@ -189,8 +189,8 @@ async function playNeteaseFromLyricFragment(lyrics, player, responseMode) {
     return {
       handled: true,
       reply: result?.ok
-        ? `找到了，这句歌词来自《${resolved.song.title}》${resolved.song.artist ? `，${resolved.song.artist}演唱` : ''}。`
-        : `我确认是《${resolved.song.title}》，但这首现在暂时播放不了。`,
+        ? `嗯，这句我认出来了——《${resolved.song.title}》${resolved.song.artist ? `，${resolved.song.artist}唱的` : ''}。我给你接上。`
+        : `我确认是《${resolved.song.title}》，但现在没能把它顺利放出来。`,
       song: result?.ok ? resolved.song : null,
       songReactionTrigger: result?.ok ? 'user_play' : null,
       skipTts: responseMode === 'silent',

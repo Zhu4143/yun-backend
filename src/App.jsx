@@ -111,6 +111,26 @@ function isWakeAcknowledgementEcho(transcript, acknowledgement) {
   return Boolean(heard && spoken && heard === spoken)
 }
 
+function stripLeadingWakeAcknowledgement(transcript, acknowledgement) {
+  const raw = String(transcript || '')
+  const compact = (value) => String(value || '').toLowerCase().replace(/[\s，。！？、,.!?~…]/g, '')
+  const heard = compact(raw)
+  const spoken = compact(acknowledgement)
+  if (!spoken || heard.length <= spoken.length || !heard.startsWith(spoken)) return raw
+
+  let matched = 0
+  let rawIndex = 0
+  for (; rawIndex < raw.length && matched < spoken.length; rawIndex += 1) {
+    const character = raw[rawIndex].toLowerCase()
+    if (/[\s，。！？、,.!?~…]/.test(character)) continue
+    if (character !== spoken[matched]) return raw
+    matched += 1
+  }
+  return matched === spoken.length
+    ? raw.slice(rawIndex).replace(/^[\s，。！？、,.!?~…]+/, '')
+    : raw
+}
+
 function getSongTags(song) {
   const tags = [...(song?.moodTags || []), ...(song?.sceneTags || [])]
 
@@ -1068,12 +1088,15 @@ function App({ onVisualReady }) {
   }, [])
 
   const handleVoiceTranscript = useCallback((transcript) => {
-    const text = normalizeVoiceTranscript(transcript)
+    let text = normalizeVoiceTranscript(transcript)
     setVoiceInputActive(false)
     setChatDraft('')
     voiceRetryAttemptsRef.current = 0
     setVoiceResumeDelayMs(320)
     const wakeAcknowledgementEcho = wakeAcknowledgementEchoRef.current
+    if (Date.now() < wakeAcknowledgementEcho.expiresAt) {
+      text = normalizeVoiceTranscript(stripLeadingWakeAcknowledgement(text, wakeAcknowledgementEcho.text))
+    }
     const isWakeAcknowledgementEchoed = Date.now() < wakeAcknowledgementEcho.expiresAt
       && isWakeAcknowledgementEcho(text, wakeAcknowledgementEcho.text)
     const isWithinEchoWindow = Date.now() < echoGuardUntilRef.current
