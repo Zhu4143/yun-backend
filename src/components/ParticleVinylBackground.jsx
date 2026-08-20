@@ -2402,9 +2402,10 @@ function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mo
         portraitTransition={portraitTransition}
         quality={quality}
       />
-      {quality === 'high' && (
-        <LiquidGlassOrbPass visible={voiceOrbVisible} voiceLevel={voiceOrbLevel} topFogStrength={topFogStrength} topBlurStrength={topBlurStrength} />
-      )}
+      {/* The pass also composites the top controls and library glass. Keep it
+          mounted at every quality level; the canvas DPR below is what bounds
+          its cost on the recommended and smooth presets. */}
+      <LiquidGlassOrbPass visible={voiceOrbVisible} voiceLevel={voiceOrbLevel} topFogStrength={topFogStrength} topBlurStrength={topBlurStrength} />
     </>
   )
 }
