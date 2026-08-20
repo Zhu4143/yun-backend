@@ -1795,6 +1795,18 @@ function App({ onVisualReady }) {
     if (!panel) {
       return
     }
+    // Top settings are attached sheets, not objects that should collapse back
+    // into their trigger. Fade them away on click-away/toggle instead.
+    if (panel === 'voice' || panel === 'memory') {
+      setPanelContentVisible(false)
+      window.setTimeout(() => {
+        setActivePanel((current) => current === panel ? null : current)
+        setPendingMorph(null)
+        setMorphLayer(null)
+        setPanelContentVisible(true)
+      }, 170)
+      return
+    }
     if (panel === 'library') {
       setLibraryEdgeOpen(false)
       window.clearTimeout(libraryEdgeTimerRef.current)
