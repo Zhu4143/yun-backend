@@ -2232,11 +2232,9 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     pass.material.uniforms.uOpticalFlow.value = opticalField.flow
     pass.material.uniforms.uOpticalBlur.value = opticalField.blur
     pass.material.uniforms.uOpticalChromatic.value = opticalField.chromatic
-    // Keep the connected top-control surface clear while its material is
-    // being refined. The sliders retain their saved values for later, but do
-    // not feed fog or blur into the glass shader for now.
-    pass.material.uniforms.uTopFogStrength.value = 0
-    pass.material.uniforms.uTopBlurStrength.value = 0
+    const mountainPanelIsOpen = document.querySelector('.mountain-tuning-panel')?.classList.contains('is-open')
+    pass.material.uniforms.uTopFogStrength.value = THREE.MathUtils.clamp(topFogStrength, 0, 20)
+    pass.material.uniforms.uTopBlurStrength.value = THREE.MathUtils.clamp(topBlurStrength, 0, 20)
     const libraryElement = document.querySelector('.local-library-drawer')
     const libraryTarget = libraryElement?.classList.contains('is-open') ? 1 : 0
     const libraryResponse = libraryTarget > libraryOpenProgressRef.current ? 2.6 : 3.8
@@ -2307,6 +2305,10 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
         const isTopControlsButton = element.matches('.mode-option, .persona-option, .action-button, .gesture-camera-toggle')
         const isTopControlsShell = element.matches('.top-controls-card')
         if (element.closest('.top-controls-card') && !isTopControlsButton && !isTopControlsShell) continue
+        // When Mountain extends the shell, its lower content area remains a
+        // clear continuation of the panel instead of receiving a second,
+        // full-height layer of optical fog.
+        if (isTopControlsShell && mountainPanelIsOpen) continue
         const rect = element.getBoundingClientRect()
         const style = window.getComputedStyle(element)
         if (Number(style.opacity) <= 0.08 || style.display === 'none' || rect.width < 18 || rect.height < 18) continue
@@ -2337,7 +2339,10 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
       }
       if (topControlsElement) {
         const rect = topControlsElement.getBoundingClientRect()
-        writeCanvasRect(pass.material.uniforms.uTopControlsRect.value, rect)
+        const topMaterialRect = mountainPanelIsOpen
+          ? { left: rect.left, top: rect.top, width: rect.width, height: Math.min(rect.height, 164) }
+          : rect
+        writeCanvasRect(pass.material.uniforms.uTopControlsRect.value, topMaterialRect)
       }
     }
     playerRectFrameRef.current += 1
