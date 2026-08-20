@@ -147,13 +147,24 @@ async function playNeteaseFromMessage(message, player, responseMode, context = {
 
 function extractLyricLookup(message) {
   const raw = String(message || '').trim()
-  if (!/(歌词|这句|一句|唱的是|我记得|听到一句)/.test(raw)) return ''
-  if (!/(什么歌|哪首歌|找.*歌|识别|播放|放这首|帮我找)/.test(raw)) return ''
+  // Accept natural requests such as “我记得有首歌里唱了……，帮我找
+  // 一下”， rather than requiring the user to say a fixed phrase like
+  // “这首副歌有”.  A search intent is still mandatory, so ordinary lyric
+  // discussion does not unexpectedly start a song search.
+  const hasLookupIntent = /(?:帮我|给我|能不能)?(?:找|搜|识别|查)(?:一下)?(?:这首|这句|这段)?(?:歌|歌曲)?|(?:这句|这段).{0,8}(?:什么歌|哪首歌)|(?:什么|哪)首歌/.test(raw)
+  if (!hasLookupIntent) return ''
   const quoted = raw.match(/[《“"]([^》”"]{5,160})[》”"]/)
-  const afterMarker = raw.match(/(?:歌词(?:是|叫)?|唱的是|这句是|我记得(?:一句)?|听到一句)\s*[:：，,]?\s*(.{5,160})$/)
-  return String(quoted?.[1] || afterMarker?.[1] || '')
+  if (quoted?.[1]) return quoted[1].trim()
+
+  const afterMarker = raw.match(/(?:有(?:这样(?:的)?)?(?:歌词|一句|一段)|歌词(?:是|叫|里有)?|唱的是|这句(?:是|唱)?|我记得(?:有)?(?:首歌)?(?:里)?|听到(?:一句|一段)?)\s*[:：，,]?\s*(.{5,200})$/)
+  const candidate = String(afterMarker?.[1] || raw)
+    .replace(/(?:，|,|。|\.|然后|麻烦你|你能(?:不能)?|帮我|给我).{0,24}?(?:找|搜|识别|查)(?:一下)?(?:这首|这句|这段)?(?:歌|歌曲)?[。！？!？]?$/g, '')
     .replace(/(?:这是什么歌|是哪首歌|帮我找(?:一下)?|帮我播放|播放这首|放这首)$/g, '')
     .trim()
+  // The server extracts the lyric from this natural-language candidate and
+  // rejects weak evidence. Require a small meaningful fragment before paying
+  // for that network round trip.
+  return compactText(candidate).length >= 5 ? candidate : ''
 }
 
 async function playNeteaseFromLyrics(message, player, responseMode) {
