@@ -158,6 +158,7 @@ function extractLyricLookup(message) {
 
   const afterMarker = raw.match(/(?:有(?:这样(?:的)?)?(?:歌词|一句|一段)|歌词(?:是|叫|里有)?|唱的是|这句(?:是|唱)?|我记得(?:有)?(?:首歌)?(?:里)?|听到(?:一句|一段)?)\s*[:：，,]?\s*(.{5,200})$/)
   const candidate = String(afterMarker?.[1] || raw)
+    .replace(/^(?:那首(?:就是|是)?|我记得(?:有)?(?:一首)?(?:歌)?(?:里)?|有(?:一首)?(?:歌)?(?:里)?|歌词(?:是|叫|里有)?|唱的是)\s*/g, '')
     .replace(/(?:，|,|。|\.|然后|麻烦你|你能(?:不能)?|帮我|给我).{0,24}?(?:找|搜|识别|查)(?:一下)?(?:这首|这句|这段)?(?:歌|歌曲)?[。！？!？]?$/g, '')
     .replace(/(?:这是什么歌|是哪首歌|帮我找(?:一下)?|帮我播放|播放这首|放这首)$/g, '')
     .trim()
@@ -403,6 +404,9 @@ async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked
     if (!tracks.length) {
       return { handled: true, reply: `《${selected.name}》里暂时没有可播放歌曲。`, skipTts: responseMode === 'silent' }
     }
+    // A personal playlist is a fixed queue, not an AI radio session. Keep the
+    // visible playback mode aligned with the spoken “按顺序播放” confirmation.
+    player.setPlaybackMode?.('sequence')
     const result = player.playSongFromQueue
       ? await player.playSongFromQueue(tracks[0], tracks)
       : await player.playSong(tracks[0])

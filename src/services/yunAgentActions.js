@@ -63,6 +63,7 @@ export async function executeYunAgentActions(actions, { player, voice, context =
             results.push({ ok: false, cancelled: true })
             break
           }
+          player?.setPlaybackMode?.('sequence')
           results.push(tracks[0]
             ? await player?.playSongFromQueue?.(tracks[0], tracks, { crossfade: Boolean(player?.currentSong) })
             : { ok: false, error: 'netease_playlist_empty' })
