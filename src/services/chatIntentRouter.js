@@ -332,8 +332,21 @@ function executePlayerSettingIntent(message, player, responseMode) {
   }
 }
 
-async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked = false } = {}) {
+function playlistChoiceIndex(message) {
+  const text = String(message || '').replace(/\s/g, '')
+  if (/^(?:取消|算了|不要了)[。！？!]?$/i.test(text)) return -1
+  const match = text.match(/^(?:选|播放)?(?:第)?([1-5一二三四五])[个首]?/i)
+  if (!match) return null
+  const numbers = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5 }
+  return Number(match[1]) || numbers[match[1]] || null
+}
+
+async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked = false, pendingSelection = null } = {}) {
   const raw = String(message || '').trim()
+  const choiceIndex = pendingSelection ? playlistChoiceIndex(raw) : null
+  if (choiceIndex === -1) {
+    return { handled: true, reply: '好，已取消这次歌单选择。', skipTts: responseMode === 'silent', playlistSelectionResolved: true }
+  }
   // Keep collection mutations and playback mutually exclusive even when a
   // future phrase adds another transfer verb.
   if (!forceLiked && getNeteaseCollectionRequest(raw)) return { handled: false }
@@ -341,7 +354,9 @@ async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked
   const asksLiked = forceLiked || /我喜欢的(?:音乐|歌|歌曲)?|我的喜欢|喜欢的音乐|收藏的(?:音乐|歌|歌曲)?|红心(?:歌|歌曲|音乐)?/.test(raw)
   const asksPlaylist = asksLiked || /网易云|云音乐|歌单/.test(raw)
   const asksPlay = forceLiked || /播放|放|听|来一首|来点|开始|继续/.test(raw)
-  if (!asksPlaylist || !asksPlay) return { handled: false }
+  if (!asksPlaylist || !asksPlay) {
+    if (!pendingSelection || !Number.isInteger(choiceIndex) || choiceIndex < 1) return { handled: false }
+  }
 
   try {
     const account = await fetchNeteaseMe()
@@ -349,14 +364,29 @@ async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked
       return { handled: true, reply: '请先登录网易云，我才能播放你的喜欢音乐和歌单。', skipTts: responseMode === 'silent' }
     }
     const playlists = Array.isArray(account.playlists) ? account.playlists : []
-    const selected = asksLiked
-      ? playlists.find((playlist) => playlist.liked)
-      : playlists.find((playlist) => {
+    const matching = asksLiked
+      ? playlists.filter((playlist) => playlist.liked)
+      : playlists.filter((playlist) => {
         const name = compactText(playlist.name)
         return name.length >= 2 && compact.includes(name)
       })
+    const candidates = pendingSelection && Number.isInteger(choiceIndex) && choiceIndex >= 1
+      ? pendingSelection.candidates || []
+      : matching
+    if (!asksLiked && !pendingSelection && matching.length > 1) {
+      const options = matching.slice(0, 5).map((playlist, index) => `第${index + 1}个《${playlist.name}》`).join('、')
+      return {
+        handled: true,
+        reply: `我找到了 ${matching.length} 个同名歌单：${options}。你想播放哪一个？`,
+        skipTts: responseMode === 'silent',
+        playlistSelection: { candidates: matching.slice(0, 5).map((playlist) => ({ id: playlist.id, name: playlist.name })) },
+      }
+    }
+    const selected = pendingSelection && Number.isInteger(choiceIndex) && choiceIndex >= 1
+      ? playlists.find((playlist) => playlist.id === candidates[choiceIndex - 1]?.id)
+      : matching[0]
     if (!selected) {
-      return { handled: true, reply: asksLiked ? '我没有找到你的“我喜欢的音乐”歌单。' : '我没有在你的网易云歌单里找到这个名字。请直接说完整歌单名。', skipTts: responseMode === 'silent' }
+      return { handled: true, reply: pendingSelection ? '这个歌单选择已经失效了，请重新说一次歌单名。' : (asksLiked ? '我没有找到你的“我喜欢的音乐”歌单。' : '我没有在你的网易云歌单里找到这个名字。请直接说完整歌单名。'), skipTts: responseMode === 'silent', playlistSelectionResolved: Boolean(pendingSelection) }
     }
     const tracks = await fetchNeteasePlaylistTracks(selected.id)
     if (!tracks.length) {
@@ -370,12 +400,14 @@ async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked
       reply: result?.ok ? `正在按顺序播放你的网易云歌单《${selected.liked ? '我喜欢的音乐' : selected.name}》。` : `找到了《${selected.name}》，但第一首暂时播放失败。`,
       song: result?.ok ? tracks[0] : null,
       skipTts: responseMode === 'silent',
+      playlistSelectionResolved: Boolean(pendingSelection),
     }
   } catch (error) {
     return {
       handled: true,
       reply: neteaseOperationFailureReply(error, responseMode, '读取你的歌单'),
       skipTts: responseMode === 'silent',
+      playlistSelectionResolved: Boolean(pendingSelection),
     }
   }
 }
@@ -843,6 +875,7 @@ export async function routeChatIntent({
   playHistory = [],
   rejectedTracks = [],
   recentRecommendations = [],
+  pendingPlaylistSelection = null,
 }) {
   // Playback controls are latency-sensitive, especially on a voice turn.
   // They must never wait for the model-backed intent gate: Pro models can
@@ -873,7 +906,7 @@ export async function routeChatIntent({
   const artistCatalog = await playNeteaseArtistCatalog(message, player, responseMode)
   if (artistCatalog.handled) return artistCatalog
 
-  const myPlaylist = await playMyNeteasePlaylist(message, player, responseMode)
+  const myPlaylist = await playMyNeteasePlaylist(message, player, responseMode, { pendingSelection: pendingPlaylistSelection })
   if (myPlaylist.handled) return myPlaylist
 
   // An explicit song-and-artist request is already deterministic. Bypass the

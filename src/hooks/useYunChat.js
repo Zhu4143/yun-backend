@@ -34,6 +34,11 @@ function isFollowUpMessage(text) {
   return /^(详细描述一下|详细说说|展开说说|继续|继续说|接着说|然后呢|多说一点|说具体点|描述一下|展开一下)[。！？!?.\s]*$/.test(normalized)
 }
 
+function isPlaylistChoiceReply(text) {
+  return /^(?:选|播放)?(?:第)?[1-5一二三四五][个首]?[。！？!]?$/i.test(String(text || '').replace(/\s/g, ''))
+    || /^(?:取消|算了|不要了)[。！？!]?$/i.test(String(text || '').trim())
+}
+
 function compactText(text) {
   return String(text || '').replace(/[\s，。！？、,.!?~…《》]/g, '').toLowerCase()
 }
@@ -150,6 +155,7 @@ export function useYunChat({
   const requestEpochRef = useRef(0)
   const requestBusyRef = useRef(false)
   const queuedLatestMessageRef = useRef(null)
+  const pendingPlaylistSelectionRef = useRef(null)
 
   const rememberPlayedSong = useCallback((song) => {
     if (!song) return
@@ -192,6 +198,9 @@ export function useYunChat({
     requestBusyRef.current = true
 
     const displayText = userText || '请帮我看看这张截图'
+    if (pendingPlaylistSelectionRef.current && !isPlaylistChoiceReply(displayText)) {
+      pendingPlaylistSelectionRef.current = null
+    }
     const recentHistoryWithUser = buildRecentHistory(chatHistory, displayText)
     const nextUserMessage = createMessage(
       'user',
@@ -263,8 +272,12 @@ export function useYunChat({
         playHistory,
         rejectedTracks: [],
         recentRecommendations,
+        pendingPlaylistSelection: pendingPlaylistSelectionRef.current,
       })
       if (!isCurrentRequest()) return false
+
+      if (routed.playlistSelection) pendingPlaylistSelectionRef.current = routed.playlistSelection
+      else if (routed.playlistSelectionResolved) pendingPlaylistSelectionRef.current = null
 
     if (routed.handled) {
         if (routed.song) {
