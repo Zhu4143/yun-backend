@@ -2227,12 +2227,12 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
       18,
       delta,
     )
+    const mountainPanelIsOpen = document.querySelector('.mountain-tuning-panel')?.classList.contains('is-open')
     pass.material.uniforms.uOpticalIntensity.value = opticalField.intensity
     pass.material.uniforms.uOpticalDistortion.value = opticalField.distortion
     pass.material.uniforms.uOpticalFlow.value = opticalField.flow
-    pass.material.uniforms.uOpticalBlur.value = opticalField.blur
+    pass.material.uniforms.uOpticalBlur.value = mountainPanelIsOpen ? 0 : opticalField.blur
     pass.material.uniforms.uOpticalChromatic.value = opticalField.chromatic
-    const mountainPanelIsOpen = document.querySelector('.mountain-tuning-panel')?.classList.contains('is-open')
     pass.material.uniforms.uTopFogStrength.value = mountainPanelIsOpen ? 0 : THREE.MathUtils.clamp(topFogStrength, 0, 20)
     pass.material.uniforms.uTopBlurStrength.value = mountainPanelIsOpen ? 0 : THREE.MathUtils.clamp(topBlurStrength, 0, 20)
     const libraryElement = document.querySelector('.local-library-drawer')
