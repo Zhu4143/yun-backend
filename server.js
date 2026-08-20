@@ -2191,7 +2191,7 @@ function getSafeNeteaseCoverUrl(value) {
     const hostname = coverUrl.hostname.toLowerCase()
     if (
       !['http:', 'https:'].includes(coverUrl.protocol)
-      || !/^p[1-4]\.music\.126\.net$/.test(hostname)
+      || !/^(?:p[1-4]\.)?music\.126\.net$/.test(hostname)
     ) {
       return null
     }

@@ -6,7 +6,11 @@ export function normalizeNeteaseSong(song) {
   // NetEase's image CDN can be rendered by an <img>, but it does not
   // consistently permit canvas/WebGL reads. Route it through our same-origin
   // proxy so the particle record and palette sampler receive usable pixels.
-  const coverUrl = /^https?:\/\/p[1-4]\.music\.126\.net\//i.test(rawCoverUrl)
+  // A CSS background can display some NetEase image hosts directly, while a
+  // WebGL texture cannot safely read the same image without CORS approval.
+  // Route every remote NetEase cover through our same-origin proxy so the
+  // small player cover and the particle record always use identical pixels.
+  const coverUrl = /^https?:\/\//i.test(rawCoverUrl)
     ? `/api/netease/cover?url=${encodeURIComponent(rawCoverUrl)}`
     : rawCoverUrl
 
