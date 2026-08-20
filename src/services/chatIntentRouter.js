@@ -17,6 +17,18 @@ function compactText(text) {
     .replace(/[\s，。！？、,.!?~…《》"'“”‘’()[\]{}【】（）\-_/\\|]/g, '')
 }
 
+function neteaseOperationFailureReply(error, responseMode, operation = '读取网易云内容') {
+  if (responseMode === 'silent') return '...'
+  const message = String(error instanceof Error ? error.message : error || '')
+  if (/failed to fetch|networkerror|网络.*(?:断开|异常|不可用)|连接.*(?:失败|不上|不可用)/i.test(message)) {
+    return `网易云连接暂时不可用，${operation}没有完成。你可以检查网络后重试，或者让我改为播放本地音乐。`
+  }
+  if (/登录|401|unauthor/i.test(message)) {
+    return '网易云登录已失效，请重新登录后再试。'
+  }
+  return `网易云暂时无法${operation}。请稍后重试。`
+}
+
 function collectTextValues(value, output = []) {
   if (!value) return output
   if (typeof value === 'string') {
@@ -331,32 +343,40 @@ async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked
   const asksPlay = forceLiked || /播放|放|听|来一首|来点|开始|继续/.test(raw)
   if (!asksPlaylist || !asksPlay) return { handled: false }
 
-  const account = await fetchNeteaseMe()
-  if (!account?.loggedIn) {
-    return { handled: true, reply: '请先登录网易云，我才能播放你的喜欢音乐和歌单。', skipTts: responseMode === 'silent' }
-  }
-  const playlists = Array.isArray(account.playlists) ? account.playlists : []
-  const selected = asksLiked
-    ? playlists.find((playlist) => playlist.liked)
-    : playlists.find((playlist) => {
-      const name = compactText(playlist.name)
-      return name.length >= 2 && compact.includes(name)
-    })
-  if (!selected) {
-    return { handled: true, reply: asksLiked ? '我没有找到你的“我喜欢的音乐”歌单。' : '我没有在你的网易云歌单里找到这个名字。请直接说完整歌单名。', skipTts: responseMode === 'silent' }
-  }
-  const tracks = await fetchNeteasePlaylistTracks(selected.id)
-  if (!tracks.length) {
-    return { handled: true, reply: `《${selected.name}》里暂时没有可播放歌曲。`, skipTts: responseMode === 'silent' }
-  }
-  const result = player.playSongFromQueue
-    ? await player.playSongFromQueue(tracks[0], tracks)
-    : await player.playSong(tracks[0])
-  return {
-    handled: true,
-    reply: result?.ok ? `正在按顺序播放你的网易云歌单《${selected.liked ? '我喜欢的音乐' : selected.name}》。` : `找到了《${selected.name}》，但第一首暂时播放失败。`,
-    song: result?.ok ? tracks[0] : null,
-    skipTts: responseMode === 'silent',
+  try {
+    const account = await fetchNeteaseMe()
+    if (!account?.loggedIn) {
+      return { handled: true, reply: '请先登录网易云，我才能播放你的喜欢音乐和歌单。', skipTts: responseMode === 'silent' }
+    }
+    const playlists = Array.isArray(account.playlists) ? account.playlists : []
+    const selected = asksLiked
+      ? playlists.find((playlist) => playlist.liked)
+      : playlists.find((playlist) => {
+        const name = compactText(playlist.name)
+        return name.length >= 2 && compact.includes(name)
+      })
+    if (!selected) {
+      return { handled: true, reply: asksLiked ? '我没有找到你的“我喜欢的音乐”歌单。' : '我没有在你的网易云歌单里找到这个名字。请直接说完整歌单名。', skipTts: responseMode === 'silent' }
+    }
+    const tracks = await fetchNeteasePlaylistTracks(selected.id)
+    if (!tracks.length) {
+      return { handled: true, reply: `《${selected.name}》里暂时没有可播放歌曲。`, skipTts: responseMode === 'silent' }
+    }
+    const result = player.playSongFromQueue
+      ? await player.playSongFromQueue(tracks[0], tracks)
+      : await player.playSong(tracks[0])
+    return {
+      handled: true,
+      reply: result?.ok ? `正在按顺序播放你的网易云歌单《${selected.liked ? '我喜欢的音乐' : selected.name}》。` : `找到了《${selected.name}》，但第一首暂时播放失败。`,
+      song: result?.ok ? tracks[0] : null,
+      skipTts: responseMode === 'silent',
+    }
+  } catch (error) {
+    return {
+      handled: true,
+      reply: neteaseOperationFailureReply(error, responseMode, '读取你的歌单'),
+      skipTts: responseMode === 'silent',
+    }
   }
 }
 
