@@ -5457,12 +5457,20 @@ button {
     width: min(540px, calc(100vw - 48px)) !important;
     margin: 0 !important;
     padding: 18px 20px 20px !important;
-    border: 0 !important;
+    border: 1px solid rgba(255, 255, 255, 0.16) !important;
+    border-top: 0 !important;
     border-radius: 0 0 var(--top-controls-radius) var(--top-controls-radius) !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    background:
+      linear-gradient(180deg, rgba(12, 18, 28, 0.56), rgba(12, 18, 28, 0.38)),
+      linear-gradient(112deg, transparent 10%, rgba(255, 255, 255, 0.055) 31%, transparent 50%),
+      radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--song-secondary) 11%, transparent), transparent 42%),
+      radial-gradient(circle at 86% 100%, color-mix(in srgb, var(--song-primary) 9%, transparent), transparent 46%) !important;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      inset 0 -18px 32px rgba(0, 0, 0, 0.12),
+      0 18px 44px rgba(2, 6, 12, 0.2) !important;
+    backdrop-filter: blur(20px) saturate(118%) brightness(0.88) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(118%) brightness(0.88) !important;
     overflow: hidden auto !important;
     transform: translateX(-50%) !important;
   }
@@ -5486,6 +5494,48 @@ button {
 
   .app .voice-popover.is-open > .glass-specular-highlight--opposite {
     opacity: 0.58;
+  }
+
+  /* Reuse the top-bar control surface for every actionable voice setting. */
+  .app .voice-popover :is(.voice-toggle, .voice-value-asr-set, .voice-preview-button, .voice-option, .voiceprint-button) {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border-color: rgba(255, 255, 255, 0.16) !important;
+    background: transparent !important;
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.22),
+      inset 0 4px 8px rgba(255, 255, 255, 0.012),
+      inset 0 -6px 10px rgba(2, 5, 12, 0.08) !important;
+    color: rgba(255, 255, 255, 0.78);
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .app .voice-popover :is(.voice-toggle, .voice-value-asr-set, .voice-preview-button, .voice-option, .voiceprint-button):hover:not(:disabled),
+  .app .voice-popover :is(.voice-toggle.is-on, .voice-option.is-active) {
+    border-color: rgba(255, 244, 220, 0.32) !important;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.012)),
+      linear-gradient(112deg, transparent 10%, rgba(255, 255, 255, 0.04) 31%, transparent 48%),
+      rgba(255, 255, 255, 0.01) !important;
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.34),
+      inset 0 -7px 12px rgba(38, 21, 12, 0.08),
+      0 0 10px color-mix(in srgb, var(--song-secondary) 8%, transparent) !important;
+  }
+
+  .app .voice-popover .voice-custom input {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(7, 12, 20, 0.34);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.12),
+      inset 0 -6px 12px rgba(0, 0, 0, 0.08);
+    color: rgba(255, 255, 255, 0.84);
+  }
+
+  .app .voice-popover .voice-custom input::placeholder {
+    color: rgba(255, 255, 255, 0.42);
   }
 }
 
