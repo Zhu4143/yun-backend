@@ -1324,12 +1324,15 @@ function App({ onVisualReady }) {
   }, [])
 
   const scheduleTopControlsClose = useCallback(() => {
+    // A settings panel is visually attached to this shell. Do not collapse
+    // the shell while the pointer moves from its button into that panel.
+    if (activePanel === 'voice') return
     if (!topControlsOpen || topControlsTimerRef.current) return
     topControlsTimerRef.current = window.setTimeout(() => {
       topControlsTimerRef.current = null
       setTopControlsOpen(false)
     }, 680)
-  }, [topControlsOpen])
+  }, [activePanel, topControlsOpen])
 
   useEffect(() => () => window.clearTimeout(topControlsTimerRef.current), [])
 
@@ -2530,6 +2533,9 @@ function App({ onVisualReady }) {
           width: 'var(--voice-popover-width)',
         }}
       >
+        <span className="glass-edge-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight glass-specular-highlight--opposite" aria-hidden="true" />
         <div className="voice-popover-header">
           <p className="sub">VOICE</p>
           <h2>声音与朗读</h2>

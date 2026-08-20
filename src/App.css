@@ -5436,6 +5436,59 @@ button {
   backdrop-filter: none !important;
 }
 
+/* The voice panel is an extension of the top-controls glass volume, not a
+   second floating card. The WebGL glass pass sees both shells at the same
+   strength; these DOM rules only provide the connected geometry and edge. */
+@media (min-width: 721px) {
+  .app:has(.voice-popover.is-open) .top-controls-card {
+    border-radius: var(--top-controls-radius) var(--top-controls-radius) 0 0;
+  }
+
+  .app:has(.voice-popover.is-open) .top-controls-card > .glass-specular-highlight--opposite {
+    opacity: 0;
+  }
+
+  .app .voice-popover.glass-popover.glass-level-3,
+  .app .voice-popover.glass-popover.glass-level-3.is-open {
+    position: fixed !important;
+    top: 198px !important;
+    right: auto !important;
+    left: 50% !important;
+    width: min(540px, calc(100vw - 48px)) !important;
+    margin: 0 !important;
+    padding: 18px 20px 20px !important;
+    border: 0 !important;
+    border-radius: 0 0 var(--top-controls-radius) var(--top-controls-radius) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: hidden auto !important;
+    transform: translateX(-50%) !important;
+  }
+
+  .app .voice-popover.glass-popover.glass-level-3::before,
+  .app .voice-popover.glass-popover.glass-level-3::after {
+    display: none;
+  }
+
+  .app .voice-popover > :is(.glass-edge-highlight, .glass-specular-highlight) {
+    border-radius: inherit;
+  }
+
+  .app .voice-popover.is-open > .glass-edge-highlight {
+    opacity: 0.48;
+  }
+
+  .app .voice-popover.is-open > .glass-specular-highlight {
+    opacity: 0.58;
+  }
+
+  .app .voice-popover.is-open > .glass-specular-highlight--opposite {
+    opacity: 0.58;
+  }
+}
+
 .app .local-library-drawer,
 .app .local-library-drawer.is-open {
   position: fixed !important;

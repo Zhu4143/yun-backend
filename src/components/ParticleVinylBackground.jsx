@@ -2291,6 +2291,7 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
         '.top-controls-card.is-open .persona-option',
         '.top-controls-card.is-open .action-button',
         '.top-controls-card.is-open .gesture-camera-toggle',
+        '.top-controls-card.is-open',
         '.voice-popover.is-open',
         '.memory-settings-panel.is-open',
         '.mountain-tuning-panel.is-open',
@@ -2302,7 +2303,8 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
       for (const element of elements) {
         if (glassCount >= 24) break
         const isTopControlsButton = element.matches('.mode-option, .persona-option, .action-button, .gesture-camera-toggle')
-        if (element.closest('.top-controls-card') && !isTopControlsButton) continue
+        const isTopControlsShell = element.matches('.top-controls-card')
+        if (element.closest('.top-controls-card') && !isTopControlsButton && !isTopControlsShell) continue
         const rect = element.getBoundingClientRect()
         const style = window.getComputedStyle(element)
         if (Number(style.opacity) <= 0.08 || style.display === 'none' || rect.width < 18 || rect.height < 18) continue
