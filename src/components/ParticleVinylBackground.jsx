@@ -2232,12 +2232,11 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     pass.material.uniforms.uOpticalFlow.value = opticalField.flow
     pass.material.uniforms.uOpticalBlur.value = opticalField.blur
     pass.material.uniforms.uOpticalChromatic.value = opticalField.chromatic
-    // The mountain controls reuse the top shell as one long pane. Keep that
-    // transition optically simple for now: a large live blur region is much
-    // more expensive to animate than the transparent glass surface.
-    const mountainPanelIsOpen = document.querySelector('.mountain-tuning-panel')?.classList.contains('is-open')
-    pass.material.uniforms.uTopFogStrength.value = mountainPanelIsOpen ? 0 : THREE.MathUtils.clamp(topFogStrength, 0, 20)
-    pass.material.uniforms.uTopBlurStrength.value = mountainPanelIsOpen ? 0 : THREE.MathUtils.clamp(topBlurStrength, 0, 20)
+    // Keep the connected top-control surface clear while its material is
+    // being refined. The sliders retain their saved values for later, but do
+    // not feed fog or blur into the glass shader for now.
+    pass.material.uniforms.uTopFogStrength.value = 0
+    pass.material.uniforms.uTopBlurStrength.value = 0
     const libraryElement = document.querySelector('.local-library-drawer')
     const libraryTarget = libraryElement?.classList.contains('is-open') ? 1 : 0
     const libraryResponse = libraryTarget > libraryOpenProgressRef.current ? 2.6 : 3.8
