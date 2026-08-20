@@ -10,8 +10,14 @@ const FALLBACK_COVER = '/scene.png'
 // Dense enough that the deformed mountain surface reads as continuous rather
 // than as separated rows of dots. 340² stays reasonable for a desktop GPU
 // while providing about 71% more samples than the previous 260² grid.
-const GRID_SIZE = 300
-const POINT_COUNT = GRID_SIZE * GRID_SIZE
+const GRID_SIZE_BY_QUALITY = {
+  // "推荐" is the default on most desktop machines.  It must leave enough
+  // frame budget for typing, clicks, audio start and image decoding instead
+  // of behaving like the old high-quality showcase renderer.
+  low: 132,
+  medium: 180,
+  high: 300,
+}
 const SPECTRUM_BINS = 48
 const RIM_TRAIL_INNER_RADIUS = 2.84
 const RIM_TRAIL_OUTER_RADIUS = 3.62
@@ -326,7 +332,7 @@ function useCoverTexture(coverUrl) {
   return textureRef
 }
 
-function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition }) {
+function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition, quality }) {
   const materialRef = useRef(null)
   const rimTrailMaterialRef = useRef(null)
   const pointsRef = useRef(null)
@@ -440,15 +446,17 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
   }, [pointerRef])
 
   const geometry = useMemo(() => {
-    const positions = new Float32Array(POINT_COUNT * 3)
-    const uvs = new Float32Array(POINT_COUNT * 2)
+    const gridSize = GRID_SIZE_BY_QUALITY[quality] || GRID_SIZE_BY_QUALITY.medium
+    const pointCount = gridSize * gridSize
+    const positions = new Float32Array(pointCount * 3)
+    const uvs = new Float32Array(pointCount * 2)
     let point = 0
     let uv = 0
 
-    for (let y = 0; y < GRID_SIZE; y += 1) {
-      for (let x = 0; x < GRID_SIZE; x += 1) {
-        const u = x / (GRID_SIZE - 1)
-        const v = y / (GRID_SIZE - 1)
+    for (let y = 0; y < gridSize; y += 1) {
+      for (let x = 0; x < gridSize; x += 1) {
+        const u = x / (gridSize - 1)
+        const v = y / (gridSize - 1)
         positions[point] = u * 2 - 1
         positions[point + 1] = v * 2 - 1
         positions[point + 2] = 0
@@ -464,7 +472,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     nextGeometry.setAttribute('aUv', new THREE.BufferAttribute(uvs, 2))
     nextGeometry.computeBoundingSphere()
     return nextGeometry
-  }, [])
+  }, [quality])
 
   const material = useMemo(() => new THREE.ShaderMaterial({
     transparent: true,
@@ -2379,7 +2387,7 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
   return null
 }
 
-function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition }) {
+function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition, quality }) {
   return (
     <>
       <ambientLight intensity={0.45} />
@@ -2392,8 +2400,11 @@ function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mo
         mountainControls={mountainControls}
         voiceOrbVisible={voiceOrbVisible}
         portraitTransition={portraitTransition}
+        quality={quality}
       />
-      <LiquidGlassOrbPass visible={voiceOrbVisible} voiceLevel={voiceOrbLevel} topFogStrength={topFogStrength} topBlurStrength={topBlurStrength} />
+      {quality === 'high' && (
+        <LiquidGlassOrbPass visible={voiceOrbVisible} voiceLevel={voiceOrbLevel} topFogStrength={topFogStrength} topBlurStrength={topBlurStrength} />
+      )}
     </>
   )
 }
@@ -2469,9 +2480,9 @@ export default function ParticleVinylBackground({
   const resolvedCoverUrl = coverUrl || FALLBACK_COVER
   const flowTrackKey = paletteSource === resolvedCoverUrl ? (trackKey || resolvedCoverUrl) : ''
   const recordDpr = quality === 'low'
-    ? [0.5, 0.7]
+    ? [0.45, 0.58]
     : quality === 'medium'
-      ? [0.65, 0.85]
+      ? [0.58, 0.72]
       : [0.85, 1.12]
 
   useEffect(() => {
@@ -2652,6 +2663,7 @@ export default function ParticleVinylBackground({
               voiceOrbVisible={voiceOrbVisible}
               voiceOrbLevel={voiceOrbLevel}
               portraitTransition={portraitTransition}
+              quality={quality}
             />
           </Canvas>
         </div>

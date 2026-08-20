@@ -30,7 +30,7 @@ function Test-PortOpen {
 
 function Wait-YunFrontend {
   param(
-    [string]$Url = "http://127.0.0.1:5173",
+    [string]$Url = "http://127.0.0.1:5173/",
     [int]$TimeoutSeconds = 45
   )
 
@@ -202,7 +202,7 @@ if ($EnableWechat -and -not $NoWechat) {
 
 Write-Host ""
 Write-Host "Yun stack launch requested." -ForegroundColor Green
-Write-Host "Frontend: http://127.0.0.1:5173"
+Write-Host "Frontend: http://127.0.0.1:5173/"
 Write-Host "Backend:  http://127.0.0.1:3030"
 Write-Host "Agent WS: ws://127.0.0.1:3131"
 Write-Host "Agent HTTP: http://127.0.0.1:17890/api/wechat-command"
@@ -210,7 +210,7 @@ Write-Host "Voiceprint: http://127.0.0.1:17891/health"
 Write-Host "OmniVoice: http://127.0.0.1:17893/health"
 Write-Host "Native Voice Engine: http://127.0.0.1:17894/health"
 Write-Host ""
+Wait-YunFrontend | Out-Null
 Confirm-YunService -Title "Local speech recognition" -Url "http://127.0.0.1:17892/health" -RetryTitle "Yun Local GPU Speech :17892" -RetryCommand $localSpeechCommand -TimeoutSeconds 75 | Out-Null
 Confirm-YunService -Title "Native wake-word engine" -Url "http://127.0.0.1:17894/health" -RetryTitle "Yun Native Voice Engine :17894" -RetryCommand $nativeVoiceCommand -TimeoutSeconds 35 | Out-Null
-Wait-YunFrontend | Out-Null
 Write-Host "Close the opened terminal windows to stop each service."
