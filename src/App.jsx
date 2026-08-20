@@ -1783,6 +1783,15 @@ function App({ onVisualReady }) {
 
   const openPanel = (panel) => {
     pressPanel(panel)
+    // Top settings extend from the lower edge of the controls shell. They do
+    // not use the generic trigger-to-panel morph used by drawers and menus.
+    if (panel === 'voice' || panel === 'memory') {
+      setPendingMorph(null)
+      setMorphLayer(null)
+      setPanelContentVisible(true)
+      setActivePanel(panel)
+      return
+    }
     if (panel === 'library') {
       setLibraryListReady(false)
     }
@@ -1798,13 +1807,10 @@ function App({ onVisualReady }) {
     // Top settings are attached sheets, not objects that should collapse back
     // into their trigger. Fade them away on click-away/toggle instead.
     if (panel === 'voice' || panel === 'memory') {
-      setPanelContentVisible(false)
-      window.setTimeout(() => {
-        setActivePanel((current) => current === panel ? null : current)
-        setPendingMorph(null)
-        setMorphLayer(null)
-        setPanelContentVisible(true)
-      }, 170)
+      setActivePanel((current) => current === panel ? null : current)
+      setPendingMorph(null)
+      setMorphLayer(null)
+      setPanelContentVisible(true)
       return
     }
     if (panel === 'library') {

@@ -5465,7 +5465,7 @@ button {
     border-top: 0 !important;
     border-radius: 22px !important;
     background:
-      linear-gradient(180deg, rgba(12, 18, 28, 0.56), rgba(12, 18, 28, 0.38)),
+      linear-gradient(180deg, rgba(12, 18, 28, 0.12), rgba(12, 18, 28, 0.22)),
       linear-gradient(112deg, transparent 10%, rgba(255, 255, 255, 0.055) 31%, transparent 50%),
       radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--song-secondary) 11%, transparent), transparent 42%),
       radial-gradient(circle at 86% 100%, color-mix(in srgb, var(--song-primary) 9%, transparent), transparent 46%) !important;
@@ -5473,19 +5473,75 @@ button {
       inset 0 1px 0 rgba(255, 255, 255, 0.16),
       inset 0 -18px 32px rgba(0, 0, 0, 0.12),
       0 18px 44px rgba(2, 6, 12, 0.2) !important;
-    backdrop-filter: blur(20px) saturate(118%) brightness(0.88) !important;
-    -webkit-backdrop-filter: blur(20px) saturate(118%) brightness(0.88) !important;
+    backdrop-filter: blur(8px) saturate(110%) brightness(0.92) !important;
+    -webkit-backdrop-filter: blur(8px) saturate(110%) brightness(0.92) !important;
     overflow: hidden auto !important;
     transform: translateX(-50%) !important;
+    clip-path: inset(0 0 calc(100% - 2px) 0 round 22px);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none !important;
+    transition:
+      clip-path 520ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 260ms ease,
+      visibility 0s linear 520ms,
+      backdrop-filter 520ms ease,
+      -webkit-backdrop-filter 520ms ease !important;
   }
 
-  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel)::before,
   .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel)::after {
     display: none;
   }
 
+  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    display: block;
+    padding: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(
+      180deg,
+      rgba(240, 248, 255, 0.015) 0%,
+      rgba(16, 24, 35, 0.12) 11%,
+      rgba(12, 18, 28, 0.42) 34%,
+      rgba(10, 16, 26, 0.52) 100%
+    );
+    opacity: 0;
+    transition: opacity 460ms ease 60ms;
+  }
+
+  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel).is-open {
+    clip-path: inset(0 0 0 0 round 22px);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto !important;
+    backdrop-filter: blur(20px) saturate(118%) brightness(0.88) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(118%) brightness(0.88) !important;
+    transition:
+      clip-path 520ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 260ms ease,
+      backdrop-filter 520ms ease,
+      -webkit-backdrop-filter 520ms ease !important;
+  }
+
+  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel).is-open::before {
+    opacity: 1;
+  }
+
+  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel):not(.is-open) {
+    display: block !important;
+  }
+
   .app :is(.voice-popover, .memory-settings-panel, .mountain-tuning-panel) > :is(.glass-edge-highlight, .glass-specular-highlight) {
     border-radius: inherit;
+  }
+
+  .app :is(.voice-popover-header, .voice-layout, .mountain-tuning-header, .mountain-tuning-row, .memory-settings-content) {
+    position: relative;
+    z-index: 1;
   }
 
   .app :is(.voice-popover, .memory-settings-panel, .mountain-tuning-panel).is-open > .glass-edge-highlight {
