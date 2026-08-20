@@ -1326,13 +1326,13 @@ function App({ onVisualReady }) {
   const scheduleTopControlsClose = useCallback(() => {
     // A settings panel is visually attached to this shell. Do not collapse
     // the shell while the pointer moves from its button into that panel.
-    if (activePanel === 'voice') return
+    if (activePanel === 'voice' || activePanel === 'memory' || mountainPanelOpen) return
     if (!topControlsOpen || topControlsTimerRef.current) return
     topControlsTimerRef.current = window.setTimeout(() => {
       topControlsTimerRef.current = null
       setTopControlsOpen(false)
     }, 680)
-  }, [activePanel, topControlsOpen])
+  }, [activePanel, mountainPanelOpen, topControlsOpen])
 
   useEffect(() => () => window.clearTimeout(topControlsTimerRef.current), [])
 
@@ -2310,6 +2310,9 @@ function App({ onVisualReady }) {
       <div
         className={`mountain-tuning-panel${mountainPanelOpen ? ' is-open' : ''}`}
       >
+        <span className="glass-edge-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight glass-specular-highlight--opposite" aria-hidden="true" />
         <div className="mountain-tuning-header">
           <p className="sub">MOUNTAIN</p>
           <button
@@ -2749,6 +2752,9 @@ function App({ onVisualReady }) {
       <div
         className={`memory-settings-panel${activePanel === 'memory' ? ' is-open' : ''}`}
       >
+        <span className="glass-edge-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight" aria-hidden="true" />
+        <span className="glass-specular-highlight glass-specular-highlight--opposite" aria-hidden="true" />
         <div className="memory-settings-content">
           <div className="memory-settings-header">
             <h2>记忆设置</h2>

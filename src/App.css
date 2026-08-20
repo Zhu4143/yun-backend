@@ -5440,16 +5440,20 @@ button {
    second floating card. The WebGL glass pass sees both shells at the same
    strength; these DOM rules only provide the connected geometry and edge. */
 @media (min-width: 721px) {
-  .app:has(.voice-popover.is-open) .top-controls-card {
+  .app:has(.voice-popover.is-open, .memory-settings-panel.is-open, .mountain-tuning-panel.is-open) .top-controls-card {
     border-radius: var(--top-controls-radius) var(--top-controls-radius) 0 0;
   }
 
-  .app:has(.voice-popover.is-open) .top-controls-card > .glass-specular-highlight--opposite {
+  .app:has(.voice-popover.is-open, .memory-settings-panel.is-open, .mountain-tuning-panel.is-open) .top-controls-card > .glass-specular-highlight--opposite {
     opacity: 0;
   }
 
   .app .voice-popover.glass-popover.glass-level-3,
-  .app .voice-popover.glass-popover.glass-level-3.is-open {
+  .app .voice-popover.glass-popover.glass-level-3.is-open,
+  .app .memory-settings-panel,
+  .app .memory-settings-panel.is-open,
+  .app .mountain-tuning-panel,
+  .app .mountain-tuning-panel.is-open {
     position: fixed !important;
     top: 198px !important;
     right: auto !important;
@@ -5475,54 +5479,25 @@ button {
     transform: translateX(-50%) !important;
   }
 
-  .app .voice-popover.glass-popover.glass-level-3::before,
-  .app .voice-popover.glass-popover.glass-level-3::after {
+  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel)::before,
+  .app :is(.voice-popover.glass-popover.glass-level-3, .memory-settings-panel, .mountain-tuning-panel)::after {
     display: none;
   }
 
-  .app .voice-popover > :is(.glass-edge-highlight, .glass-specular-highlight) {
+  .app :is(.voice-popover, .memory-settings-panel, .mountain-tuning-panel) > :is(.glass-edge-highlight, .glass-specular-highlight) {
     border-radius: inherit;
   }
 
-  .app .voice-popover.is-open > .glass-edge-highlight {
+  .app :is(.voice-popover, .memory-settings-panel, .mountain-tuning-panel).is-open > .glass-edge-highlight {
     opacity: 0.48;
   }
 
-  .app .voice-popover.is-open > .glass-specular-highlight {
+  .app :is(.voice-popover, .memory-settings-panel, .mountain-tuning-panel).is-open > .glass-specular-highlight {
     opacity: 0.58;
   }
 
-  .app .voice-popover.is-open > .glass-specular-highlight--opposite {
+  .app :is(.voice-popover, .memory-settings-panel, .mountain-tuning-panel).is-open > .glass-specular-highlight--opposite {
     opacity: 0.58;
-  }
-
-  /* Settings and mountain are sibling actions of “voice”; their persistent
-     pressed state must not turn into a separate neon material. */
-  .app .top-controls-card .action-button:is(
-    [aria-label='设置'],
-    [aria-label='山脉调节']
-  ):is(.is-pressed, .is-active) {
-    border-color: rgba(255, 255, 255, 0.16) !important;
-    background: transparent !important;
-    box-shadow:
-      inset 0 1px 1px rgba(255, 255, 255, 0.22),
-      inset 0 4px 8px rgba(255, 255, 255, 0.012),
-      inset 0 -6px 10px rgba(2, 5, 12, 0.08) !important;
-  }
-
-  .app .top-controls-card .action-button:is(
-    [aria-label='设置'],
-    [aria-label='山脉调节']
-  ):is(.is-pressed, .is-active)::before {
-    opacity: 0.16 !important;
-  }
-
-  .app .top-controls-card .action-button:is(
-    [aria-label='设置'],
-    [aria-label='山脉调节']
-  ):is(.is-pressed, .is-active)::after {
-    opacity: 0 !important;
-    transform: translateX(-10%) scale(1.03) !important;
   }
 
   /* Reuse the top-bar control surface for every actionable voice setting. */
