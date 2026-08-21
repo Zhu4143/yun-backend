@@ -2,17 +2,43 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { createMossAgent } from './mossAgent.js';
 import { parseModelResponse } from './mossResponseParser.js';
 import { createModelProvider } from './modelProvider.js';
 
-const fixtureDir = path.resolve('server/data');
+const fixtureLore = {
+  schemaVersion: 1,
+  records: [
+    {
+      id: 'LW-550-030',
+      title: '550W / MOSS identity',
+      category: 'core-system',
+      tags: ['550W', 'MOSS'],
+      summary: '550W is a crisis-response quantum computing system.',
+    },
+    {
+      id: 'LW-JUP-050',
+      title: '木星危机',
+      category: 'crisis-record',
+      tags: ['木星危机', '木星'],
+      summary: '木星引力危机将地球拖向碰撞轨道。',
+    },
+    {
+      id: 'LW-DIALOGUE-TEST',
+      kind: 'DIALOGUE_SCENE_RECALL',
+      title: 'MOSS scene recall',
+      category: 'scene-memory',
+      speaker: ['MOSS'],
+      tags: ['MOSS', '台词', '对白'],
+      paraphrase: 'MOSS 以概率与人类交谈。',
+    },
+  ],
+};
+
 async function createFixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'moss-agent-'));
-  for (const name of ['moss_lore.json', 'moss_scene_memory.json', 'moss_runtime_state.json', 'moss_memory.json']) {
-    await writeFile(path.join(directory, name), await readFile(path.join(fixtureDir, name)));
-  }
+  await writeFile(path.join(directory, 'moss_lore.json'), `${JSON.stringify(fixtureLore, null, 2)}\n`, 'utf8');
   return directory;
 }
 
