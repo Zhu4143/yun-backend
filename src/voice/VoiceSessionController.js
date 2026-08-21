@@ -52,6 +52,10 @@ export class VoiceSessionController {
     this.dispatch(VOICE_EVENT.USER_SPEECH_ENDED)
   }
 
+  transcriptionStarted() {
+    this.dispatch(VOICE_EVENT.TRANSCRIPTION_STARTED)
+  }
+
   startResponse() {
     const sessionId = this.beginSession()
     const responseId = makeId('response', ++this.idSequence)

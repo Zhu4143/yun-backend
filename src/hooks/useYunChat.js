@@ -177,6 +177,17 @@ export function useYunChat({
     [messages],
   )
 
+  // A spoken turn is always latest-wins. Network work may continue in the
+  // background, but its result must lose the right to update UI, execute a
+  // music action, or start TTS as soon as the user speaks again.
+  const cancelActiveRequest = useCallback(() => {
+    requestEpochRef.current += 1
+    queuedLatestMessageRef.current = null
+    requestBusyRef.current = false
+    setIsThinking(false)
+    voice?.stopSpeaking?.()
+  }, [voice])
+
   const sendMessage = async (text, options = {}) => {
     const userText = String(text || '').trim()
     const imageFile = options?.imageFile || null
@@ -533,6 +544,7 @@ export function useYunChat({
     playHistory,
     recentRecommendations,
     sendMessage,
+    cancelActiveRequest,
     reactToSongChange,
     prefetchSongReaction,
     rememberPlayedSong,

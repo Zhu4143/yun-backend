@@ -31,3 +31,19 @@ test('interruption cancels every response operation and clears output state', ()
   assert.equal(controller.getSnapshot().output, 'idle')
   assert.equal(controller.getSnapshot().responseId, null)
 })
+
+test('a new user turn cancels an in-flight response and enters transcribing', () => {
+  const controller = new VoiceSessionController()
+  const responseId = controller.startResponse()
+  let cancelled = false
+  controller.registerCancellation(responseId, () => { cancelled = true })
+
+  controller.userSpeechStarted()
+  controller.userSpeechEnded()
+  controller.transcriptionStarted()
+  controller.cancelResponse(responseId, 'new_user_turn')
+
+  assert.equal(cancelled, true)
+  assert.equal(controller.getSnapshot().input, 'transcribing')
+  assert.equal(controller.getSnapshot().output, 'idle')
+})

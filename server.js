@@ -173,12 +173,37 @@ const neteaseHeaders = {
   Referer: "https://music.163.com/",
   "User-Agent": "Mozilla/5.0",
 };
+const neteaseRequestTimeoutMs = 12000;
+const neteaseRequestAttempts = 2;
 const neteasePlayableUrlCache = new Map();
 const neteaseSearchCache = new Map();
 const neteasePlayableUrlCacheTtl = 1000 * 60 * 10;
 const neteaseSearchCacheTtl = 1000 * 60 * 5;
 const neteaseLanguageCache = new Map();
 let neteaseUserCookie = existsSync(neteaseCookiePath) ? readFileSync(neteaseCookiePath, "utf8").trim() : "";
+
+function waitFor(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// NetEase/CDN connections occasionally reset or time out. Keep that transient
+// failure inside the provider boundary instead of returning Node's opaque
+// "fetch failed" to the UI.
+async function fetchNeteaseWithRetry(url, options = {}, { attempts = neteaseRequestAttempts, timeoutMs = neteaseRequestTimeoutMs } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+      if (response.status < 500 || attempt === attempts) return response;
+      lastError = new Error(`网易云服务暂时不可用（${response.status}）`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) await waitFor(300 * attempt);
+  }
+  const timedOut = lastError?.name === "TimeoutError" || lastError?.name === "AbortError";
+  throw new Error(timedOut ? "网易云响应超时，请稍后重试" : "网易云连接暂时不稳定，请重试");
+}
 const visionUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -1845,7 +1870,7 @@ async function getNeteasePlayableUrl(id) {
   }
 
   const url = `https://music.163.com/api/song/enhance/player/url?id=${encodeURIComponent(safeId)}&ids=%5B${encodeURIComponent(safeId)}%5D&br=320000`;
-  const response = await fetch(url, { headers: neteaseHeaders });
+  const response = await fetchNeteaseWithRetry(url, { headers: neteaseHeaders });
   if (!response.ok) return null;
 
   const data = await response.json();
@@ -1947,7 +1972,7 @@ async function handleNeteaseSearch(req, res) {
       limit: String(Math.min(resultLimit * 3, 60)),
     });
 
-    const response = await fetch("https://music.163.com/api/search/get/web", {
+    const response = await fetchNeteaseWithRetry("https://music.163.com/api/search/get/web", {
       method: "POST",
       headers: {
         ...neteaseHeaders,
@@ -2015,7 +2040,19 @@ async function handleNeteaseVoiceSongResolution(req, res) {
 }
 
 function compactLyricText(value = "") {
-  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  // ASR commonly swaps 的 / 得 / 地 in a lyric. They carry no identifying
+  // weight here, so make all three variants compare the same way.
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[的得地]/gu, "的").replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function cleanLyricLookupText(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/^(?:那首(?:就是|是)?|我记得(?:有)?(?:一首)?(?:歌)?(?:里)?|有(?:一首)?(?:歌)?(?:里)?|歌词(?:是|叫|里有)?|唱的是)\s*/u, "")
+    .replace(/(?:，|,|。|\.|然后|麻烦你|你能(?:不能)?|帮我|给我).{0,24}?(?:找|搜|识别|查)(?:一下)?(?:这首|这句|这段)?(?:歌|歌曲)?[。！？!？]?$/gu, "")
+    .replace(/(?:这是什么歌|是哪首歌|什么歌|帮我找(?:一下)?|帮我播放|播放这首|放这首)[。！？!？]?$/u, "")
+    .trim()
+    .slice(0, 160);
 }
 
 function scoreLyricEvidence(fragment, lyricText) {
@@ -2029,26 +2066,49 @@ function scoreLyricEvidence(fragment, lyricText) {
   return Number((chunks.filter(chunk => lyric.includes(chunk)).length / chunks.length).toFixed(2));
 }
 
+async function searchNeteaseLyricsWithRetry(keywords, type) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await neteaseCloudSearch({
+        keywords,
+        type,
+        limit: 12,
+        offset: 0,
+        cookie: neteaseUserCookie,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await waitFor(300 * attempt);
+    }
+  }
+  throw lastError || new Error("网易云歌词搜索暂时失败");
+}
+
 async function handleNeteaseLyricSongResolution(req, res) {
   try {
     const { lyrics = "", transcript = "" } = await readJson(req);
     const raw = String(lyrics || transcript || "").trim().slice(0, 300);
     if (compactLyricText(raw).length < 5) return sendJson(res, 400, { ok: false, error: "请再说一小段歌词" });
-    const interpretation = await callDeepSeekJson({
-      systemPrompt: `你是歌词识曲的检索词整理器。用户可能说的是一段歌词，也可能夹着“帮我找这首歌”等口语。只提取用户实际说出的歌词片段，不能编造歌词、歌名或歌手。若用户明确给出歌名或歌手可保留，否则为空。只输出 JSON：{"lyric":"","title":"","artist":""}。`,
-      userPrompt: `用户原话：${raw}`,
-      maxTokens: 180,
-      includePersona: false,
-    });
-    const lyric = String(interpretation?.lyric || raw).trim().slice(0, 160);
-    const queries = uniqueStrings([lyric, [interpretation?.title, interpretation?.artist].filter(Boolean).join(" ")]).filter(Boolean).slice(0, 2);
+    const cleanedRaw = cleanLyricLookupText(raw);
+    // Lyric lookup is retrieval, not creative interpretation. Keep the
+    // user's cleaned fragment intact so a flaky model response cannot make a
+    // valid request fail before it reaches NetEase.
+    const lyric = cleanedRaw || raw;
+    const queries = [lyric];
     const byId = new Map();
+    const lyricSearchIds = new Set();
     for (const query of queries) {
-      const response = await neteaseCloudSearch({ keywords: query, type: 1006, limit: 12, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
-      (response?.body?.result?.songs || []).forEach(song => byId.set(String(song.id), song));
+      const response = await searchNeteaseLyricsWithRetry(query, 1006);
+      (response?.body?.result?.songs || []).forEach(song => {
+        const id = String(song.id);
+        lyricSearchIds.add(id);
+        byId.set(id, song);
+      });
     }
     if (!byId.size) {
-      const response = await neteaseCloudSearch({ keywords: lyric, type: 1, limit: 12, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+      const response = await searchNeteaseLyricsWithRetry(lyric, 1);
       (response?.body?.result?.songs || []).forEach(song => byId.set(String(song.id), song));
     }
     const evidence = await Promise.all([...byId.values()].slice(0, 12).map(async (song, index) => {
@@ -2062,7 +2122,12 @@ async function handleNeteaseLyricSongResolution(req, res) {
     }));
     const ranked = evidence.sort((a, b) => b.lyricEvidence - a.lyricEvidence || a.index - b.index);
     const best = ranked[0];
-    if (!best || best.lyricEvidence < 0.62) {
+    // The lyric-detail endpoint is blank for some licensed tracks even though
+    // NetEase's dedicated type-1006 lyric search returned an exact candidate.
+    // Treat that first-party lyric-search result as a fallback proof rather
+    // than asking the user to repeat a lyric we already found.
+    const verifiedByLyricSearch = Boolean(best && lyricSearchIds.has(String(best.song?.id)) && best.index === 0);
+    if (!best || (best.lyricEvidence < 0.62 && !verifiedByLyricSearch)) {
       return sendJson(res, 200, {
         ok: true,
         verified: false,
@@ -2073,7 +2138,7 @@ async function handleNeteaseLyricSongResolution(req, res) {
     return sendJson(res, 200, {
       ok: true,
       verified: true,
-      confidence: best.lyricEvidence,
+      confidence: Math.max(best.lyricEvidence, verifiedByLyricSearch ? 0.72 : 0),
       song: normalizeNeteaseApiSong(best.song),
     });
   } catch (error) {
@@ -2167,14 +2232,14 @@ async function handleNeteaseAudio(req, res) {
     let playableUrl = await getNeteasePlayableUrl(id);
     if (!playableUrl) return sendJson(res, 404, { ok: false, error: "No playable url for this song" });
 
-    let audioResponse = await fetch(playableUrl, { headers });
+    let audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers });
     // CDN stream URLs can expire while a song is playing. Do not keep serving
     // a cached, expired address on the next Range request: evict it and obtain
     // one fresh URL before the browser turns the player into a silent state.
     if (!audioResponse.ok && audioResponse.status !== 206) {
       neteasePlayableUrlCache.delete(id);
       playableUrl = await getNeteasePlayableUrl(id);
-      if (playableUrl) audioResponse = await fetch(playableUrl, { headers });
+      if (playableUrl) audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers });
     }
     if (!audioResponse.ok && audioResponse.status !== 206) {
       return sendJson(res, audioResponse.status || 502, { ok: false, error: "网易云音频地址已失效，请重试" });

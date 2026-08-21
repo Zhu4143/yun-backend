@@ -102,8 +102,14 @@ class VoiceEngine:
                 self.stats["callbackDrops"] += 1
 
     async def start(self) -> None:
-        if self.running:
+        if self.running and self.stream and self.stream.active:
             return
+        # Windows audio devices can be suspended or reset while the sidecar
+        # remains alive.  The old guard treated that stale process as healthy,
+        # leaving KWS loaded but with no microphone frames forever.
+        if self.running:
+            LOG.warning("Native voice stream became inactive; rebuilding capture pipeline")
+            await self.stop()
         self.loop = asyncio.get_running_loop()
         self.capture_queue = asyncio.Queue(maxsize=200)
         self.apm = NativeWebRtcApm(RATE, CHANNELS)

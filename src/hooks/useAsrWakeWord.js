@@ -188,9 +188,18 @@ export function useAsrWakeWord({ suspended = false, onWake } = {}) {
       })
     }
 
-    fetch('/api/native-voice/health')
+    const getNativeHealth = () => fetch('/api/native-voice/health')
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('native voice unavailable')))
-      .then((health) => {
+
+    getNativeHealth()
+      .then(async (health) => {
+        // A loaded KWS model is not enough: Windows can leave the sidecar
+        // process alive after its RawStream has gone inactive. Ask the sidecar
+        // to rebuild that stream before falling back to browser recognition.
+        if (health?.apm?.loaded && health?.kws?.loaded && !health?.mic?.captureRunning) {
+          const started = await fetch('/api/native-voice/start', { method: 'POST' })
+          health = started.ok ? await started.json() : health
+        }
         if (cancelled || !health?.apm?.loaded || !health?.kws?.loaded || !health?.mic?.captureRunning) {
           startBrowserFallback()
           return
@@ -217,7 +226,12 @@ export function useAsrWakeWord({ suspended = false, onWake } = {}) {
             if (eventId <= nativeEventIdRef.current) return
             nativeEventIdRef.current = eventId
           }
-          if (event.event === 'wake_word' && !suspendedRef.current) fireWake('native')
+          if (event.event === 'wake_word') {
+            // The native engine already suppresses duplicate wakes while its
+            // command session is active.  Do not let a stale browser voice UI
+            // state discard a valid wake event from the continuous native mic.
+            fireWake('native')
+          }
           if (event.event === 'asr_final') {
             window.dispatchEvent(new CustomEvent('yun-native-asr-final', { detail: event }))
           }

@@ -605,6 +605,10 @@ function App({ onVisualReady }) {
   const voiceRetryAttemptsRef = useRef(0)
   const previousWakeAcknowledgementRef = useRef(-1)
   const wakeAcknowledgementInFlightRef = useRef(false)
+  // Defined before the wake callbacks because useYunChat is initialized later
+  // in this component. A ref avoids a temporal-dead-zone crash during React's
+  // first render while still always invoking the latest chat cancellation.
+  const cancelActiveChatRequestRef = useRef(() => {})
   const wakeAcknowledgementEchoRef = useRef({ text: '', expiresAt: 0 })
   const [gestureCameraEnabled, setGestureCameraEnabled] = useState(false)
   const [gestureCameraStatus, setGestureCameraStatus] = useState('off')
@@ -830,8 +834,16 @@ function App({ onVisualReady }) {
   }, [isPlaying, readAudioFrequencyData, yunVoice.isSpeaking])
 
   const wakeVoiceInput = useCallback(async (source = 'browser', inlineCommand = '') => {
-    if (wakeAcknowledgementInFlightRef.current) return
+    // A previous browser acknowledgement can be left pending when the audio
+    // path changes. Native wake events have their own session-level duplicate
+    // protection, so they must never be blocked by that stale browser flag.
+    if (source !== 'native' && wakeAcknowledgementInFlightRef.current) return
 
+    // A fresh wake is an explicit new turn. Cancel anything that can still
+    // talk or act from the prior turn before showing the listening state.
+    voiceController.cancelResponse(undefined, 'new_wake')
+    cancelActiveChatRequestRef.current()
+    yunVoice.stopSpeaking()
     voiceController.wakeDetected()
     const previousIndex = previousWakeAcknowledgementRef.current
     let nextIndex = Math.floor(Math.random() * WAKE_ACKNOWLEDGEMENTS.length)
@@ -919,6 +931,8 @@ function App({ onVisualReady }) {
     if (!yunVoice.isSpeaking || voiceInputActive) return
     // The native engine has already opened an ASR turn from the first user
     // frame. Stop only Yun's output; never pause the user's music.
+    voiceController.cancelResponse(undefined, 'barge_in')
+    cancelActiveChatRequestRef.current()
     yunVoice.stopSpeaking()
     setCompanionCallActive(false)
     setVoiceInputActive(false)
@@ -926,7 +940,7 @@ function App({ onVisualReady }) {
     setNativeCommandTranscribing(false)
     setVoiceVisualActive(false)
     setVoiceCallStatus('正在听你说')
-  }, [voiceInputActive, yunVoice])
+  }, [voiceController, voiceInputActive, yunVoice])
   const bargeIn = useYunBargeIn({
     enabled: yunVoice.isSpeaking && yunVoice.isSpeechInterruptible && !voiceInputActive,
     onCandidate: handleBargeInCandidate,
@@ -998,6 +1012,7 @@ function App({ onVisualReady }) {
     rememberPlayedSong,
     resolveSkillCandidate,
     appendRemoteTurn,
+    cancelActiveRequest: cancelActiveChatRequest,
   } = useYunChat({
     currentSong,
     libraryTracks,
@@ -1024,6 +1039,7 @@ function App({ onVisualReady }) {
     memory: yunMemory,
     agent: yunAgent,
   })
+  cancelActiveChatRequestRef.current = cancelActiveChatRequest
   useCowAgentYunBridge({
     player: legacyPlayer,
     voice: yunVoice,
@@ -1116,11 +1132,16 @@ function App({ onVisualReady }) {
       return
     }
     if (!text) return
+    // The transcript itself is the authoritative start of a new user turn.
+    // Do this even if a previous request was only generating and had not yet
+    // started speaking, otherwise its late result can still win the UI race.
+    voiceController.cancelResponse(undefined, 'new_user_turn')
+    cancelActiveChatRequest()
     setVoiceCallStatus(chatIsThinking ? '已听到，优先处理这句' : '理解中')
     voiceController.startResponse()
     sendChatMessage(text)
     return 'submitted'
-  }, [chatIsThinking, sendChatMessage, voiceController, yunVoice])
+  }, [cancelActiveChatRequest, chatIsThinking, sendChatMessage, voiceController, yunVoice])
 
   const handleVoiceInterimTranscript = useCallback((transcript) => {
     setChatDraft(transcript)
@@ -1154,6 +1175,7 @@ function App({ onVisualReady }) {
       }
     }
     const handleNativeTranscribing = () => {
+      voiceController.transcriptionStarted()
       setNativeCommandTranscribing(true)
       // The full-screen awakening field is only an input affordance. Once
       // audio has been handed to ASR it must disappear, even if the backend

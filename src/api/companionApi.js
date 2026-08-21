@@ -1,3 +1,5 @@
+import { fetchLocalApi } from './requestApi'
+
 export async function sendCompanionMessage({
   userText,
   chatHistory = [],
@@ -14,7 +16,9 @@ export async function sendCompanionMessage({
   rejectedTracks = [],
   recentRecommendations = [],
 }) {
-  const response = await fetch('/api/companion-chat', {
+  // Do not automatically retry this POST: the model may already be processing
+  // the turn, and retrying could create a duplicate companion reply.
+  const response = await fetchLocalApi('/api/companion-chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -33,6 +37,9 @@ export async function sendCompanionMessage({
       rejectedTracks: rejectedTracks.slice(-10),
       recentRecommendations: recentRecommendations.slice(-10),
     }),
+  }, {
+    timeoutMs: 75000,
+    unavailableMessage: '昀的本地服务刚刚重连，请再试一次',
   })
 
   const data = await response.json().catch(() => ({}))

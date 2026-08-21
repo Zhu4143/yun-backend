@@ -161,11 +161,12 @@ function needsVoiceCandidateResolution(message, searchIntent) {
 
 function needsPreciseSongResolution(message, searchIntent) {
   const text = String(message || '')
-  const hasSpecificSongShape = /[《“"][^》”"]+[》”"]/.test(text)
-    || /(?:叫|歌名是|名字是|唱的是|播放|放)(?:一首|首|这首|那首)?/.test(text)
-  const hasMoodOnlyRequest = /推荐|随机|氛围|适合|心情|来点/.test(text)
-    && !/[《“"]/.test(text)
-  return !hasMoodOnlyRequest && (needsVoiceCandidateResolution(message, searchIntent) || hasSpecificSongShape || Boolean(searchIntent.title || searchIntent.artist))
+  // The exact-title filter above is already a deterministic identity check
+  // for Chinese song names. Asking a model to choose again makes a perfectly
+  // good result fail whenever that secondary request is slow or unavailable.
+  // Keep model disambiguation only for the cases it materially improves:
+  // foreign-language / ASR-prone titles.
+  return Boolean(text) && needsVoiceCandidateResolution(message, searchIntent)
 }
 
 function localCandidateFromSmartResult(smartResult, libraryTracks) {
