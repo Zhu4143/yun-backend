@@ -51,12 +51,13 @@ export function createYunLegacyPlayerAdapter() {
 
   const core = new PlayerCore({ store, controls })
 
-  core.updateLegacy = (nextLegacy) => {
-    legacy = nextLegacy
+  // Render-safe: derive the current legacy snapshot without rebinding controls,
+  // replacing the external-store state, or notifying subscribers.
+  core.projectLegacy = (nextLegacy) => {
     const userVolume = Number(nextLegacy.volume)
     const previousState = store.getState()
     const isCrossfading = Boolean(nextLegacy.getPlaybackDiagnostics?.()?.isCrossfading)
-    const nextState = {
+    return {
       currentTrack: nextLegacy.currentSong,
       isPlaying: nextLegacy.isPlaying,
       currentTime: nextLegacy.currentTime,
@@ -73,9 +74,16 @@ export function createYunLegacyPlayerAdapter() {
       audioFeatures: null,
       trackChangeProgress: isCrossfading ? 1 : 0,
     }
+  }
 
-    if (!playerStateEquals(previousState, nextState)) {
-      store.replaceState(nextState)
+  // Commit-phase bridge: App calls this from a layout effect after React has
+  // accepted the render that consumed the matching projected snapshot.
+  core.updateLegacy = (nextLegacy, projectedState = core.projectLegacy(nextLegacy)) => {
+    legacy = nextLegacy
+    const previousState = store.getState()
+
+    if (!playerStateEquals(previousState, projectedState)) {
+      store.replaceState(projectedState)
       pendingNotification = true
     }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import LiquidGlass from 'liquid-glass-react'
 import { lazy, Suspense } from 'react'
 import { analyzeMusicLibraryTags, fetchMusicLibrary, importMusicFiles, scanMusicLibrary } from './api/yunApi'
@@ -560,6 +560,7 @@ function App({ onVisualReady }) {
   const [neteaseLibraryView, setNeteaseLibraryView] = useState('songs')
   const [activeNeteasePlaylist, setActiveNeteasePlaylist] = useState(null)
   const [libraryScrollTop, setLibraryScrollTop] = useState(0)
+  const [libraryViewportHeight, setLibraryViewportHeight] = useState(286)
   const [isImportingMusic, setIsImportingMusic] = useState(false)
   const musicImportInputRef = useRef(null)
   const libraryScrollListRef = useRef(null)
@@ -747,10 +748,12 @@ function App({ onVisualReady }) {
     clearPlaybackQueue,
   } = legacyPlayer
   const [playerCore] = useState(() => createYunLegacyPlayerAdapter())
-  const playerState = playerCore.updateLegacy(legacyPlayer)
+  // Keep render pure; bind controls and publish the projection only after commit.
+  const playerState = playerCore.projectLegacy(legacyPlayer)
   useLayoutEffect(() => {
+    playerCore.updateLegacy(legacyPlayer, playerState)
     playerCore.flush()
-  })
+  }, [legacyPlayer, playerCore, playerState])
   useEffect(() => () => playerCore.dispose(), [playerCore])
   // Headless voice lifecycle authority. It deliberately does not own UI,
   // microphone hardware, or the existing conversation/MCP routes.
@@ -1039,7 +1042,9 @@ function App({ onVisualReady }) {
     memory: yunMemory,
     agent: yunAgent,
   })
-  cancelActiveChatRequestRef.current = cancelActiveChatRequest
+  useLayoutEffect(() => {
+    cancelActiveChatRequestRef.current = cancelActiveChatRequest
+  }, [cancelActiveChatRequest])
   useCowAgentYunBridge({
     player: legacyPlayer,
     voice: yunVoice,
@@ -1202,7 +1207,7 @@ function App({ onVisualReady }) {
       window.removeEventListener('yun-native-barge-in', handleNativeBargeIn)
       window.removeEventListener('yun-native-voice-level', handleNativeVoiceLevel)
     }
-  }, [handleNativeBargeIn, handleVoiceTranscript, nativeCommandListening, nativeCommandTranscribing, resetNativeWakeUi])
+  }, [handleNativeBargeIn, handleVoiceTranscript, nativeCommandListening, nativeCommandTranscribing, resetNativeWakeUi, voiceController])
 
   useEffect(() => {
     if (!nativeCommandListening || nativeCommandTranscribing) return undefined
@@ -1454,20 +1459,24 @@ function App({ onVisualReady }) {
   // an already rendered list.
   const drawerTracks = librarySource === 'netease' ? neteaseResults : visibleLibraryTracks
   const virtualTrackRange = useMemo(() => {
-    const viewportHeight = libraryScrollListRef.current?.clientHeight || 286
     const start = Math.max(0, Math.floor(libraryScrollTop / LIBRARY_SCROLL_ROW_HEIGHT) - LIBRARY_SCROLL_OVERSCAN)
     const end = Math.min(
       drawerTracks.length,
-      Math.ceil((libraryScrollTop + viewportHeight) / LIBRARY_SCROLL_ROW_HEIGHT) + LIBRARY_SCROLL_OVERSCAN,
+      Math.ceil((libraryScrollTop + libraryViewportHeight) / LIBRARY_SCROLL_ROW_HEIGHT) + LIBRARY_SCROLL_OVERSCAN,
     )
     return { start, end: Math.max(start, end) }
-  }, [drawerTracks.length, libraryScrollTop])
+  }, [drawerTracks.length, libraryScrollTop, libraryViewportHeight])
   const virtualDrawerTracks = drawerTracks.slice(virtualTrackRange.start, virtualTrackRange.end)
   const waitingTracks = upNextTracks
   const aiCandidateTracks = autoUpNextTracks
   const clearWaitingTracks = useCallback(() => {
     clearUpNext()
   }, [clearUpNext])
+
+  const resetLibraryScroll = useCallback(() => {
+    setLibraryScrollTop(0)
+    if (libraryScrollListRef.current) libraryScrollListRef.current.scrollTop = 0
+  }, [])
 
   const searchOnlineMusic = useCallback(async () => {
     const keywords = libraryQuery.trim()
@@ -1476,6 +1485,7 @@ function App({ onVisualReady }) {
       return
     }
 
+    resetLibraryScroll()
     setLibrarySource('netease')
     setNeteaseLibraryView('songs')
     setActiveNeteasePlaylist(null)
@@ -1497,7 +1507,7 @@ function App({ onVisualReady }) {
       setNeteaseStatus('error')
       setNeteaseError(error instanceof Error ? error.message : '网易云搜索失败')
     }
-  }, [libraryQuery, neteaseStatus])
+  }, [libraryQuery, neteaseStatus, resetLibraryScroll])
 
   const loadMusicLibrary = useCallback(async () => {
     setLibraryStatus('loading')
@@ -1561,6 +1571,7 @@ function App({ onVisualReady }) {
   }, [])
 
   const openNeteasePlaylist = useCallback(async (playlist) => {
+    resetLibraryScroll()
     setLibrarySource('netease')
     setNeteaseLibraryView('songs')
     setActiveNeteasePlaylist(playlist)
@@ -1578,24 +1589,35 @@ function App({ onVisualReady }) {
       setNeteaseStatus('error')
       setNeteaseError(error instanceof Error ? error.message : '网易云歌单读取失败')
     }
-  }, [])
+  }, [resetLibraryScroll])
 
   const openNeteasePlaylists = useCallback(() => {
     ++neteaseRequestRef.current
+    resetLibraryScroll()
     setLibrarySource('netease')
     setNeteaseLibraryView('playlists')
     setActiveNeteasePlaylist(null)
     setNeteaseError('')
-  }, [])
+  }, [resetLibraryScroll])
 
   const handleLibraryScroll = useCallback((event) => {
     setLibraryScrollTop(event.currentTarget.scrollTop)
+    const nextViewportHeight = event.currentTarget.clientHeight
+    if (nextViewportHeight > 0) setLibraryViewportHeight(nextViewportHeight)
   }, [])
 
   useEffect(() => {
-    setLibraryScrollTop(0)
-    if (libraryScrollListRef.current) libraryScrollListRef.current.scrollTop = 0
-  }, [librarySource, neteaseLibraryView, activeNeteasePlaylist?.id])
+    const element = libraryScrollListRef.current
+    if (!element || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(([entry]) => {
+      const nextViewportHeight = Math.round(entry?.contentRect?.height || 0)
+      if (nextViewportHeight > 0) {
+        setLibraryViewportHeight((current) => current === nextViewportHeight ? current : nextViewportHeight)
+      }
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   const likedNeteasePlaylist = neteaseMe?.playlists?.find((playlist) => playlist.liked)
 
@@ -1609,6 +1631,7 @@ function App({ onVisualReady }) {
       const library = await importMusicFiles(files)
       setLibraryTracks(library.songs)
       setLibraryCount(library.count ?? library.songs.length)
+      resetLibraryScroll()
       setLibrarySource('local')
       setLibraryStatus('ready')
     } catch (error) {
@@ -1618,7 +1641,7 @@ function App({ onVisualReady }) {
       setIsImportingMusic(false)
       event.target.value = ''
     }
-  }, [isImportingMusic])
+  }, [isImportingMusic, resetLibraryScroll])
 
   const analyzeMusicLibrary = useCallback(async () => {
     if (isAnalyzingLibrary) return
@@ -2104,13 +2127,17 @@ function App({ onVisualReady }) {
 
   const displayedTags = getSongTags(currentSong)
 
-  useEffect(() => {
-    if (!currentSong?.id || !isPlaying) return
+  const recordCurrentSongListening = useEffectEvent(() => {
     void fetch('/api/yun/listening-profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'record', song: currentSong, playedAt: Date.now() }),
     }).catch(() => {})
+  })
+
+  useEffect(() => {
+    if (!currentSong?.id || !isPlaying) return
+    recordCurrentSongListening()
   }, [currentSong?.id, isPlaying])
   const memoryStripTracks = useMemo(() => {
     const tracks = []
@@ -3342,6 +3369,7 @@ function App({ onVisualReady }) {
               type="button"
               aria-pressed={librarySource === 'local'}
               onClick={() => {
+                resetLibraryScroll()
                 setLibrarySource('local')
                 clearPlaybackQueue()
               }}

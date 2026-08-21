@@ -171,7 +171,7 @@ export function createMossAgent({ dataDir, callDesktopAgent, getDesktopAgentStat
     await state.update({ status: 'ANALYZING', currentTask: cleanMessage || 'confirmation', activeTool: null, lastError: null });
     let toolExecution = null;
     let confirmation = null;
-    let answer = '';
+    let answer;
     if (cancelActionId) {
       const existed = pendingConfirmations.delete(cancelActionId);
       answer = existed ? '高风险操作已取消，未执行任何操作。' : '待确认操作不存在或已经失效。';

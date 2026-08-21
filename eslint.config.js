@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['**/dist/**', '**/node_modules/**']),
+  globalIgnores(['**/dist/**', '**/node_modules/**', '**/.venv/**', '**/__pycache__/**', 'yun-core/**']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -26,6 +26,12 @@ export default defineConfig([
   },
   {
     files: ['server/**/*.js'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
+    files: ['electron/**/*.js', 'yun-desktop-agent/src/**/*.js'],
     languageOptions: {
       globals: globals.node,
     },

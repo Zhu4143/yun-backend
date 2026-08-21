@@ -733,7 +733,11 @@ async function handleMusicImport(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const rawName = decodeURIComponent(url.searchParams.get("filename") || "");
-    const filename = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
+    const filename = path.basename(rawName)
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .split("")
+      .map(character => character.charCodeAt(0) <= 0x1f ? "_" : character)
+      .join("");
     const extension = path.extname(filename).toLowerCase();
     if (!filename || !audioExtensions.has(extension)) return sendJson(res, 400, { ok: false, error: "请选择支持的音频文件" });
     const chunks = [];
@@ -2034,7 +2038,7 @@ async function handleNeteaseVoiceSongResolution(req, res) {
     const confidence = Math.max(0, Math.min(1, Number(decision?.confidence) || 0));
     const selected = Number.isInteger(index) ? safeCandidates.find(item => item.index === index) : null;
     return sendJson(res, 200, { ok: true, providerId: selected && confidence >= 0.72 ? selected.providerId : "", confidence });
-  } catch (error) {
+  } catch {
     return sendJson(res, 200, { ok: true, providerId: "", confidence: 0 });
   }
 }
@@ -2925,7 +2929,7 @@ function normalizeReplyForComparison(value = "") {
   return String(value || "")
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[\s，。！？、,.!?~…《》“”"'：:；;（）()\[\]【】\-_]/g, "");
+    .replace(/[\s，。！？、,.!?~…《》“”"'：:；;（）()[\]【】\-_]/g, "");
 }
 
 function buildCharacterNgrams(value = "", size = 3) {
@@ -3410,22 +3414,6 @@ function filterSongsByLanguagePreference(songs, analysis = {}) {
   return preferred.length
     ? { songs: preferred, relaxedLanguage: false }
     : { songs: [], relaxedLanguage: false, strictNoLanguageMatch: true };
-}
-
-function hasStrictLanguageNoMatch(songs, analysis = {}) {
-  const languagePreference = ["zh", "ja", "en", "ko", "instrumental", "mixed"].includes(analysis.languagePreference)
-    ? analysis.languagePreference
-    : "any";
-  if (languagePreference === "any") return false;
-  const avoidLanguages = new Set(uniqueStrings(analysis.avoidLanguages));
-  return !(songs || [])
-    .filter(song => !avoidLanguages.has(song.language))
-    .some(song => songMatchesLanguagePreference(song, languagePreference));
-}
-
-function missingLanguageReply(languagePreference) {
-  if (languagePreference === "instrumental") return "我现在还没识别到纯音乐标签，要不要我先按氛围帮你挑一首？";
-  return "我现在还没识别到这类歌曲，要不要我先按氛围帮你挑一首？";
 }
 
 function rankSongsWithDiversity(songs, analysis, context = {}, limit = 3) {
@@ -6761,7 +6749,7 @@ async function handleYunModelConfig(req, res) {
     await persistDeepSeekProConfig({ apiKey, baseUrl, model });
     runtimeProModelConfig = { apiKey, baseUrl, model };
     return sendJson(res, 200, { success: true, modelStatus });
-  } catch (error) {
+  } catch {
     return sendJson(res, 400, {
       success: false,
       message: "Pro 模型连接失败，请检查 API Key、Base URL 和模型名后重试。",

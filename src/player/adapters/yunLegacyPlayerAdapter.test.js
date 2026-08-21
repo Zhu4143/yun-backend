@@ -24,9 +24,45 @@ function makeLegacy(overrides = {}) {
   }
 }
 
+test('projectLegacy is render-safe and does not mutate or notify the external store', () => {
+  const core = createYunLegacyPlayerAdapter()
+  const initialState = core.getState()
+  let notified = 0
+  core.subscribe(() => { notified += 1 })
+
+  const projectedState = core.projectLegacy(makeLegacy())
+
+  assert.equal(projectedState.currentTrack, CURRENT_SONG)
+  assert.equal(core.getState(), initialState)
+  core.flush()
+  assert.equal(notified, 0)
+})
+
+test('projectLegacy does not rebind command delegation before commit', async () => {
+  const calls = []
+  const core = createYunLegacyPlayerAdapter()
+  const committedLegacy = makeLegacy({
+    togglePlayPause: async () => { calls.push('committed'); return { ok: true } },
+  })
+  const renderedLegacy = makeLegacy({
+    togglePlayPause: async () => { calls.push('rendered'); return { ok: true } },
+  })
+
+  core.updateLegacy(committedLegacy)
+  core.projectLegacy(renderedLegacy)
+  await core.togglePlay()
+  core.updateLegacy(renderedLegacy)
+  await core.togglePlay()
+
+  assert.deepEqual(calls, ['committed', 'rendered'])
+})
+
 test('updateLegacy bridges playback fields into the store state', () => {
   const core = createYunLegacyPlayerAdapter()
-  const state = core.updateLegacy(makeLegacy())
+  const legacy = makeLegacy()
+  const projectedState = core.projectLegacy(legacy)
+  const state = core.updateLegacy(legacy, projectedState)
+  assert.equal(state, projectedState)
   assert.equal(state.currentTrack, CURRENT_SONG)
   assert.equal(state.isPlaying, true)
   assert.equal(state.currentTime, 10)

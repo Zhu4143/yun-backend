@@ -38,7 +38,7 @@ const QUERY_ALIASES = [
 ]
 
 function normalise(value) {
-  return String(value || '').toLowerCase().replace(/[\s，。！？、；：：“”‘’（）()【】\[\]<>《》\-—_]/g, '')
+  return String(value || '').toLowerCase().replace(/[\s，。！？、；：：“”‘’（）()【】[\]<>《》\-—_]/g, '')
 }
 
 function recordSearchText(record) {

@@ -73,7 +73,7 @@ export function createMusicIntelligenceService({ cacheDir }) {
     const analysis = await getAnalysis(track)
     const target = String(intent.target || '').toLowerCase()
     const occurrence = String(intent.occurrence || 'first').toLowerCase()
-    let candidates = []
+    let candidates
     if (target === 'highlight') candidates = analysis.highlights || []
     else if (target === 'vocal_entry' && analysis.vocalEntry) candidates = [{ start: analysis.vocalEntry }]
     else candidates = (analysis.sections || []).filter((section) => section.type === target)

@@ -17,9 +17,9 @@ export async function fetchLocalApi(url, options = {}, {
     return await fetch(url, { ...options, signal: controller.signal })
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('本地服务响应超时，请稍后重试')
+      throw new Error('本地服务响应超时，请稍后重试', { cause: error })
     }
-    throw new Error(unavailableMessage)
+    throw new Error(unavailableMessage, { cause: error })
   } finally {
     window.clearTimeout(timeout)
   }

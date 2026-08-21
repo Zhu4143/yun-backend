@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value))
 
@@ -137,7 +137,6 @@ export default function UnifiedLiquidGlass({
   const filterId = useId().replace(/:/g, '')
   const rootRef = useRef(null)
   const [glassSize, setGlassSize] = useState({ width: 0, height: 0 })
-  const [fieldMapUrl, setFieldMapUrl] = useState('')
 
   useEffect(() => {
     if (!rootRef.current) return undefined
@@ -167,10 +166,11 @@ export default function UnifiedLiquidGlass({
     }
   }, [])
 
-  useEffect(() => {
-    if (!glassSize.width || !glassSize.height) return
-    setFieldMapUrl(buildOpticalFieldMap(glassSize.width, glassSize.height, cornerRadius, thicknessBoost))
-  }, [cornerRadius, glassSize, thicknessBoost])
+  const fieldMapUrl = useMemo(() => (
+    glassSize.width && glassSize.height
+      ? buildOpticalFieldMap(glassSize.width, glassSize.height, cornerRadius, thicknessBoost)
+      : ''
+  ), [cornerRadius, glassSize, thicknessBoost])
 
   const refractionScale = Math.max(8, displacementScale)
   const chromaticDelta = clamp(aberrationIntensity, 0.4, 1.5)
