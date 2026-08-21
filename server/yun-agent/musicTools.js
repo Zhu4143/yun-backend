@@ -31,6 +31,7 @@ export function createMusicTools() {
     { name: 'music_prepare_queue', description: 'Search NetEase Cloud Music and add matching tracks to the up-next queue without changing the current song.', parameters: { query: 'string' }, requiresOnline: true, handler: async ({ query }) => action('music.prepare_queue', { query: query.slice(0, 80) }) },
     { name: 'music_recommend', description: 'Ask the renderer to fetch and play a NetEase recommendation.', parameters: {}, requiresOnline: true, handler: async () => action('music.recommend') },
     { name: 'music_analyze_section', description: 'Find a section in the current song and seek to it.', parameters: { target: 'string' }, handler: async ({ target }) => action('music.analyze_section', { target }) },
+    { name: 'music_read_comments', description: 'Read a few popular NetEase comments for the currently playing song aloud. This only reads public comments and does not post anything.', parameters: {}, requiresOnline: true, handler: async () => action('music.read_comments', { limit: 3 }) },
     { name: 'tts_speak', description: 'Speak a short response using Yun TTS.', parameters: { text: 'string' }, handler: async ({ text }) => action('tts.speak', { text: text.slice(0, 240) }) },
   ]
 }

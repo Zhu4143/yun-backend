@@ -50,6 +50,7 @@ const {
   song_url_v1: neteaseSongUrlV1,
   record_recent_song: neteaseRecordRecentSong,
   user_record: neteaseUserRecord,
+  comment_music: neteaseCommentMusic,
 } = neteaseCloudMusicApi;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2113,6 +2114,26 @@ async function handleNeteaseLyric(req, res) {
       ok: false,
       error: error instanceof Error ? error.message : "Netease lyric failed",
     });
+  }
+}
+
+async function handleNeteaseSongComments(req, res) {
+  try {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const id = String(url.searchParams.get("id") || "").trim();
+    const limit = Math.max(1, Math.min(12, Number(url.searchParams.get("limit")) || 3));
+    if (!id) return sendJson(res, 400, { ok: false, error: "Missing song id" });
+    const response = await neteaseCommentMusic({ id, limit, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+    const rows = response?.body?.hotComments || response?.body?.comments || [];
+    const comments = rows.slice(0, limit).map((item) => ({
+      id: String(item?.commentId || ""),
+      user: String(item?.user?.nickname || "一位听众").trim().slice(0, 40),
+      content: String(item?.content || "").replace(/\s+/g, " ").trim().slice(0, 280),
+      likedCount: Number(item?.likedCount || 0),
+    })).filter((item) => item.content);
+    return sendJson(res, 200, { ok: true, comments, total: Number(response?.body?.total || comments.length) });
+  } catch (error) {
+    return sendJson(res, 502, { ok: false, error: error instanceof Error ? error.message : "网易云评论读取失败" });
   }
 }
 
@@ -6975,6 +6996,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && req.url?.startsWith("/api/netease/lyric")) {
     return handleNeteaseLyric(req, res);
+  }
+  if (req.method === "GET" && req.url?.startsWith("/api/netease/comments")) {
+    return handleNeteaseSongComments(req, res);
   }
   if (req.method === "GET" && req.url?.startsWith("/api/netease/url")) {
     return handleNeteaseUrl(req, res);

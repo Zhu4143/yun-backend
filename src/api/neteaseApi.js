@@ -189,3 +189,12 @@ export async function fetchNeteaseAiRecommendations({
     .map(normalizeNeteaseSong)
     .filter((song) => song.providerId)
 }
+
+export async function fetchNeteaseSongComments(songId, { limit = 3 } = {}) {
+  const providerId = String(songId || '').replace(/^netease-/, '').trim()
+  if (!providerId) throw new Error('当前没有可读取评论的网易云歌曲')
+  const response = await fetch(`/api/netease/comments?id=${encodeURIComponent(providerId)}&limit=${encodeURIComponent(Math.max(1, Math.min(12, limit)))}`, { cache: 'no-store' })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok || data.ok === false) throw new Error(data.error || '网易云评论读取失败')
+  return Array.isArray(data.comments) ? data.comments : []
+}

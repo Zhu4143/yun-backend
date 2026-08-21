@@ -1,4 +1,4 @@
-import { addSongToNeteaseCollection, fetchNeteaseAiRecommendations, fetchNeteaseMe, fetchNeteasePlaylistTracks, searchNeteaseSongs } from '../api/neteaseApi.js'
+import { addSongToNeteaseCollection, fetchNeteaseAiRecommendations, fetchNeteaseMe, fetchNeteasePlaylistTracks, fetchNeteaseSongComments, searchNeteaseSongs } from '../api/neteaseApi.js'
 import { resolveMusicStructureSeek } from '../api/musicIntelligenceApi.js'
 
 function compactText(value) {
@@ -110,6 +110,23 @@ export async function executeYunAgentActions(actions, { player, voice, context =
           }
           if (resolved?.ok) player?.seekTo?.(resolved.positionSec)
           results.push(resolved)
+          break
+        }
+        case 'music.read_comments': {
+          if (!context.currentSong?.providerId && String(context.currentSong?.id || '').startsWith('netease-') === false) {
+            results.push({ ok: false, error: 'current_song_is_not_netease' })
+            break
+          }
+          const comments = await fetchNeteaseSongComments(context.currentSong.providerId || context.currentSong.id, { limit: payload.limit || 3 })
+          if (!isCurrentRequest()) {
+            results.push({ ok: false, cancelled: true })
+            break
+          }
+          const spokenText = comments.length
+            ? `这首歌有${comments.length}条想读给你的热门评论。${comments.map((comment, index) => `第${index + 1}条，${comment.user}说：${comment.content}`).join('。')}`
+            : '这首歌暂时没有读到可公开的评论。'
+          await voice?.speakText?.(spokenText, { allowBargeIn: true })
+          results.push({ ok: true, comments, spokenText })
           break
         }
         case 'tts.speak': results.push(await voice?.speakText?.(payload.text, { allowBargeIn: true })); break
