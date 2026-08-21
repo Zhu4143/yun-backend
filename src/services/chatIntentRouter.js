@@ -17,6 +17,10 @@ function compactText(text) {
     .replace(/[\s，。！？、,.!?~…《》"'“”‘’()[\]{}【】（）\-_/\\|]/g, '')
 }
 
+function getCurrentTrack(player) {
+  return player.getState().currentTrack
+}
+
 function neteaseOperationFailureReply(error, responseMode, operation = '读取网易云内容') {
   if (responseMode === 'silent') return '...'
   const message = String(error instanceof Error ? error.message : error || '')
@@ -184,9 +188,11 @@ async function playNeteaseFromLyricFragment(lyrics, player, responseMode) {
         skipTts: responseMode === 'silent',
       }
     }
-    const result = player.playSongFromQueue
-      ? await player.playSongFromQueue(resolved.song, [resolved.song], { crossfade: Boolean(player.currentSong) })
-      : await player.playSong(resolved.song, { crossfade: Boolean(player.currentSong) })
+    const result = await player.playTrackFromQueue(
+      resolved.song,
+      [resolved.song],
+      { crossfade: Boolean(getCurrentTrack(player)) },
+    )
     return {
       handled: true,
       reply: result?.ok
@@ -323,7 +329,7 @@ function detectPlayerSettingIntent(message) {
   return null
 }
 
-function executePlayerSettingIntent(message, player, responseMode) {
+function executePlayerSettingIntent(message, player, setResponseMode, responseMode) {
   const intent = detectPlayerSettingIntent(message)
   if (!intent) return { handled: false }
   if (intent.kind === 'playback') {
@@ -335,8 +341,8 @@ function executePlayerSettingIntent(message, player, responseMode) {
       skipTts: responseMode === 'silent',
     }
   }
-  if (!player?.setResponseMode) return { handled: false }
-  player.setResponseMode(intent.option.id)
+  if (!setResponseMode) return { handled: false }
+  setResponseMode(intent.option.id)
   return {
     handled: true,
     reply: intent.option.id === 'silent' ? '好，已进入专注模式，我会保持安静。' : `好，已经切换为${intent.option.label}状态。`,
@@ -406,10 +412,8 @@ async function playMyNeteasePlaylist(message, player, responseMode, { forceLiked
     }
     // A personal playlist is a fixed queue, not an AI radio session. Keep the
     // visible playback mode aligned with the spoken “按顺序播放” confirmation.
-    player.setPlaybackMode?.('sequence')
-    const result = player.playSongFromQueue
-      ? await player.playSongFromQueue(tracks[0], tracks)
-      : await player.playSong(tracks[0])
+    player.setPlaybackMode('sequence')
+    const result = await player.playTrackFromQueue(tracks[0], tracks)
     return {
       handled: true,
       reply: result?.ok ? `正在按顺序播放你的网易云歌单《${selected.liked ? '我喜欢的音乐' : selected.name}》。` : `找到了《${selected.name}》，但第一首暂时播放失败。`,
@@ -462,10 +466,12 @@ async function playNeteaseArtistCatalog(message, player, responseMode) {
       skipTts: responseMode === 'silent',
     }
   }
-  player.setPlaybackMode?.('sequence')
-  const result = player.playSongFromQueue
-    ? await player.playSongFromQueue(tracks[0], tracks, { crossfade: Boolean(player.currentSong) })
-    : await player.playSong(tracks[0], { crossfade: Boolean(player.currentSong) })
+  player.setPlaybackMode('sequence')
+  const result = await player.playTrackFromQueue(
+    tracks[0],
+    tracks,
+    { crossfade: Boolean(getCurrentTrack(player)) },
+  )
   const artistName = catalog.artist?.name || artistQuery
   return {
     handled: true,
@@ -493,18 +499,20 @@ async function playNeteaseAiRecommendation(message, player, responseMode, contex
   if (!isAiRecommendationRequest(message)) return { handled: false }
   let tracks
   try {
-    tracks = await fetchNeteaseAiRecommendations({ ...context, currentSong: player.currentSong || context.currentSong, limit: 8 })
+    tracks = await fetchNeteaseAiRecommendations({ ...context, currentSong: getCurrentTrack(player) || context.currentSong, limit: 8 })
   } catch {
     return { handled: false }
   }
   if (!tracks.length) return { handled: false }
-  player.setPlaybackMode?.('ai_recommend')
-  const result = player.playSongFromQueue
-    ? await player.playSongFromQueue(tracks[0], tracks, { crossfade: Boolean(player.currentSong) })
-    : await player.playSong(tracks[0], { crossfade: Boolean(player.currentSong) })
+  player.setPlaybackMode('ai_recommend')
+  const result = await player.playTrackFromQueue(
+    tracks[0],
+    tracks,
+    { crossfade: Boolean(getCurrentTrack(player)) },
+  )
   if (result?.ok) {
-    player.setAutoUpNext?.(tracks.slice(1, 4))
-    player.setQueuedNextSong?.(null)
+    player.setAutoUpNext(tracks.slice(1, 4))
+    player.setQueuedNextTrack(null)
   }
   return {
     handled: true,
@@ -567,8 +575,9 @@ function detectMusicStructureIntent(message) {
 }
 
 async function executeMusicStructureIntent(intent, player, responseMode) {
-  if (!player?.currentSong) return { handled: true, reply: '还没有正在播放的歌。', skipTts: responseMode === 'silent' }
-  const result = await resolveMusicStructureSeek(player.currentSong, intent)
+  const currentTrack = getCurrentTrack(player)
+  if (!currentTrack) return { handled: true, reply: '还没有正在播放的歌。', skipTts: responseMode === 'silent' }
+  const result = await resolveMusicStructureSeek(currentTrack, intent)
   if (!result.ok || !Number.isFinite(Number(result.positionSec))) {
     return {
       handled: true,
@@ -576,7 +585,7 @@ async function executeMusicStructureIntent(intent, player, responseMode) {
       skipTts: responseMode === 'silent',
     }
   }
-  player.seekTo(result.positionSec)
+  player.seek(result.positionSec)
   return { handled: true, reply: responseMode === 'silent' ? '...' : '好，已经跳到那一段。', skipTts: responseMode === 'silent' }
 }
 
@@ -732,7 +741,7 @@ function modeReply(responseMode, action, fallback) {
 
 async function executeHardCommand(action, player, responseMode) {
   if (action === 'next') {
-    const result = await player.playNext()
+    const result = await player.next()
     return {
       handled: true,
       ...(result?.ok
@@ -746,7 +755,7 @@ async function executeHardCommand(action, player, responseMode) {
   }
 
   if (action === 'previous') {
-    const result = await player.playPrevious()
+    const result = await player.previous()
     return {
       handled: true,
       ...(result?.ok
@@ -760,14 +769,15 @@ async function executeHardCommand(action, player, responseMode) {
   }
 
   if (action === 'pause') {
-    player.pausePlayback?.()
+    player.pause()
     return { handled: true, ...modeReply(responseMode, 'pause') }
   }
 
   if (action === 'resume') {
-    const result = player.currentSong
-      ? await player.playSong(player.currentSong)
-      : await player.togglePlayPause()
+    const currentTrack = getCurrentTrack(player)
+    const result = currentTrack
+      ? await player.playTrack(currentTrack)
+      : await player.togglePlay()
 
     return {
       handled: true,
@@ -778,12 +788,13 @@ async function executeHardCommand(action, player, responseMode) {
   }
 
   if (action === 'replay') {
-    if (!player.currentSong) {
+    const currentTrack = getCurrentTrack(player)
+    if (!currentTrack) {
       return { handled: true, reply: '还没有正在播放的歌。', skipTts: responseMode === 'silent' }
     }
 
-    player.seekTo(0)
-    await player.playSong(player.currentSong)
+    player.seek(0)
+    await player.playTrack(currentTrack)
     return { handled: true, ...modeReply(responseMode, 'replay') }
   }
 
@@ -812,7 +823,7 @@ async function executeSmartMusicResult({ smartResult, libraryTracks, player, res
       }
     }
 
-    const result = await player.playSong(track)
+    const result = await player.playTrack(track)
 
     return {
       handled: true,
@@ -883,6 +894,7 @@ export async function routeChatIntent({
   currentSong = null,
   libraryTracks = [],
   player,
+  setResponseMode = null,
   responseMode = 'companion',
   persona = 'warm',
   musicSource = 'local',
@@ -909,13 +921,13 @@ export async function routeChatIntent({
   const structureIntent = detectMusicStructureIntent(message)
   if (structureIntent) return executeMusicStructureIntent(structureIntent, player, responseMode)
 
-  const settingsIntent = executePlayerSettingIntent(message, player, responseMode)
+  const settingsIntent = executePlayerSettingIntent(message, player, setResponseMode, responseMode)
   if (settingsIntent.handled) return settingsIntent
 
   const lyricLookup = await playNeteaseFromLyrics(message, player, responseMode)
   if (lyricLookup.handled) return lyricLookup
 
-  const collectionAdd = await addCurrentSongToNeteaseCollection(message, currentSong || player?.currentSong, responseMode)
+  const collectionAdd = await addCurrentSongToNeteaseCollection(message, currentSong || getCurrentTrack(player), responseMode)
   if (collectionAdd.handled) return collectionAdd
 
   const artistCatalog = await playNeteaseArtistCatalog(message, player, responseMode)
@@ -987,8 +999,8 @@ export async function routeChatIntent({
 
   const directMentionedTrack = findLocalTrackFromText(message, libraryTracks)
   if (directMentionedTrack && !isSpecificSongQuestion(message) && (hasExplicitMusicAction(message) || hasNaturalPlayIntent(message))) {
-    player.clearPlaybackQueue?.()
-    const result = await player.playSong(directMentionedTrack)
+    player.clearPlaybackQueue()
+    const result = await player.playTrack(directMentionedTrack)
 
     return {
       handled: true,
@@ -1016,8 +1028,8 @@ export async function routeChatIntent({
       || findRememberedTrack(message, memory, libraryTracks)
 
     if (confirmedTrack) {
-      player.clearPlaybackQueue?.()
-      const result = await player.playSong(confirmedTrack)
+      player.clearPlaybackQueue()
+      const result = await player.playTrack(confirmedTrack)
 
       return {
         handled: true,

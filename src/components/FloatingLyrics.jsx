@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchSongLyrics } from '../api/yunApi'
 import { fetchNeteaseLyrics } from '../api/neteaseApi'
+import { usePlayer } from '../player/react/usePlayer'
 import { lyricFlowController } from '../services/LyricFlowController'
 import './FloatingLyrics.css'
 
@@ -27,7 +28,8 @@ function getLyricRowHeight() {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
-function FloatingLyrics({ currentSong, currentTime = 0, active = false }) {
+function FloatingLyrics() {
+  const { currentTrack: currentSong, currentTime, isPlaying: active } = usePlayer()
   const [lyricState, setLyricState] = useState({ songId: '', lines: [], status: 'idle' })
   const [rowHeight, setRowHeight] = useState(getLyricRowHeight)
   const requestIdRef = useRef(0)

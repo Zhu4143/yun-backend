@@ -311,21 +311,23 @@ export async function createPlaybackPlan({
 
 export async function executePlaybackPlan(plan, player) {
   if (!plan || plan.action === 'none') return { ok: false, ignored: true }
-  if (plan.action === 'next') return player.playNext?.()
-  if (plan.action === 'previous') return player.playPrevious?.()
-  if (plan.action === 'pause') return player.pausePlayback?.()
+  if (plan.action === 'next') return player.next()
+  if (plan.action === 'previous') return player.previous()
+  if (plan.action === 'pause') return player.pause()
   if (plan.action === 'resume') {
-    return player.currentSong ? player.playSong?.(player.currentSong) : player.togglePlayPause?.()
+    const currentTrack = player.getState().currentTrack
+    return currentTrack ? player.playTrack(currentTrack) : player.togglePlay()
   }
   if (plan.action === 'play' && plan.track) {
-    if (plan.source === 'netease' && player.playSongFromQueue) {
+    const currentTrack = player.getState().currentTrack
+    if (plan.source === 'netease') {
       const queue = Array.isArray(plan.candidates) && plan.candidates.length
         ? plan.candidates
         : [plan.track]
-      return player.playSongFromQueue(plan.track, queue, { crossfade: Boolean(player.currentSong) })
+      return player.playTrackFromQueue(plan.track, queue, { crossfade: Boolean(currentTrack) })
     }
-    player.clearPlaybackQueue?.()
-    return player.playSong?.(plan.track, { crossfade: Boolean(player.currentSong) })
+    player.clearPlaybackQueue()
+    return player.playTrack(plan.track, { crossfade: Boolean(currentTrack) })
   }
   return { ok: false, error: 'unsupported_radio_plan' }
 }

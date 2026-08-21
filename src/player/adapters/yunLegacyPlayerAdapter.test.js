@@ -113,3 +113,109 @@ test('flush emits exactly once after a state change', () => {
   core.flush()
   assert.equal(notified, 1)
 })
+
+test('canonical queue commands delegate to the committed legacy owner', async () => {
+  const calls = []
+  const core = createYunLegacyPlayerAdapter()
+  const track = { id: 'track' }
+  const queue = [track]
+  const options = { replace: true }
+  const legacy = makeLegacy({
+    playSongFromQueue: async (...args) => { calls.push(['playTrackFromQueue', ...args]); return { ok: true } },
+    setPlaybackQueue: (...args) => calls.push(['setPlaybackQueue', ...args]),
+    clearPlaybackQueue: (...args) => calls.push(['clearPlaybackQueue', ...args]),
+    setQueuedNextSong: (...args) => calls.push(['setQueuedNextTrack', ...args]),
+    enqueueUpNext: (...args) => calls.push(['enqueueUpNext', ...args]),
+    removeUpNext: (...args) => calls.push(['removeUpNext', ...args]),
+    clearUpNext: (...args) => calls.push(['clearUpNext', ...args]),
+    setAutoUpNext: (...args) => calls.push(['setAutoUpNext', ...args]),
+    removeAutoUpNext: (...args) => calls.push(['removeAutoUpNext', ...args]),
+    clearAutoUpNext: (...args) => calls.push(['clearAutoUpNext', ...args]),
+    getPlaybackDiagnostics: (...args) => { calls.push(['getPlaybackDiagnostics', ...args]); return { isCrossfading: false } },
+  })
+  core.updateLegacy(legacy)
+  calls.length = 0
+
+  await core.playTrackFromQueue(track, queue, options)
+  core.setPlaybackQueue(queue)
+  core.clearPlaybackQueue()
+  core.setQueuedNextTrack(track)
+  core.enqueueUpNext(track)
+  core.removeUpNext(track)
+  core.clearUpNext()
+  core.setAutoUpNext(queue, options)
+  core.removeAutoUpNext(track)
+  core.clearAutoUpNext()
+  assert.deepEqual(core.getPlaybackDiagnostics(), { isCrossfading: false })
+
+  assert.deepEqual(calls, [
+    ['playTrackFromQueue', track, queue, options],
+    ['setPlaybackQueue', queue],
+    ['clearPlaybackQueue'],
+    ['setQueuedNextTrack', track],
+    ['enqueueUpNext', track],
+    ['removeUpNext', track],
+    ['clearUpNext'],
+    ['setAutoUpNext', queue, options],
+    ['removeAutoUpNext', track],
+    ['clearAutoUpNext'],
+    ['getPlaybackDiagnostics'],
+  ])
+})
+
+test('canonical playback commands delegate to the committed legacy owner', async () => {
+  const calls = []
+  const core = createYunLegacyPlayerAdapter()
+  const track = { id: 'track' }
+  const options = { crossfade: true }
+  const pausedLegacy = makeLegacy({
+    isPlaying: false,
+    togglePlayPause: async (...args) => { calls.push(['play', ...args]); return { ok: true } },
+  })
+  core.updateLegacy(pausedLegacy)
+  await core.play()
+
+  const playingLegacy = makeLegacy({
+    pausePlayback: (...args) => { calls.push(['pause', ...args]); return { ok: true } },
+    togglePlayPause: async (...args) => { calls.push(['togglePlay', ...args]); return { ok: true } },
+    playNext: async (...args) => { calls.push(['next', ...args]); return { ok: true } },
+    playPrevious: async (...args) => { calls.push(['previous', ...args]); return { ok: true } },
+    seekTo: (...args) => calls.push(['seek', ...args]),
+    playSong: async (...args) => { calls.push(['playTrack', ...args]); return { ok: true } },
+    setVolume: (...args) => calls.push(['setVolume', ...args]),
+    setPlaybackMode: (...args) => calls.push(['setPlaybackMode', ...args]),
+  })
+  core.updateLegacy(playingLegacy)
+  await core.pause()
+  await core.togglePlay()
+  await core.next(options)
+  await core.previous()
+  core.seek(42)
+  await core.playTrack(track, options)
+  core.setVolume(0.4)
+  core.setPlaybackMode('single')
+
+  assert.deepEqual(calls, [
+    ['play'],
+    ['pause'],
+    ['togglePlay'],
+    ['next', options],
+    ['previous'],
+    ['seek', 42],
+    ['playTrack', track, options],
+    ['setVolume', 0.4],
+    ['setPlaybackMode', 'single'],
+  ])
+})
+
+test('dispose removes every external-store subscription', () => {
+  const core = createYunLegacyPlayerAdapter()
+  let notified = 0
+  core.subscribe(() => { notified += 1 })
+  core.dispose()
+
+  core.updateLegacy(makeLegacy())
+  core.flush()
+
+  assert.equal(notified, 0)
+})

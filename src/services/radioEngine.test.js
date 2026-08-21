@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createPlaybackPlan } from './radioEngine.js'
+import { createPlaybackPlan, executePlaybackPlan } from './radioEngine.js'
 
 const lettingGo = { id: 'letting-go', title: 'Letting Go', artist: '蔡健雅', source: 'netease' }
 const redHeels = { id: 'red-heels', title: '红色高跟鞋', artist: '蔡健雅', source: 'netease' }
@@ -75,4 +75,22 @@ test('a short exact title does not get replaced by a longer local lookalike', as
   assert.equal(plan.source, 'netease')
   assert.equal(plan.track.providerId, rainyDay.id)
   assert.equal(plan.reply, '嗯，给你放《雨天》。')
+})
+
+test('playback execution uses the canonical PlayerCore queue contract', async () => {
+  const calls = []
+  const player = {
+    getState: () => ({ currentTrack: lettingGo }),
+    playTrackFromQueue: async (...args) => { calls.push(args); return { ok: true } },
+  }
+
+  const result = await executePlaybackPlan({
+    action: 'play',
+    source: 'netease',
+    track: rainyDay,
+    candidates: [rainyDay, sunnyDay],
+  }, player)
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls, [[rainyDay, [rainyDay, sunnyDay], { crossfade: true }]])
 })

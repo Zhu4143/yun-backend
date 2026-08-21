@@ -15,8 +15,9 @@ test('liked-song action uses the stable liked flag when the playlist was renamed
     throw new Error(`Unexpected request: ${url}`)
   }
   const player = {
-    currentSong: null,
-    playSongFromQueue: async (song, queue) => {
+    getState: () => ({ currentTrack: null }),
+    setPlaybackMode: () => {},
+    playTrackFromQueue: async (song, queue) => {
       calls.push({ song, queue })
       return { ok: true }
     },
@@ -31,4 +32,30 @@ test('liked-song action uses the stable liked flag when the playlist was renamed
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('ordinary music actions use canonical PlayerCore commands', async () => {
+  const calls = []
+  const diagnostics = { isCrossfading: false }
+  const player = {
+    next: async () => { calls.push(['next']); return { ok: true } },
+    pause: async () => { calls.push(['pause']); return { ok: true } },
+    seek: (seconds) => calls.push(['seek', seconds]),
+    setPlaybackMode: (mode) => calls.push(['setPlaybackMode', mode]),
+    getPlaybackDiagnostics: () => diagnostics,
+  }
+  let responseMode = ''
+
+  const results = await executeYunAgentActions([
+    { type: 'music.next' },
+    { type: 'music.pause' },
+    { type: 'music.seek', payload: { seconds: 18 } },
+    { type: 'music.set_mode', payload: { mode: 'single' } },
+    { type: 'music.set_response_mode', payload: { mode: 'silent' } },
+    { type: 'music.get_state' },
+  ], { player, setResponseMode: (mode) => { responseMode = mode } })
+
+  assert.deepEqual(calls, [['next'], ['pause'], ['seek', 18], ['setPlaybackMode', 'single']])
+  assert.equal(responseMode, 'silent')
+  assert.equal(results.at(-1).diagnostics, diagnostics)
 })

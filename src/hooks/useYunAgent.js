@@ -5,13 +5,13 @@ function makeSessionId() {
   return `yun_agent_${globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(16).slice(2)}`}`
 }
 
-export function useYunAgent({ player, voice, libraryTracks = [], currentSong = null, playHistory = [], recentRecommendations = [] } = {}) {
+export function useYunAgent({ player, playerState, setResponseMode, voice, libraryTracks = [], currentSong = null, playHistory = [], recentRecommendations = [] } = {}) {
   const sessionIdRef = useRef(makeSessionId())
   const context = useMemo(() => ({
     online: navigator.onLine !== false,
-    playback: { currentTrackId: currentSong?.id || null, isPlaying: Boolean(player?.isPlaying), currentTime: Number(player?.currentTime || 0), duration: Number(player?.duration || 0), playbackMode: player?.playbackMode || 'sequence' },
+    playback: { currentTrackId: currentSong?.id || null, isPlaying: Boolean(playerState?.isPlaying), currentTime: Number(playerState?.currentTime || 0), duration: Number(playerState?.duration || 0), playbackMode: playerState?.playbackMode || 'sequence' },
     library: libraryTracks.map((track) => ({ id: track.id, title: track.title, artist: track.artist, source: track.source })).slice(0, 200),
-  }), [currentSong, libraryTracks, player?.currentTime, player?.duration, player?.isPlaying, player?.playbackMode])
+  }), [currentSong, libraryTracks, playerState?.currentTime, playerState?.duration, playerState?.isPlaying, playerState?.playbackMode])
 
   return useMemo(() => ({
     run: async (message, { isCurrentRequest = () => true, onPlan = null } = {}) => {
@@ -26,6 +26,7 @@ export function useYunAgent({ player, voice, libraryTracks = [], currentSong = n
       const executions = await executeYunAgentActions(result.actions, {
         player,
         voice,
+        setResponseMode,
         context: { currentSong, playHistory, recentRecommendations },
         isCurrentRequest,
       })
@@ -71,5 +72,5 @@ export function useYunAgent({ player, voice, libraryTracks = [], currentSong = n
       })
       return response.json().catch(() => ({}))
     },
-  }), [context, currentSong, playHistory, player, recentRecommendations, voice])
+  }), [context, currentSong, playHistory, player, recentRecommendations, setResponseMode, voice])
 }

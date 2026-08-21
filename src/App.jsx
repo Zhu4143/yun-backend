@@ -721,31 +721,9 @@ function App({ onVisualReady }) {
   const legacyPlayer = usePlayerObserver(useLocalPlayer(libraryTracks))
   const {
     audioRef,
-    currentSong,
-    isPlaying,
-    currentTime,
-    playbackMode,
     lastAutoNextSong,
-    upNextTracks,
-    autoUpNextTracks,
-    playSong,
-    playSongFromQueue,
-    pausePlayback,
-    togglePlayPause,
-    playNext,
-    playPrevious,
-    seekTo,
     musicDuckingController,
-    setPlaybackMode,
     readAudioFrequencyData,
-    setQueuedNextSong,
-    enqueueUpNext,
-    removeUpNext,
-    clearUpNext,
-    setAutoUpNext,
-    removeAutoUpNext,
-    clearAutoUpNext,
-    clearPlaybackQueue,
   } = legacyPlayer
   const [playerCore] = useState(() => createYunLegacyPlayerAdapter())
   // Keep render pure; bind controls and publish the projection only after commit.
@@ -755,6 +733,13 @@ function App({ onVisualReady }) {
     playerCore.flush()
   }, [legacyPlayer, playerCore, playerState])
   useEffect(() => () => playerCore.dispose(), [playerCore])
+  const {
+    currentTrack: currentSong,
+    isPlaying,
+    playbackMode,
+    upNext: upNextTracks,
+    autoUpNext: autoUpNextTracks,
+  } = playerState
   // Headless voice lifecycle authority. It deliberately does not own UI,
   // microphone hardware, or the existing conversation/MCP routes.
   const voiceSession = useVoiceSessionController()
@@ -999,7 +984,9 @@ function App({ onVisualReady }) {
   const [asrSettingsOpen, setAsrSettingsOpen] = useState(false)
   const yunMemory = useYunMemory()
   const yunAgent = useYunAgent({
-    player: legacyPlayer,
+    player: playerCore,
+    playerState,
+    setResponseMode: applyResponseMode,
     voice: yunVoice,
     libraryTracks,
     currentSong,
@@ -1019,22 +1006,8 @@ function App({ onVisualReady }) {
   } = useYunChat({
     currentSong,
     libraryTracks,
-    player: {
-      audioRef,
-      currentSong,
-      playSong,
-      playSongFromQueue,
-      clearPlaybackQueue,
-      pausePlayback,
-      togglePlayPause,
-      playNext,
-      playPrevious,
-      seekTo,
-      setPlaybackMode,
-      setResponseMode: applyResponseMode,
-      setQueuedNextSong,
-      setAutoUpNext,
-    },
+    player: playerCore,
+    setResponseMode: applyResponseMode,
     voice: yunVoice,
     responseMode,
     personaMode,
@@ -1046,7 +1019,7 @@ function App({ onVisualReady }) {
     cancelActiveChatRequestRef.current = cancelActiveChatRequest
   }, [cancelActiveChatRequest])
   useCowAgentYunBridge({
-    player: legacyPlayer,
+    player: playerCore,
     voice: yunVoice,
     currentSong,
     playHistory,
@@ -1060,9 +1033,9 @@ function App({ onVisualReady }) {
   const setResponseMode = applyResponseMode
 
   const selectPlaybackMode = useCallback((mode) => {
-    setPlaybackMode(mode)
+    playerCore.setPlaybackMode(mode)
     setActivePanel(null)
-  }, [setPlaybackMode])
+  }, [playerCore])
 
   const handleVoiceRecognitionError = useCallback((error) => {
     const labels = {
@@ -1413,15 +1386,15 @@ function App({ onVisualReady }) {
 
   const playSongWithPodcastReaction = useCallback(async (song, trigger = 'user_play') => {
     const result = song?.source === 'netease'
-      ? await playSongFromQueue(song, neteaseResults)
-      : (clearPlaybackQueue(), await playSong(song))
+      ? await playerCore.playTrackFromQueue(song, neteaseResults)
+      : (playerCore.clearPlaybackQueue(), await playerCore.playTrack(song))
 
     if (result?.ok) {
       reactToSongChange(result.song || song, trigger)
     }
 
     return result
-  }, [clearPlaybackQueue, neteaseResults, playSong, playSongFromQueue, reactToSongChange])
+  }, [neteaseResults, playerCore, reactToSongChange])
 
   const playNextWithPodcastReaction = useCallback(async () => {
     const result = await playerCore.next()
@@ -1470,8 +1443,8 @@ function App({ onVisualReady }) {
   const waitingTracks = upNextTracks
   const aiCandidateTracks = autoUpNextTracks
   const clearWaitingTracks = useCallback(() => {
-    clearUpNext()
-  }, [clearUpNext])
+    playerCore.clearUpNext()
+  }, [playerCore])
 
   const resetLibraryScroll = useCallback(() => {
     setLibraryScrollTop(0)
@@ -1791,7 +1764,7 @@ function App({ onVisualReady }) {
             ...playHistory.flatMap((song) => [song?.id, song?.providerId]),
             ...recentRecommendations.flatMap((item) => [item?.song?.id, item?.song?.providerId, item?.id, item?.providerId]),
           ].filter(Boolean)
-          setAutoUpNext(tracks, { excludeSongIds: playedIds, maxItems: 6 })
+          playerCore.setAutoUpNext(tracks, { excludeSongIds: playedIds, maxItems: 6 })
           setRadioRecommendationHistory((current) => {
             const planned = tracks.map((song) => ({
               id: song.id,
@@ -1807,7 +1780,7 @@ function App({ onVisualReady }) {
           // Auto-up-next owns this recommendation batch. Keeping the same
           // first item in the legacy one-track slot would replay it after the
           // visible queue has been consumed.
-          setQueuedNextSong(null)
+          playerCore.setQueuedNextTrack(null)
           if (responseMode === 'podcast') prefetchSongReaction(tracks[0], 'auto_next')
         } else {
           retry()
@@ -1829,7 +1802,7 @@ function App({ onVisualReady }) {
     return () => {
       cancelled = true
     }
-  }, [autoUpNextTracks.length, currentSong, isPlaying, libraryTracks, playbackMode, playHistory, prefetchSongReaction, radioPrefetchRetryNonce, radioRecommendationHistory, recentRecommendations, responseMode, setAutoUpNext, setQueuedNextSong])
+  }, [autoUpNextTracks.length, currentSong, isPlaying, libraryTracks, playbackMode, playHistory, playerCore, prefetchSongReaction, radioPrefetchRetryNonce, radioRecommendationHistory, recentRecommendations, responseMode])
 
   useEffect(() => () => window.clearTimeout(radioPrefetchRetryTimerRef.current), [])
 
@@ -2104,7 +2077,7 @@ function App({ onVisualReady }) {
       if (!spacePressActiveRef.current) return
       event.preventDefault()
       clearSpaceHold()
-      if (!spaceHoldTriggeredRef.current) togglePlayPause()
+      if (!spaceHoldTriggeredRef.current) playerCore.togglePlay()
       spacePressActiveRef.current = false
       spaceHoldTriggeredRef.current = false
     }
@@ -2123,7 +2096,7 @@ function App({ onVisualReady }) {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', handleWindowBlur)
     }
-  }, [togglePlayPause])
+  }, [playerCore])
 
   const displayedTags = getSongTags(currentSong)
 
@@ -2242,7 +2215,7 @@ function App({ onVisualReady }) {
         onPointerMove={keepTopControlsOpen}
         onPointerLeave={scheduleTopControlsClose}
       />
-      <FloatingLyrics currentSong={currentSong} currentTime={currentTime} active={isPlaying} />
+      <FloatingLyrics />
       {visualQuality === 'high' && <LyricForegroundFog quality={visualQuality} />}
       <div className="scene-cover-overlay">
         <div className="scene-cover-stage">
@@ -3371,7 +3344,7 @@ function App({ onVisualReady }) {
               onClick={() => {
                 resetLibraryScroll()
                 setLibrarySource('local')
-                clearPlaybackQueue()
+                playerCore.clearPlaybackQueue()
               }}
             >
               本地
@@ -3422,7 +3395,7 @@ function App({ onVisualReady }) {
                       <strong>{track.title}</strong>
                       <small>{track.artist}</small>
                     </span>
-                    <button type="button" aria-label={`从待播放移除 ${track.title}`} onClick={() => removeUpNext(track)}>×</button>
+                    <button type="button" aria-label={`从待播放移除 ${track.title}`} onClick={() => playerCore.removeUpNext(track)}>×</button>
                   </article>
                   )
                 })}
@@ -3440,7 +3413,7 @@ function App({ onVisualReady }) {
                   <span>AI 续播候选</span>
                   <small>{aiCandidateTracks.length} 首</small>
                 </div>
-                <button type="button" onClick={clearAutoUpNext}>换一批</button>
+                <button type="button" onClick={() => playerCore.clearAutoUpNext()}>换一批</button>
               </div>
               <div className="library-up-next-list">
                 {aiCandidateTracks.slice(0, 3).map((track, index) => {
@@ -3453,7 +3426,7 @@ function App({ onVisualReady }) {
                       <strong>{track.title}</strong>
                       <small>{track.artist} · 昀已规划</small>
                     </span>
-                    <button type="button" aria-label={`从 AI 候选移除 ${track.title}`} onClick={() => removeAutoUpNext(track)}>×</button>
+                    <button type="button" aria-label={`从 AI 候选移除 ${track.title}`} onClick={() => playerCore.removeAutoUpNext(track)}>×</button>
                   </article>
                   )
                 })}
@@ -3506,7 +3479,7 @@ function App({ onVisualReady }) {
                   title="加入待播放"
                   onClick={(event) => {
                     event.stopPropagation()
-                    enqueueUpNext(track)
+                    playerCore.enqueueUpNext(track)
                   }}
                   onKeyDown={(event) => event.stopPropagation()}
                 >
@@ -3562,7 +3535,7 @@ function App({ onVisualReady }) {
                         title="加入待播放"
                         onClick={(event) => {
                           event.stopPropagation()
-                          enqueueUpNext(track)
+                          playerCore.enqueueUpNext(track)
                         }}
                         onKeyDown={(event) => event.stopPropagation()}
                       >

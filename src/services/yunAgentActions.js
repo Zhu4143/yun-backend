@@ -5,7 +5,7 @@ function compactText(value) {
   return String(value || '').toLowerCase().replace(/[\s，。！？、,.!?~…《》「」“”"']/g, '')
 }
 
-export async function executeYunAgentActions(actions, { player, voice, context = {}, isCurrentRequest = () => true } = {}) {
+export async function executeYunAgentActions(actions, { player, setResponseMode, voice, context = {}, isCurrentRequest = () => true } = {}) {
   const results = []
   for (const action of Array.isArray(actions) ? actions : []) {
     if (!isCurrentRequest()) {
@@ -15,13 +15,13 @@ export async function executeYunAgentActions(actions, { player, voice, context =
     try {
       const payload = action?.payload || {}
       switch (action?.type) {
-        case 'music.next': results.push(await player?.playNext?.()); break
-        case 'music.previous': results.push(await player?.playPrevious?.()); break
-        case 'music.pause': results.push(player?.pausePlayback?.() || { ok: false }); break
-        case 'music.resume': results.push(await player?.togglePlayPause?.()); break
-        case 'music.seek': player?.seekTo?.(payload.seconds); results.push({ ok: true }); break
-        case 'music.set_mode': player?.setPlaybackMode?.(payload.mode); results.push({ ok: true }); break
-        case 'music.set_response_mode': player?.setResponseMode?.(payload.mode); results.push({ ok: true }); break
+        case 'music.next': results.push(await player.next()); break
+        case 'music.previous': results.push(await player.previous()); break
+        case 'music.pause': results.push(await player.pause()); break
+        case 'music.resume': results.push(await player.play()); break
+        case 'music.seek': player.seek(payload.seconds); results.push({ ok: true }); break
+        case 'music.set_mode': player.setPlaybackMode(payload.mode); results.push({ ok: true }); break
+        case 'music.set_response_mode': setResponseMode?.(payload.mode); results.push({ ok: true }); break
         case 'music.add_to_collection': {
           if (!context.currentSong) {
             results.push({ ok: false, error: 'no_current_song' })
@@ -63,21 +63,22 @@ export async function executeYunAgentActions(actions, { player, voice, context =
             results.push({ ok: false, cancelled: true })
             break
           }
-          player?.setPlaybackMode?.('sequence')
+          const currentTrack = player.getState().currentTrack
+          player.setPlaybackMode('sequence')
           results.push(tracks[0]
-            ? await player?.playSongFromQueue?.(tracks[0], tracks, { crossfade: Boolean(player?.currentSong) })
+            ? await player.playTrackFromQueue(tracks[0], tracks, { crossfade: Boolean(currentTrack) })
             : { ok: false, error: 'netease_playlist_empty' })
           break
         }
-        case 'music.play_track': results.push(await player?.playSong?.(payload.track, { crossfade: Boolean(player?.currentSong) })); break
+        case 'music.play_track': results.push(await player.playTrack(payload.track, { crossfade: Boolean(player.getState().currentTrack) })); break
         case 'music.recommend': {
           const tracks = await fetchNeteaseAiRecommendations({ currentSong: context.currentSong, playHistory: context.playHistory || [], recentRecommendations: context.recentRecommendations || [], limit: payload.limit || 4 })
           if (!isCurrentRequest()) {
             results.push({ ok: false, cancelled: true })
             break
           }
-          if (payload.queue) player?.setAutoUpNext?.(tracks.slice(1), { replace: true })
-          results.push(tracks[0] ? await player?.playSongFromQueue?.(tracks[0], tracks, { crossfade: Boolean(player?.currentSong) }) : { ok: false, error: 'no_recommendation' })
+          if (payload.queue) player.setAutoUpNext(tracks.slice(1), { replace: true })
+          results.push(tracks[0] ? await player.playTrackFromQueue(tracks[0], tracks, { crossfade: Boolean(player.getState().currentTrack) }) : { ok: false, error: 'no_recommendation' })
           break
         }
         case 'music.search_netease': {
@@ -87,8 +88,8 @@ export async function executeYunAgentActions(actions, { player, voice, context =
             results.push({ ok: false, cancelled: true })
             break
           }
-          if (payload.queue) player?.setAutoUpNext?.(tracks.slice(1), { replace: true })
-          results.push(tracks[0] ? await player?.playSongFromQueue?.(tracks[0], tracks, { crossfade: Boolean(player?.currentSong) }) : { ok: false, error: 'no_search_result' })
+          if (payload.queue) player.setAutoUpNext(tracks.slice(1), { replace: true })
+          results.push(tracks[0] ? await player.playTrackFromQueue(tracks[0], tracks, { crossfade: Boolean(player.getState().currentTrack) }) : { ok: false, error: 'no_search_result' })
           break
         }
         case 'music.prepare_queue': {
@@ -98,7 +99,7 @@ export async function executeYunAgentActions(actions, { player, voice, context =
             results.push({ ok: false, cancelled: true })
             break
           }
-          player?.setAutoUpNext?.(tracks, { replace: true })
+          player.setAutoUpNext(tracks, { replace: true })
           results.push(tracks.length ? { ok: true, prepared: tracks.length } : { ok: false, error: 'no_search_result' })
           break
         }
@@ -108,7 +109,7 @@ export async function executeYunAgentActions(actions, { player, voice, context =
             results.push({ ok: false, cancelled: true })
             break
           }
-          if (resolved?.ok) player?.seekTo?.(resolved.positionSec)
+          if (resolved?.ok) player.seek(resolved.positionSec)
           results.push(resolved)
           break
         }
@@ -130,7 +131,7 @@ export async function executeYunAgentActions(actions, { player, voice, context =
           break
         }
         case 'tts.speak': results.push(await voice?.speakText?.(payload.text, { allowBargeIn: true })); break
-        case 'music.get_state': results.push({ ok: true, diagnostics: player?.getPlaybackDiagnostics?.() || null }); break
+        case 'music.get_state': results.push({ ok: true, diagnostics: player.getPlaybackDiagnostics() }); break
         default: results.push({ ok: false, error: 'unknown_agent_action' })
       }
     } catch (error) {
