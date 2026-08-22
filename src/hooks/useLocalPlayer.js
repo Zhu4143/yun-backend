@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AudioEngine } from '../player/audio/AudioEngine.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
 const PLAYBACK_MODES = ['sequence', 'loop_one', 'shuffle', 'ai_recommend', 'companion_continue']
@@ -106,12 +107,6 @@ function recommendedSong(songs, currentSong) {
   return [...pool].sort((a, b) => scoreRecommendedSong(b, currentSong) - scoreRecommendedSong(a, currentSong))[0]
 }
 
-function getAudioContext() {
-  const AudioContextConstructor = window.AudioContext || window.webkitAudioContext
-
-  return AudioContextConstructor ? new AudioContextConstructor() : null
-}
-
 function getInitialTailSilenceCache() {
   try {
     const parsed = JSON.parse(localStorage.getItem(TAIL_SILENCE_CACHE_KEY) || '{}')
@@ -123,8 +118,7 @@ function getInitialTailSilenceCache() {
 }
 
 export function useLocalPlayer(playlist) {
-  const audioRef = useRef(null)
-  const standbyAudioRef = useRef(null)
+  const [audioEngine] = useState(() => new AudioEngine())
   const playlistRef = useRef([])
   const externalQueueRef = useRef(null)
   const currentSongRef = useRef(null)
@@ -139,10 +133,6 @@ export function useLocalPlayer(playlist) {
   const crossfadeTransactionRef = useRef(null)
   const standbyPlayTokenRef = useRef(0)
   const isCrossfadingRef = useRef(false)
-  const userVolumeRef = useRef(1)
-  const duckingFactorRef = useRef(1)
-  const analyserByAudioRef = useRef(new WeakMap())
-  const audioGraphRef = useRef(null)
   const duckTokensRef = useRef(new Map())
   const silenceStartedAtRef = useRef(0)
   const tailSilenceBySongRef = useRef(getInitialTailSilenceCache())
@@ -179,82 +169,27 @@ export function useLocalPlayer(playlist) {
   }, [])
 
   const ensureActiveAudio = useCallback(() => {
-    if (!audioRef.current) {
-      audioRef.current = new Audio()
-      setAudioVersion((version) => version + 1)
-    }
-
-    return audioRef.current
-  }, [])
+    const existingDeck = audioEngine.getActiveDeck()
+    const activeDeck = audioEngine.ensureActiveDeck()
+    if (!existingDeck && activeDeck) setAudioVersion((version) => version + 1)
+    return activeDeck
+  }, [audioEngine])
 
   const ensureStandbyAudio = useCallback(() => {
-    if (!standbyAudioRef.current) {
-      standbyAudioRef.current = new Audio()
-    }
-
-    return standbyAudioRef.current
-  }, [])
+    return audioEngine.ensureStandbyDeck()
+  }, [audioEngine])
 
   const ensureMusicAudioGraph = useCallback((audio) => {
-    if (!audio || typeof window === 'undefined') return null
-
-    try {
-      if (!audioGraphRef.current) {
-        const context = getAudioContext()
-        if (!context) return null
-        const masterGain = context.createGain()
-        const musicGain = context.createGain()
-        musicGain.gain.value = duckingFactorRef.current
-        musicGain.connect(masterGain)
-        masterGain.connect(context.destination)
-        audioGraphRef.current = { context, masterGain, musicGain }
-      }
-
-      const graph = audioGraphRef.current
-      let entry = analyserByAudioRef.current.get(audio)
-      if (!entry) {
-        const source = graph.context.createMediaElementSource(audio)
-        const analyser = graph.context.createAnalyser()
-        analyser.fftSize = 1024
-        analyser.smoothingTimeConstant = 0.72
-        source.connect(analyser)
-        analyser.connect(graph.musicGain)
-        entry = {
-          source,
-          analyser,
-          frequencyBuffer: new Uint8Array(analyser.frequencyBinCount),
-          timeBuffer: new Uint8Array(analyser.fftSize),
-        }
-        analyserByAudioRef.current.set(audio, entry)
-      }
-      return { graph, entry }
-    } catch {
-      // Playback must keep working even if an embedded Chromium build rejects
-      // MediaElementSource for a particular element.
-      return null
-    }
-  }, [])
+    return audioEngine.ensureGraphFor(audio)
+  }, [audioEngine])
 
   // A MediaElementSource only reaches the speakers through its AudioContext.
   // `HTMLAudioElement.play()` may still resolve while that context is
   // suspended, which looks like playback in the UI but is completely silent.
   // Resume it from the same user-triggered path that starts the song.
   const resumeMusicOutput = useCallback(async (audio) => {
-    const attached = ensureMusicAudioGraph(audio)
-    const graph = attached?.graph
-    if (!graph?.context) return true
-
-    try {
-      if (graph.context.state !== 'running') await graph.context.resume()
-      const now = graph.context.currentTime
-      graph.musicGain.gain.cancelScheduledValues(now)
-      graph.musicGain.gain.setValueAtTime(duckingFactorRef.current, now)
-      return graph.context.state === 'running'
-    } catch (error) {
-      console.warn('[player] unable to resume music output', error)
-      return false
-    }
-  }, [ensureMusicAudioGraph])
+    return audioEngine.resumeOutput(audio)
+  }, [audioEngine])
 
   const preloadTrack = useCallback((song) => {
     if (!song?.fileUrl || isCrossfadingRef.current || sameSong(song, currentSongRef.current)) return false
@@ -274,8 +209,8 @@ export function useLocalPlayer(playlist) {
   const getEffectiveVolume = useCallback(() => (
     // Deck volumes control user volume and crossfade only. Ducking lives on
     // the shared Web Audio musicGain so it never fights deck transitions.
-    clampVolume(userVolumeRef.current)
-  ), [])
+    clampVolume(audioEngine.getUserVolume())
+  ), [audioEngine])
 
   const applyTransactionVolumes = useCallback(() => {
     const effectiveVolume = getEffectiveVolume()
@@ -290,14 +225,16 @@ export function useLocalPlayer(playlist) {
       return
     }
 
-    if (audioRef.current) audioRef.current.volume = effectiveVolume
-    if (standbyAudioRef.current) standbyAudioRef.current.volume = 0
-  }, [getEffectiveVolume])
+    const activeAudio = audioEngine.getActiveDeck()
+    const standbyAudio = audioEngine.getStandbyDeck()
+    if (activeAudio) activeAudio.volume = effectiveVolume
+    if (standbyAudio) standbyAudio.volume = 0
+  }, [audioEngine, getEffectiveVolume])
 
   const assertStableDeckState = useCallback((label) => {
     if (!import.meta.env.DEV) return
-    const activeAudio = audioRef.current
-    const standbyAudio = standbyAudioRef.current
+    const activeAudio = audioEngine.getActiveDeck()
+    const standbyAudio = audioEngine.getStandbyDeck()
     const expectedVolume = getEffectiveVolume()
     const violations = []
 
@@ -314,7 +251,7 @@ export function useLocalPlayer(playlist) {
     if (violations.length) {
       console.error(`[player:${label}] unstable deck state`, violations)
     }
-  }, [getEffectiveVolume])
+  }, [audioEngine, getEffectiveVolume])
 
   const cancelTempoRamp = useCallback(({ resetDecks = false } = {}) => {
     if (tempoRampFrameRef.current) {
@@ -322,10 +259,10 @@ export function useLocalPlayer(playlist) {
       tempoRampFrameRef.current = 0
     }
     if (resetDecks) {
-      setDeckPlaybackRate(audioRef.current, 1)
-      setDeckPlaybackRate(standbyAudioRef.current, 1)
+      setDeckPlaybackRate(audioEngine.getActiveDeck(), 1)
+      setDeckPlaybackRate(audioEngine.getStandbyDeck(), 1)
     }
-  }, [])
+  }, [audioEngine])
 
   const rampPlaybackRate = useCallback((audio, targetRate, durationMs = 1200) => {
     if (!audio) return
@@ -368,45 +305,38 @@ export function useLocalPlayer(playlist) {
       inactiveAudio.volume = 0
       activeAudio.volume = getEffectiveVolume()
       if (pauseActive) activeAudio.pause()
-      audioRef.current = activeAudio
-      standbyAudioRef.current = inactiveAudio
+      if (audioEngine.getActiveDeck() !== activeAudio) audioEngine.swapDecks()
       crossfadeTransactionRef.current = null
       setAudioVersion((version) => version + 1)
       resolve?.({ ok: false, song, error: 'crossfade_cancelled' })
     } else {
-      if (audioRef.current) {
-        audioRef.current.volume = getEffectiveVolume()
-        if (pauseActive) audioRef.current.pause()
+      const activeAudio = audioEngine.getActiveDeck()
+      const standbyAudio = audioEngine.getStandbyDeck()
+      if (activeAudio) {
+        activeAudio.volume = getEffectiveVolume()
+        if (pauseActive) activeAudio.pause()
       }
-      if (standbyAudioRef.current) {
-        standbyAudioRef.current.volume = 0
-        standbyAudioRef.current.pause()
+      if (standbyAudio) {
+        standbyAudio.volume = 0
+        standbyAudio.pause()
       }
     }
 
     isCrossfadingRef.current = false
     assertStableDeckState('cancel')
-  }, [assertStableDeckState, cancelTempoRamp, getEffectiveVolume])
+  }, [assertStableDeckState, audioEngine, cancelTempoRamp, getEffectiveVolume])
 
   const setVolume = useCallback((nextVolume) => {
     const safeVolume = clampVolume(nextVolume)
-    userVolumeRef.current = safeVolume
+    audioEngine.setUserVolume(safeVolume)
     setVolumeState(safeVolume)
     applyTransactionVolumes()
-  }, [applyTransactionVolumes])
+  }, [applyTransactionVolumes, audioEngine])
 
   const applyDuckingFactor = useCallback((targetFactor, timeConstant = 0.08) => {
     const safeTarget = clampVolume(targetFactor)
-    duckingFactorRef.current = safeTarget
-    const attached = ensureMusicAudioGraph(audioRef.current)
-    const gain = attached?.graph?.musicGain?.gain
-    const context = attached?.graph?.context
-    if (gain && context) {
-      gain.cancelScheduledValues(context.currentTime)
-      gain.setTargetAtTime(safeTarget, context.currentTime, Math.max(0.01, timeConstant))
-    }
-    return Promise.resolve()
-  }, [ensureMusicAudioGraph])
+    return audioEngine.setDuckingFactor(safeTarget, timeConstant)
+  }, [audioEngine])
 
   const musicDuckingController = useMemo(() => {
     const acquire = (token, targetFactor = 0.25, timeConstant = 0.08) => {
@@ -432,19 +362,19 @@ export function useLocalPlayer(playlist) {
         // voice playback, changing songs can look successful while the shared
         // music bus is still silent. Recovery is deliberately idempotent so
         // every TTS exit path may call it safely.
-        await resumeMusicOutput(audioRef.current)
+        await resumeMusicOutput(audioEngine.getActiveDeck())
         applyTransactionVolumes()
       },
       // Unlike cancel(), this preserves any newer duck token. It is used by
       // an older TTS turn finishing while another turn is already preparing.
       recoverOutput: async () => {
-        await resumeMusicOutput(audioRef.current)
+        await resumeMusicOutput(audioEngine.getActiveDeck())
         applyTransactionVolumes()
       },
-      getUserVolume: () => userVolumeRef.current,
+      getUserVolume: () => audioEngine.getUserVolume(),
       getActiveTokenCount: () => duckTokensRef.current.size,
     }
-  }, [applyDuckingFactor, applyTransactionVolumes, resumeMusicOutput])
+  }, [applyDuckingFactor, applyTransactionVolumes, audioEngine, resumeMusicOutput])
 
   const resetSilenceDetection = useCallback(() => {
     silenceStartedAtRef.current = 0
@@ -478,45 +408,33 @@ export function useLocalPlayer(playlist) {
   }, [])
 
   const readAudioRms = useCallback((audio) => {
-    if (!audio || typeof window === 'undefined') {
-      return null
-    }
+    if (!audio) return null
 
     try {
-      const entry = ensureMusicAudioGraph(audio)?.entry
-      if (!entry) return null
-
-      entry.analyser.getByteTimeDomainData(entry.timeBuffer)
+      const timeBuffer = audioEngine.readTimeDomainData(audio)
+      if (!timeBuffer) return null
 
       let sum = 0
-      for (const value of entry.timeBuffer) {
+      for (const value of timeBuffer) {
         const centered = (value - 128) / 128
         sum += centered * centered
       }
 
-      return Math.sqrt(sum / entry.timeBuffer.length)
+      return Math.sqrt(sum / timeBuffer.length)
     } catch {
       return null
     }
-  }, [ensureMusicAudioGraph])
+  }, [audioEngine])
 
   const readAudioFrequencyData = useCallback(() => {
-    const audio = audioRef.current
+    const audio = audioEngine.getActiveDeck()
     if (!audio || audio.paused) {
       return null
     }
 
     readAudioRms(audio)
-
-    const entry = analyserByAudioRef.current.get(audio)
-    if (!entry) {
-      return null
-    }
-
-    entry.analyser.getByteFrequencyData(entry.frequencyBuffer)
-
-    return entry.frequencyBuffer
-  }, [readAudioRms])
+    return audioEngine.readFrequencyData(audio)
+  }, [audioEngine, readAudioRms])
 
   const shouldStartSilenceCrossfade = useCallback((audio, safeDuration) => {
     if (!audio || !safeDuration || playbackModeRef.current === 'loop_one') {
@@ -592,7 +510,7 @@ export function useLocalPlayer(playlist) {
     cancelCrossfade()
     const audio = ensureActiveAudio()
     const outputReady = await resumeMusicOutput(audio)
-    const standbyAudio = standbyAudioRef.current
+    const standbyAudio = audioEngine.getStandbyDeck()
     if (standbyAudio) {
       standbyAudio.pause()
       standbyAudio.volume = 0
@@ -637,7 +555,7 @@ export function useLocalPlayer(playlist) {
         error: error instanceof Error ? error.message : 'play_failed',
       }
     }
-  }, [cancelCrossfade, ensureActiveAudio, getEffectiveVolume, resetSilenceDetection, resumeMusicOutput])
+  }, [audioEngine, cancelCrossfade, ensureActiveAudio, getEffectiveVolume, resetSilenceDetection, resumeMusicOutput])
 
   const crossfadeToSong = useCallback(async (song) => {
     if (!song?.fileUrl) {
@@ -645,7 +563,7 @@ export function useLocalPlayer(playlist) {
     }
 
     cancelCrossfade()
-    const fromAudio = audioRef.current
+    const fromAudio = audioEngine.getActiveDeck()
     const previousSong = currentSongRef.current
 
     if (!fromAudio || fromAudio.paused || !previousSong || sameSong(previousSong, song)) {
@@ -708,14 +626,13 @@ export function useLocalPlayer(playlist) {
     }
 
     if (token !== crossfadeTokenRef.current) {
-      if (standbyAudioRef.current === toAudio && standbyPlayTokenRef.current === token) {
+      if (audioEngine.getStandbyDeck() === toAudio && standbyPlayTokenRef.current === token) {
         toAudio.volume = 0
         toAudio.pause()
       }
       return { ok: false, song, error: 'crossfade_cancelled' }
     }
 
-    standbyAudioRef.current = toAudio
     currentSongRef.current = song
     setCurrentSong(song)
     setCurrentTime(0)
@@ -740,8 +657,7 @@ export function useLocalPlayer(playlist) {
         fromAudio.volume = 0
         setDeckPlaybackRate(fromAudio, 1)
         toAudio.volume = getEffectiveVolume()
-        audioRef.current = toAudio
-        standbyAudioRef.current = fromAudio
+        audioEngine.swapDecks()
         crossfadeTransactionRef.current = null
         setIsPlaying(true)
         setAudioVersion((version) => version + 1)
@@ -790,14 +706,14 @@ export function useLocalPlayer(playlist) {
         resolve,
       }
       crossfadeRecoveryTimerRef.current = window.setTimeout(() => {
-        if (token === crossfadeTokenRef.current && standbyAudioRef.current === toAudio) {
+        if (token === crossfadeTokenRef.current && audioEngine.getStandbyDeck() === toAudio) {
           finish()
         }
       }, fadeDuration + 350)
 
       crossfadeFrameRef.current = requestAnimationFrame(step)
     })
-  }, [assertStableDeckState, cancelCrossfade, ensureStandbyAudio, getEffectiveVolume, playSongHard, rampPlaybackRate, resetSilenceDetection, resumeMusicOutput])
+  }, [assertStableDeckState, audioEngine, cancelCrossfade, ensureStandbyAudio, getEffectiveVolume, playSongHard, rampPlaybackRate, resetSilenceDetection, resumeMusicOutput])
 
   const playSong = useCallback((song, options = {}) => {
     if (!options.fromRadioQueue) queuedNextSongRef.current = null
@@ -818,7 +734,7 @@ export function useLocalPlayer(playlist) {
   }, [cancelCrossfade, resetSilenceDetection])
 
   const togglePlayPause = useCallback(async () => {
-    const audio = audioRef.current
+    const audio = audioEngine.getActiveDeck()
 
     if (!currentSongRef.current) {
       const firstSong = playlistRef.current[0]
@@ -846,7 +762,7 @@ export function useLocalPlayer(playlist) {
     }
 
     return pausePlayback()
-  }, [pausePlayback, playSong, resumeMusicOutput])
+  }, [audioEngine, pausePlayback, playSong, resumeMusicOutput])
 
   const getCurrentIndex = useCallback(() => {
     const currentId = getSongId(requestedSongRef.current || currentSongRef.current)
@@ -968,8 +884,8 @@ export function useLocalPlayer(playlist) {
     const nextIndex = currentIndex < 0 ? 0 : currentIndex + 1
 
     if (nextIndex >= songs.length) {
-      if (auto && !earlyCrossfade && audioRef.current) {
-        const audio = audioRef.current
+      if (auto && !earlyCrossfade && audioEngine.getActiveDeck()) {
+        const audio = audioEngine.getActiveDeck()
         audio.pause()
         audio.currentTime = getSafeDuration(audio) || audio.currentTime
       }
@@ -978,7 +894,7 @@ export function useLocalPlayer(playlist) {
     }
 
     return playSong(songs[nextIndex], { crossfade: true })
-  }, [getActiveQueue, getCurrentIndex, playSong, playSongHard, updateUpNextTracks])
+  }, [audioEngine, getActiveQueue, getCurrentIndex, playSong, playSongHard, updateUpNextTracks])
 
   const playPrevious = useCallback(async () => {
     const songs = getActiveQueue()
@@ -1005,7 +921,7 @@ export function useLocalPlayer(playlist) {
 
   const seekTo = useCallback((time) => {
     cancelCrossfade()
-    const audio = audioRef.current
+    const audio = audioEngine.getActiveDeck()
 
     if (!audio) {
       return
@@ -1015,7 +931,7 @@ export function useLocalPlayer(playlist) {
     audio.currentTime = nextTime
     resetSilenceDetection()
     setCurrentTime(nextTime)
-  }, [cancelCrossfade, resetSilenceDetection])
+  }, [audioEngine, cancelCrossfade, resetSilenceDetection])
 
   const setPlaybackMode = useCallback((mode) => {
     if (!PLAYBACK_MODES.includes(mode)) {
@@ -1028,14 +944,14 @@ export function useLocalPlayer(playlist) {
   }, [])
 
   useEffect(() => {
-    const audio = audioRef.current
+    const audio = audioEngine.getActiveDeck()
 
     if (!audio) {
       return undefined
     }
 
     const handleTimeUpdate = () => {
-      if (audio !== audioRef.current) {
+      if (audio !== audioEngine.getActiveDeck()) {
         return
       }
 
@@ -1071,7 +987,7 @@ export function useLocalPlayer(playlist) {
     }
 
     const handleLoadedMetadata = () => {
-      if (audio !== audioRef.current) {
+      if (audio !== audioEngine.getActiveDeck()) {
         return
       }
 
@@ -1079,7 +995,7 @@ export function useLocalPlayer(playlist) {
     }
 
     const handlePlay = () => {
-      if (audio !== audioRef.current) {
+      if (audio !== audioEngine.getActiveDeck()) {
         return
       }
 
@@ -1087,7 +1003,7 @@ export function useLocalPlayer(playlist) {
     }
 
     const handlePause = () => {
-      if (audio !== audioRef.current) {
+      if (audio !== audioEngine.getActiveDeck()) {
         return
       }
 
@@ -1095,7 +1011,7 @@ export function useLocalPlayer(playlist) {
     }
 
     const handleEnded = async () => {
-      if (audio !== audioRef.current || isCrossfadingRef.current) {
+      if (audio !== audioEngine.getActiveDeck() || isCrossfadingRef.current) {
         return
       }
 
@@ -1111,7 +1027,7 @@ export function useLocalPlayer(playlist) {
     }
 
     const handleError = () => {
-      if (audio !== audioRef.current || !currentSongRef.current?.fileUrl) return
+      if (audio !== audioEngine.getActiveDeck() || !currentSongRef.current?.fileUrl) return
       setIsPlaying(false)
       const source = audio.currentSrc || audio.src || ''
       const recovery = mediaRecoveryRef.current
@@ -1123,7 +1039,7 @@ export function useLocalPlayer(playlist) {
       recovery.attempts += 1
       window.clearTimeout(recovery.timer)
       recovery.timer = window.setTimeout(() => {
-        if (audio !== audioRef.current || !audio.paused) return
+        if (audio !== audioEngine.getActiveDeck() || !audio.paused) return
         audio.load()
         resumeMusicOutput(audio).then(() => audio.play()).then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
       }, 220)
@@ -1144,26 +1060,19 @@ export function useLocalPlayer(playlist) {
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)
     }
-  }, [playNext, currentSong, audioVersion, rememberTailSilence, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
+  }, [audioEngine, playNext, currentSong, audioVersion, rememberTailSilence, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
 
   useEffect(() => () => {
     cancelCrossfade()
     cancelTempoRamp({ resetDecks: true })
     duckTokensRef.current.clear()
-    const graph = audioGraphRef.current
-    if (graph?.musicGain && graph?.context) {
-      graph.musicGain.gain.cancelScheduledValues(graph.context.currentTime)
-      graph.musicGain.gain.setValueAtTime(1, graph.context.currentTime)
-    }
-    graph?.context?.close?.().catch?.(() => {})
     resetSilenceDetection()
-    audioRef.current?.pause()
-    standbyAudioRef.current?.pause()
+    audioEngine.dispose().catch(() => {})
     window.clearTimeout(mediaRecoveryRef.current.timer)
-  }, [cancelCrossfade, cancelTempoRamp, resetSilenceDetection])
+  }, [audioEngine, cancelCrossfade, cancelTempoRamp, resetSilenceDetection])
 
   return {
-    audioRef,
+    audioRef: audioEngine.getActiveDeckRef(),
     currentSong,
     isPlaying,
     currentTime,
@@ -1182,23 +1091,26 @@ export function useLocalPlayer(playlist) {
     seekTo,
     setVolume,
     musicDuckingController,
-    getPlaybackDiagnostics: () => ({
-      isCrossfading: isCrossfadingRef.current,
-      activePaused: audioRef.current?.paused ?? true,
-      activeVolume: audioRef.current?.volume ?? 0,
-      standbyPaused: standbyAudioRef.current?.paused ?? true,
-      standbyVolume: standbyAudioRef.current?.volume ?? 0,
-      hasCrossfadeFrame: Boolean(crossfadeFrameRef.current),
-      hasRecoveryTimer: Boolean(crossfadeRecoveryTimerRef.current),
-      userVolume: userVolumeRef.current,
-      duckingFactor: duckingFactorRef.current,
-      audioContextState: audioGraphRef.current?.context?.state || 'not_attached',
-      effectiveVolume: getEffectiveVolume(),
-      currentTrackId: getSongId(currentSongRef.current),
-      requestedTrackId: getSongId(requestedSongRef.current),
-      activeSource: audioRef.current?.currentSrc || audioRef.current?.src || '',
-      standbySource: standbyAudioRef.current?.currentSrc || standbyAudioRef.current?.src || '',
-    }),
+    getPlaybackDiagnostics: () => {
+      const resources = audioEngine.getDiagnostics()
+      return {
+        isCrossfading: isCrossfadingRef.current,
+        activePaused: resources.activePaused,
+        activeVolume: resources.activeVolume,
+        standbyPaused: resources.standbyPaused,
+        standbyVolume: resources.standbyVolume,
+        hasCrossfadeFrame: Boolean(crossfadeFrameRef.current),
+        hasRecoveryTimer: Boolean(crossfadeRecoveryTimerRef.current),
+        userVolume: resources.userVolume,
+        duckingFactor: resources.duckingFactor,
+        audioContextState: resources.audioContextState,
+        effectiveVolume: getEffectiveVolume(),
+        currentTrackId: getSongId(currentSongRef.current),
+        requestedTrackId: getSongId(requestedSongRef.current),
+        activeSource: resources.activeSource,
+        standbySource: resources.standbySource,
+      }
+    },
     setPlaybackMode,
     setPlaybackQueue,
     clearPlaybackQueue,
