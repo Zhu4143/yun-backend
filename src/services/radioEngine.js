@@ -1,4 +1,8 @@
 import { resolveNeteaseSongCandidate, searchNeteaseSongs } from '../api/neteaseApi.js'
+import { NeteaseApiAdapter } from './netease/apiAdapter.js'
+import { NeteaseCapabilityExecutor } from './netease/capabilityExecutor.js'
+import { selectNeteaseSongCandidate } from './netease/capabilityPlanner.js'
+import { YunPlayerAdapter } from './netease/playerAdapter.js'
 
 const PLAN_VERSION = 'radio-plan/v1'
 
@@ -137,36 +141,12 @@ function makeOnlineSearchQuery(searchIntent, requestedTitle) {
   return searchIntent.query
 }
 
-function isVerifiedOnlineTitleMatch(track, requestedTitle) {
-  if (!requestedTitle) return true
-  const expected = compactText(requestedTitle)
-  const title = compactText(track?.title || track?.name)
-  // A named title is an identity, not a fuzzy keyword. In particular, 雨天 and
-  // 下雨天 are different songs and must never short-circuit the online lookup.
-  return Boolean(expected && title && title === expected)
-}
-
 function isVerifiedLocalTitleMatch(track, requestedTitle) {
   if (!track) return false
   const expected = compactText(requestedTitle)
   if (!expected) return true
   const title = compactText(track.title || track.name)
   return Boolean(title && title === expected)
-}
-
-function needsVoiceCandidateResolution(message, searchIntent) {
-  const text = String(message || '')
-  return /[a-z]/i.test(text) || searchIntent.languagePreference === 'en' || /英文|英语|欧美/i.test(text)
-}
-
-function needsPreciseSongResolution(message, searchIntent) {
-  const text = String(message || '')
-  // The exact-title filter above is already a deterministic identity check
-  // for Chinese song names. Asking a model to choose again makes a perfectly
-  // good result fail whenever that secondary request is slow or unavailable.
-  // Keep model disambiguation only for the cases it materially improves:
-  // foreign-language / ASR-prone titles.
-  return Boolean(text) && needsVoiceCandidateResolution(message, searchIntent)
 }
 
 function localCandidateFromSmartResult(smartResult, libraryTracks) {
@@ -182,6 +162,8 @@ export async function createPlaybackPlan({
   musicSource = 'local',
   responseMode = 'companion',
   context = {},
+  inputMode = 'text',
+  apiAdapter = null,
 } = {}) {
   const commandType = smartResult?.command?.type || smartResult?.action?.type || 'none'
   const base = {
@@ -235,59 +217,61 @@ export async function createPlaybackPlan({
   // The selected library source only changes priority. If the local resolver has no
   // match, online search remains a graceful fallback instead of a dead end.
   const onlineQuery = makeOnlineSearchQuery(searchIntent, requestedTitle)
-  const neteaseResults = await searchNeteaseSongs(onlineQuery, { limit: 12 })
+  const neteaseExecutor = new NeteaseCapabilityExecutor({
+    apiAdapter: apiAdapter || new NeteaseApiAdapter({ searchSongs: searchNeteaseSongs }),
+  })
+  const searchResult = await neteaseExecutor.execute({
+    capability: 'netease.search.song',
+    action: 'search',
+    args: { query: onlineQuery, limit: 12 },
+  })
+  if (!searchResult.ok) {
+    const error = new Error(searchResult.error || 'netease_search_failed')
+    error.code = searchResult.errorCode || 'provider_error'
+    error.details = searchResult.errorDetails || null
+    throw error
+  }
+  const neteaseResults = searchResult.value
   const rankedCandidates = rankOnlineCandidates(
     neteaseResults,
     { ...searchIntent, query: onlineQuery, title: requestedTitle || searchIntent.title },
     context,
   )
-  // When the user named a track, title matching is a safety boundary, not a
-  // ranking preference. A same-artist result is not an acceptable fallback.
-  const onlineCandidates = requestedTitle
-    ? rankedCandidates.filter((candidate) => isVerifiedOnlineTitleMatch(candidate, requestedTitle))
-    : rankedCandidates
-  if (requestedTitle && !onlineCandidates.length) {
+  const selection = await selectNeteaseSongCandidate({
+    candidates: rankedCandidates,
+    requestedTitle,
+    requestedArtist: searchIntent.artist,
+    transcript: message,
+    interpretation: `${searchIntent.query}${searchIntent.artist ? ` — ${searchIntent.artist}` : ''}`,
+    inputMode,
+    resolveVoiceCandidate: inputMode === 'voice' ? resolveNeteaseSongCandidate : null,
+  })
+  if (selection.status === 'not_found') {
     return {
       ...base,
       action: 'none',
       source: 'netease',
-      reply: responseMode === 'silent' ? '...' : `我没能可靠确认《${requestedTitle}》的可播放版本，所以先不拿同歌手的其他歌替代。`,
+      reply: responseMode === 'silent'
+        ? '...'
+        : requestedTitle
+          ? `我没能可靠确认《${requestedTitle}》的可播放版本，所以先不拿别的歌替代。`
+          : `我没找到能播放的《${searchIntent.query}》。`,
     }
   }
-  let track = onlineCandidates[0] || null
-
-  // ASR is especially unreliable for foreign titles. The first DeepSeek pass
-  // turns the spoken phrase into a search intent; this second, constrained
-  // pass sees only the top NetEase candidates and can select the intended,
-  // popular result without inventing a title outside the real result set.
-  if (track && needsPreciseSongResolution(message, searchIntent)) {
-    try {
-      const providerId = await resolveNeteaseSongCandidate({
-        transcript: message,
-        interpretation: `${searchIntent.query}${searchIntent.artist ? ` — ${searchIntent.artist}` : ''}`,
-        candidates: onlineCandidates,
-      })
-      const resolved = onlineCandidates.find((candidate) => candidate.providerId === providerId)
-      if (resolved) {
-        track = resolved
-      } else {
-        return {
-          ...base,
-          action: 'none',
-          source: 'netease',
-          reply: responseMode === 'silent' ? '...' : '我没能可靠确认你说的是哪一首，所以先不乱放。你可以再说一次歌名、歌手，或给我一句歌词。',
-        }
-      }
-    } catch {
-      return {
-        ...base,
-        action: 'none',
-        source: 'netease',
-        reply: responseMode === 'silent' ? '...' : '这首歌我还没能确认准确，先不随便播放。你补充歌手或一句歌词，我继续找。',
-      }
+  if (selection.status === 'clarify') {
+    const choices = selection.candidates
+      .map((candidate) => `《${candidate.title}》${candidate.artist ? `（${candidate.artist}）` : ''}`)
+      .join('，还是 ')
+    return {
+      ...base,
+      action: 'none',
+      source: 'netease',
+      needsClarification: true,
+      candidates: selection.candidates,
+      reply: responseMode === 'silent' ? '...' : `我找到了几个可能的结果。你想听的是${choices}？`,
     }
   }
-
+  const track = selection.track
   if (!track) {
     return {
       ...base,
@@ -302,7 +286,7 @@ export async function createPlaybackPlan({
     action: 'play',
     source: 'netease',
     track,
-    candidates: onlineCandidates.slice(0, 5),
+    candidates: rankedCandidates.slice(0, 5),
     query: searchIntent.query,
     reply: musicReply('play', responseMode, track.title, smartResult?.reply),
     shouldSpeak: responseMode !== 'silent' && smartResult?.shouldSpeak !== false,
@@ -311,12 +295,15 @@ export async function createPlaybackPlan({
 
 export async function executePlaybackPlan(plan, player) {
   if (!plan || plan.action === 'none') return { ok: false, ignored: true }
-  if (plan.action === 'next') return player.next()
-  if (plan.action === 'previous') return player.previous()
-  if (plan.action === 'pause') return player.pause()
+  const executor = new NeteaseCapabilityExecutor({ playerAdapter: new YunPlayerAdapter(player) })
+  if (plan.action === 'next' || plan.action === 'previous' || plan.action === 'pause') {
+    return executor.execute({ capability: 'yun.player.transport', action: plan.action, args: {} })
+  }
   if (plan.action === 'resume') {
     const currentTrack = player.getState().currentTrack
-    return currentTrack ? player.playTrack(currentTrack) : player.togglePlay()
+    return currentTrack
+      ? executor.execute({ capability: 'yun.player.queue', action: 'play_track', args: { track: currentTrack } })
+      : executor.execute({ capability: 'yun.player.transport', action: 'toggle', args: {} })
   }
   if (plan.action === 'play' && plan.track) {
     const currentTrack = player.getState().currentTrack
@@ -324,10 +311,18 @@ export async function executePlaybackPlan(plan, player) {
       const queue = Array.isArray(plan.candidates) && plan.candidates.length
         ? plan.candidates
         : [plan.track]
-      return player.playTrackFromQueue(plan.track, queue, { crossfade: Boolean(currentTrack) })
+      return executor.execute({
+        capability: 'yun.player.queue',
+        action: 'play_from_queue',
+        args: { track: plan.track, queue, options: { crossfade: Boolean(currentTrack) } },
+      })
     }
-    player.clearPlaybackQueue()
-    return player.playTrack(plan.track, { crossfade: Boolean(currentTrack) })
+    await executor.execute({ capability: 'yun.player.queue', action: 'clear', args: {} })
+    return executor.execute({
+      capability: 'yun.player.queue',
+      action: 'play_track',
+      args: { track: plan.track, options: { crossfade: Boolean(currentTrack) } },
+    })
   }
   return { ok: false, error: 'unsupported_radio_plan' }
 }

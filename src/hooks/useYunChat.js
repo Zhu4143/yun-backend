@@ -3,6 +3,7 @@ import { sendCompanionMessage } from '../api/companionApi'
 import { requestSongReaction } from '../api/songReactionApi'
 import { sendVisionMessage } from '../api/visionApi'
 import { routeChatIntent } from '../services/chatIntentRouter'
+import { formatYunChatErrorReply } from '../services/yunChatReply.js'
 import { createCompanionPlaybackPlan, executePlaybackPlan } from '../services/radioEngine'
 import { createCommandObserver } from '../telemetry/commandObserver'
 
@@ -192,6 +193,7 @@ export function useYunChat({
   const sendMessage = async (text, options = {}) => {
     const userText = String(text || '').trim()
     const imageFile = options?.imageFile || null
+    const inputMode = options?.inputMode === 'voice' ? 'voice' : 'text'
 
     if (!userText && !imageFile) return false
 
@@ -286,6 +288,7 @@ export function useYunChat({
         rejectedTracks: [],
         recentRecommendations,
         pendingPlaylistSelection: pendingPlaylistSelectionRef.current,
+        inputMode,
       })
       if (!isCurrentRequest()) return false
 
@@ -338,7 +341,7 @@ export function useYunChat({
           void voice?.speakText?.(reply, { allowBargeIn: true })
         }
       }
-      const agentResult = await agent.run(displayText, { isCurrentRequest, onPlan: announceAgentReply })
+      const agentResult = await agent.run(displayText, { isCurrentRequest, inputMode })
       if (!isCurrentRequest()) return false
       if (agentResult?.ok && (agentResult.actions?.length || agentResult.source === 'skill')) {
         announceAgentReply(agentResult)
@@ -416,9 +419,7 @@ export function useYunChat({
       }
     } catch (error) {
       if (!isCurrentRequest()) return false
-      const reply = error instanceof Error && error.message
-        ? `我刚才有点卡住了：${error.message}`
-        : '我刚才有点卡住了。你再说一遍，我听着。'
+      const reply = formatYunChatErrorReply(error)
 
       setMessages((current) => [
         ...current,

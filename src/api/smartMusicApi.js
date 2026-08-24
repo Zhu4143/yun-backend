@@ -7,6 +7,7 @@ export async function requestSmartMusicCommand({
   playHistory = [],
   rejectedTracks = [],
   recentRecommendations = [],
+  inputMode = 'text',
 }) {
   const body = JSON.stringify({
     message,
@@ -17,6 +18,7 @@ export async function requestSmartMusicCommand({
     playHistory: playHistory.slice(-10),
     rejectedTracks: rejectedTracks.slice(-10),
     recentRecommendations: recentRecommendations.slice(-10),
+    inputMode: inputMode === 'voice' ? 'voice' : 'text',
   })
   let lastError
 

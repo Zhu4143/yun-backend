@@ -1,14 +1,17 @@
-import { requestSmartMusicCommand } from '../api/smartMusicApi'
+import { requestSmartMusicCommand } from '../api/smartMusicApi.js'
 import {
-  addSongToNeteaseCollection,
-  fetchNeteaseAiRecommendations,
   fetchNeteaseArtistSongs,
   fetchNeteaseMe,
   fetchNeteasePlaylistTracks,
-  resolveNeteaseSongFromLyrics,
-} from '../api/neteaseApi'
-import { resolveMusicStructureSeek } from '../api/musicIntelligenceApi'
-import { createPlaybackPlan, executePlaybackPlan } from './radioEngine'
+} from '../api/neteaseApi.js'
+import { resolveMusicStructureSeek } from '../api/musicIntelligenceApi.js'
+import { createPlaybackPlan, executePlaybackPlan } from './radioEngine.js'
+import { NeteaseApiAdapter } from './netease/apiAdapter.js'
+import { NeteaseCapabilityExecutor, formatCapabilityExecutionReply } from './netease/capabilityExecutor.js'
+import { planNeteaseCapability } from './netease/capabilityPlanner.js'
+import { NeteaseDesktopAdapter } from './netease/desktopAdapter.js'
+import { getCapability } from './netease/capabilityRegistry.js'
+import { YunPlayerAdapter } from './netease/playerAdapter.js'
 
 function compactText(text) {
   return String(text || '')
@@ -21,15 +24,60 @@ function getCurrentTrack(player) {
   return player.getState().currentTrack
 }
 
+function createCapabilityExecutor(player) {
+  return new NeteaseCapabilityExecutor({
+    apiAdapter: new NeteaseApiAdapter(),
+    playerAdapter: new YunPlayerAdapter(player),
+    desktopAdapter: new NeteaseDesktopAdapter(),
+  })
+}
+
+const capabilityErrorCodes = new Set([
+  'unsupported',
+  'unauthorized',
+  'not_logged_in',
+  'vip_required',
+  'not_found',
+  'network_error',
+  'provider_error',
+  'empty_result',
+  'ambiguous',
+])
+
+function capabilityFailureFromError(error, capability, action) {
+  const code = capabilityErrorCodes.has(error?.code) ? error.code : 'provider_error'
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : 'capability_execution_failed',
+    errorCode: code,
+    errorDetails: error?.details || null,
+    capability,
+    action,
+    transport: 'api',
+  }
+}
+
+function requireCapabilityValue(result) {
+  if (!result?.ok) {
+    const error = new Error(result?.error || 'capability_execution_failed')
+    error.code = capabilityErrorCodes.has(result?.errorCode) ? result.errorCode : 'provider_error'
+    error.details = result?.errorDetails || null
+    throw error
+  }
+  return result.value
+}
+
 function neteaseOperationFailureReply(error, responseMode, operation = '读取网易云内容') {
   if (responseMode === 'silent') return '...'
+  const code = String(error?.code || '')
   const message = String(error instanceof Error ? error.message : error || '')
-  if (/failed to fetch|networkerror|网络.*(?:断开|异常|不可用)|连接.*(?:失败|不上|不可用)/i.test(message)) {
+  if (code === 'network_error' || /failed to fetch|networkerror|fetch failed|网络.*(?:断开|异常|不可用)|连接.*(?:失败|不上|不可用)/i.test(message)) {
     return `网易云连接暂时不可用，${operation}没有完成。你可以检查网络后重试，或者让我改为播放本地音乐。`
   }
-  if (/登录|401|unauthor/i.test(message)) {
+  if (code === 'not_logged_in' || code === 'unauthorized' || /登录|401|unauthor/i.test(message)) {
     return '网易云登录已失效，请重新登录后再试。'
   }
+  if (code === 'vip_required') return `当前账号没有拿到${operation}所需的资源权限。`
   return `网易云暂时无法${operation}。请稍后重试。`
 }
 
@@ -118,14 +166,26 @@ async function playNeteaseFromMessage(message, player, responseMode, context = {
   // This is the fallback after the Smart Music request is unavailable. It must
   // use the same exact-title safety boundary as the normal route; otherwise a
   // named song could be replaced by a more popular track from the same artist.
-  const plan = await createPlaybackPlan({
-    smartResult: { should_execute: true, command: { type: 'play_search', query } },
-    message,
-    player,
-    responseMode,
-    musicSource: 'netease',
-    context,
-  })
+  let plan
+  try {
+    plan = await createPlaybackPlan({
+      smartResult: { should_execute: true, command: { type: 'play_search', query } },
+      message,
+      player,
+      responseMode,
+      musicSource: 'netease',
+      context,
+      inputMode: context.inputMode || 'text',
+    })
+  } catch (error) {
+    return {
+      handled: true,
+      capabilityPlan: planNeteaseCapability({ message, inputMode: context.inputMode || 'text', currentTrack: context.currentSong }),
+      capabilityResult: capabilityFailureFromError(error, 'netease.search.song', 'search'),
+      reply: neteaseOperationFailureReply(error, responseMode, '搜索这首歌'),
+      skipTts: responseMode === 'silent',
+    }
+  }
   if (plan.action === 'none') {
     return {
       handled: true,
@@ -145,6 +205,163 @@ async function playNeteaseFromMessage(message, player, responseMode, context = {
         : `找到了「${plan.track?.title || query}」，但这首现在播不起来。`,
     song: result?.ok ? plan.track : null,
     songReactionTrigger: 'user_play',
+    skipTts: responseMode === 'silent',
+  }
+}
+
+async function executePlatformCapabilityIntent({
+  message,
+  inputMode,
+  player,
+  responseMode,
+  currentSong,
+  playHistory = [],
+  rejectedTracks = [],
+  recentRecommendations = [],
+}) {
+  const plan = planNeteaseCapability({ message, inputMode, currentTrack: currentSong })
+  if (!plan?.capability) return { handled: false, capabilityPlan: plan }
+  const definition = getCapability(plan.capability)
+  const directApiCapabilities = new Set([
+    'netease.recommend.daily',
+    'netease.recommend.personal_fm',
+    'netease.recommend.similar',
+    'netease.recommend.playlist',
+    'netease.library.recent',
+    'netease.library.user_record',
+    'netease.library.podcasts',
+    'netease.library.cloud',
+    'netease.search.suggest',
+    'netease.song.detail',
+    'netease.song.playability',
+    'yun.player.stream_quality',
+  ])
+  const directlyHandled = directApiCapabilities.has(plan.capability)
+    || ['audio', 'client', 'client_settings'].includes(definition?.domain)
+  if (!definition || !directlyHandled) {
+    return { handled: false, capabilityPlan: plan }
+  }
+
+  const executor = createCapabilityExecutor(player)
+  const result = await executor.execute(plan)
+  const subject = definition.name
+  if (!result.ok) {
+    const errorReplies = {
+      not_logged_in: '请先登录网易云，我才能读取你的个人内容。',
+      unauthorized: '网易云没有授权这次读取，请重新登录后再试。',
+      vip_required: '网易云没有为当前账号返回这个资源权限，我没有假装它可以播放。',
+      not_found: result.error || `${subject}没有找到可用内容。`,
+      network_error: '网易云连接暂时不可用，这次没有切换到桌面控制。',
+      empty_result: `${subject}这次没有返回内容，我没有假装操作已经完成。`,
+      unsupported: `${subject}目前没有可验证的控制通道。`,
+      ambiguous: '找到了多个可能目标，请再说具体一点。',
+      provider_error: `网易云暂时无法完成${subject}。`,
+    }
+    const personalFmErrorReplies = {
+      network_error: '网易云连接确实失败了，私人 FM 这次没有开始播放。',
+      not_logged_in: '请先登录网易云，我才能读取你的私人 FM。',
+      unauthorized: '网易云没有授权这次私人 FM 读取，请重新登录后再试。',
+      vip_required: '当前账号没有拿到私人 FM 所需的资源权限，我没有假装它已经播放。',
+      provider_error: '网易云这次没把私人 FM 列表返回给我，我没有切换到桌面控制。',
+      empty_result: '网易云这次返回了空的私人 FM 列表，我没有切歌。',
+      unsupported: '私人 FM 目前没有可验证的控制通道。',
+    }
+    const replyByCode = plan.capability === 'netease.recommend.personal_fm'
+      ? personalFmErrorReplies
+      : errorReplies
+    return {
+      handled: true,
+      capabilityPlan: plan,
+      capabilityResult: result,
+      reply: responseMode === 'silent' ? '...' : (replyByCode[result.errorCode] || `网易云暂时无法完成${subject}。`),
+      skipTts: responseMode === 'silent',
+    }
+  }
+
+  const value = result.value
+  const apiSongs = Array.isArray(value) ? value : Array.isArray(value?.songs) ? value.songs : []
+  const recommendationIdsToExclude = new Set([
+    currentSong,
+    ...playHistory.slice(-10),
+    ...rejectedTracks.slice(-10),
+    ...recentRecommendations.slice(-10).map((item) => item?.song || item),
+  ].map((song) => String(song?.providerId || song?.id || '').replace(/^netease-/, '')).filter(Boolean))
+  const songs = ['netease.recommend.daily', 'netease.recommend.personal_fm'].includes(plan.capability)
+    ? apiSongs.filter((song) => !recommendationIdsToExclude.has(String(song?.providerId || song?.id || '').replace(/^netease-/, '')))
+    : apiSongs
+  const resolvedTrack = plan.capability === 'yun.player.stream_quality'
+    || (['netease.library.podcasts', 'netease.library.cloud'].includes(plan.capability) && plan.action === 'play')
+    ? value
+    : songs[0]
+  const shouldPlay = plan.action === 'play' || plan.capability === 'yun.player.stream_quality'
+  let playbackResult = null
+  if (shouldPlay) {
+    if (!resolvedTrack?.providerId) {
+      return {
+        handled: true,
+        capabilityPlan: plan,
+        capabilityResult: result,
+        reply: responseMode === 'silent' ? '...' : `${subject}没有返回可播放歌曲。`,
+        skipTts: responseMode === 'silent',
+      }
+    }
+    if (plan.capability === 'netease.recommend.similar') {
+      await executor.execute({ capability: 'yun.player.settings', action: 'set_mode', args: { mode: 'ai_recommend' } })
+    }
+    playbackResult = await executor.execute({
+      capability: 'yun.player.queue',
+      action: songs.length > 1 ? 'play_from_queue' : 'play_track',
+      args: songs.length > 1 ? { track: resolvedTrack, queue: songs } : { track: resolvedTrack },
+    })
+    if (!playbackResult.ok) {
+      return {
+        handled: true,
+        capabilityPlan: plan,
+        capabilityResult: result,
+        playbackResult,
+        reply: responseMode === 'silent' ? '...' : `网易云已经返回${subject}，但 PlayerCore 这次没有开始播放。`,
+        skipTts: responseMode === 'silent',
+      }
+    }
+    if (plan.capability === 'netease.recommend.similar') {
+      await executor.execute({ capability: 'yun.player.queue', action: 'set_auto_up_next', args: { tracks: songs.slice(1, 4), options: { replace: true } } })
+      await executor.execute({ capability: 'yun.player.queue', action: 'set_queued_next', args: { track: null } })
+    }
+  }
+
+  const songNames = songs.slice(0, 5).map((song) => `《${song.title}》`).join('、')
+  const listNames = (items) => (Array.isArray(items) ? items : []).slice(0, 5).map((item) => `《${item.name || item.title || ''}》`).filter((name) => name !== '《》').join('、')
+  const successReplies = {
+    'netease.recommend.daily': shouldPlay ? `按网易云每日推荐播放${resolvedTrack ? `《${resolvedTrack.title}》` : ''}。` : `网易云今天推荐了：${songNames || '暂时没有歌曲'}。`,
+    'netease.recommend.personal_fm': shouldPlay ? `开始播放你的网易云私人 FM：${resolvedTrack ? `《${resolvedTrack.title}》` : ''}。` : `私人 FM 返回了：${songNames || '暂时没有歌曲'}。`,
+    'netease.recommend.similar': shouldPlay ? `找到了和当前歌曲相似的歌，先接上《${resolvedTrack?.title || ''}》。` : `和当前歌曲相似的有：${songNames || '暂时没有歌曲'}。`,
+    'netease.recommend.playlist': `网易云推荐歌单：${listNames(value) || '暂时没有歌单'}。`,
+    'netease.library.recent': `你的网易云最近播放：${songNames || '暂时没有记录'}。`,
+    'netease.library.user_record': plan.args?.type === 'all'
+      ? `你历史上最常听：${songNames || '暂时没有排行记录'}。`
+      : `你最近常听：${songNames || '暂时没有排行记录'}。`,
+    'netease.library.podcasts': plan.action === 'play' ? `开始播放播客节目《${resolvedTrack?.title || ''}》。` : `你的网易云订阅播客：${listNames(value?.podcasts) || '暂时没有订阅播客'}。`,
+    'netease.library.cloud': plan.action === 'play' ? `开始播放云盘歌曲《${resolvedTrack?.title || ''}》。` : `你的网易云云盘有 ${Number(value?.total || value?.items?.length || 0)} 首，最近的包括：${songNames || '暂无可播放歌曲'}。`,
+    'netease.search.suggest': `网易云搜索建议：${songNames || listNames(value?.artists) || '没有返回建议'}。`,
+    'netease.song.detail': songs[0] ? `这首是《${songs[0].title}》，歌手 ${songs[0].artist}${songs[0].album ? `，收录于《${songs[0].album}》` : ''}。` : '网易云没有返回这首歌的详情。',
+    'netease.song.playability': value?.playable ? '网易云确认这首当前可以播放。' : `这首当前不可播放${value?.message ? `：${value.message}` : '。'}`,
+    'yun.player.stream_quality': `已通过网易云 ${value?.streamLevel || plan.args.level} 取流，并交给 PlayerCore 播放。`,
+  }
+  return {
+    handled: true,
+    capabilityPlan: plan,
+    capabilityResult: result,
+    playbackResult,
+    reply: responseMode === 'silent'
+      ? '...'
+      : successReplies[plan.capability] || formatCapabilityExecutionReply(result, {
+        success: `${subject}已经按你的要求完成。`,
+        failure: `${subject}这次没有设置成功，我没有改动现有状态。`,
+        unsupported: `${subject}目前还没有可验证的控制通道，所以我没有假装已经设置成功。`,
+        confirmation: `${subject}需要你再次明确确认后才能执行。`,
+      }),
+    song: playbackResult?.ok ? resolvedTrack : null,
+    songReactionTrigger: playbackResult?.ok ? 'user_play' : null,
     skipTts: responseMode === 'silent',
   }
 }
@@ -179,8 +396,15 @@ async function playNeteaseFromLyrics(message, player, responseMode) {
 }
 
 async function playNeteaseFromLyricFragment(lyrics, player, responseMode) {
+  let capabilityResult = null
   try {
-    const resolved = await resolveNeteaseSongFromLyrics(lyrics)
+    const executor = createCapabilityExecutor(player)
+    capabilityResult = await executor.execute({
+      capability: 'netease.search.lyrics',
+      action: 'resolve',
+      args: { query: lyrics },
+    })
+    const resolved = requireCapabilityValue(capabilityResult)
     if (!resolved.verified || !resolved.song) {
       return {
         handled: true,
@@ -188,13 +412,19 @@ async function playNeteaseFromLyricFragment(lyrics, player, responseMode) {
         skipTts: responseMode === 'silent',
       }
     }
-    const result = await player.playTrackFromQueue(
-      resolved.song,
-      [resolved.song],
-      { crossfade: Boolean(getCurrentTrack(player)) },
-    )
+    const result = await executor.execute({
+      capability: 'yun.player.queue',
+      action: 'play_from_queue',
+      args: {
+        track: resolved.song,
+        queue: [resolved.song],
+        options: { crossfade: Boolean(getCurrentTrack(player)) },
+      },
+    })
     return {
       handled: true,
+      capabilityResult,
+      playbackResult: result,
       reply: result?.ok
         ? `嗯，这句我认出来了——《${resolved.song.title}》${resolved.song.artist ? `，${resolved.song.artist}唱的` : ''}。我给你接上。`
         : `我确认是《${resolved.song.title}》，但现在没能把它顺利放出来。`,
@@ -205,7 +435,10 @@ async function playNeteaseFromLyricFragment(lyrics, player, responseMode) {
   } catch (error) {
     return {
       handled: true,
-      reply: error instanceof Error ? error.message : '歌词识曲暂时失败，请再试一次。',
+      capabilityResult: capabilityResult?.ok === false
+        ? capabilityResult
+        : capabilityFailureFromError(error, 'netease.search.lyrics', 'resolve'),
+      reply: neteaseOperationFailureReply(error, responseMode, '完成歌词识曲'),
       skipTts: responseMode === 'silent',
     }
   }
@@ -269,7 +502,13 @@ async function addCurrentSongToNeteaseCollection(message, currentSong, responseM
     }
   }
   try {
-    const result = await addSongToNeteaseCollection({ song: currentSong, ...request })
+    const executor = createCapabilityExecutor(null)
+    const capability = request.target === 'liked' ? 'netease.library.liked' : 'netease.library.collection'
+    const result = requireCapabilityValue(await executor.execute({
+      capability,
+      action: 'add',
+      args: { song: currentSong, ...request },
+    }))
     const songTitle = result.song?.title || currentSong.title || currentSong.name || '这首歌'
     const destination = result.playlist?.liked ? '网易云“我喜欢的音乐”' : `网易云歌单“${result.playlist?.name || request.playlistName}”`
     return {
@@ -499,7 +738,16 @@ async function playNeteaseAiRecommendation(message, player, responseMode, contex
   if (!isAiRecommendationRequest(message)) return { handled: false }
   let tracks
   try {
-    tracks = await fetchNeteaseAiRecommendations({ ...context, currentSong: getCurrentTrack(player) || context.currentSong, limit: 8 })
+    const executor = createCapabilityExecutor(player)
+    const currentTrack = getCurrentTrack(player) || context.currentSong
+    const capability = /(?:类似|相似)/.test(message) ? 'netease.recommend.similar' : 'netease.recommend.contextual'
+    tracks = requireCapabilityValue(await executor.execute({
+      capability,
+      action: 'list',
+      args: capability === 'netease.recommend.similar'
+        ? { currentSong: currentTrack, context, limit: 8 }
+        : { context: { ...context, currentSong: currentTrack }, limit: 8 },
+    }))
   } catch {
     return { handled: false }
   }
@@ -852,6 +1100,7 @@ async function executeRadioPlanResult({
   responseMode,
   musicSource,
   context,
+  inputMode,
 }) {
   const plan = await createPlaybackPlan({
     smartResult,
@@ -861,9 +1110,18 @@ async function executeRadioPlanResult({
     responseMode,
     musicSource,
     context,
+    inputMode,
   })
 
   if (plan.action === 'none') {
+    if (plan.needsClarification) {
+      return {
+        handled: true,
+        reply: plan.reply,
+        skipTts: responseMode === 'silent',
+        playbackPlan: plan,
+      }
+    }
     // A none classification is not a final answer. Continue through the
     // remaining router and Agent fallbacks instead of consuming this turn.
     return { handled: false, playbackPlan: plan }
@@ -888,7 +1146,7 @@ async function executeRadioPlanResult({
 void detectInstantMusicCommand
 void shouldAskSmartMusicCommand
 
-export async function routeChatIntent({
+async function routeChatIntentImpl({
   message,
   chatHistory = [],
   currentSong = null,
@@ -903,6 +1161,7 @@ export async function routeChatIntent({
   rejectedTracks = [],
   recentRecommendations = [],
   pendingPlaylistSelection = null,
+  inputMode = 'text',
 }) {
   // Playback controls are latency-sensitive, especially on a voice turn.
   // They must never wait for the model-backed intent gate: Pro models can
@@ -920,6 +1179,18 @@ export async function routeChatIntent({
 
   const structureIntent = detectMusicStructureIntent(message)
   if (structureIntent) return executeMusicStructureIntent(structureIntent, player, responseMode)
+
+  const platformCapability = await executePlatformCapabilityIntent({
+    message,
+    inputMode,
+    player,
+    responseMode,
+    currentSong: currentSong || getCurrentTrack(player),
+    playHistory,
+    rejectedTracks,
+    recentRecommendations,
+  })
+  if (platformCapability.handled) return platformCapability
 
   const settingsIntent = executePlayerSettingIntent(message, player, setResponseMode, responseMode)
   if (settingsIntent.handled) return settingsIntent
@@ -945,6 +1216,7 @@ export async function routeChatIntent({
       playHistory,
       rejectedTracks,
       recentRecommendations,
+      inputMode,
     })
   }
 
@@ -970,6 +1242,7 @@ export async function routeChatIntent({
       playHistory,
       rejectedTracks,
       recentRecommendations,
+      inputMode,
     })
     if (smartResult?.should_execute && smartResult?.target?.source === 'netease_liked') {
       return playMyNeteasePlaylist(message, player, responseMode, { forceLiked: true })
@@ -985,6 +1258,7 @@ export async function routeChatIntent({
       responseMode,
       musicSource,
       context: { currentSong, playHistory, rejectedTracks, recentRecommendations },
+      inputMode,
     })
 
     if (executed.handled) return executed
@@ -1019,6 +1293,7 @@ export async function routeChatIntent({
       playHistory,
       rejectedTracks,
       recentRecommendations,
+      inputMode,
     })
     if (onlineResult.handled) return onlineResult
   }
@@ -1050,4 +1325,59 @@ export async function routeChatIntent({
   }
 
   return { handled: false }
+}
+
+function summarizeTraceResult(result) {
+  if (!result) return null
+  const value = result.value
+  const itemCount = Array.isArray(value)
+    ? value.length
+    : Array.isArray(value?.songs)
+      ? value.songs.length
+      : Array.isArray(value?.items)
+        ? value.items.length
+        : undefined
+  return {
+    ok: result.ok === true,
+    ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+    ...(result.errorDetails ? { errorDetails: result.errorDetails } : {}),
+    ...(itemCount !== undefined ? { itemCount } : {}),
+  }
+}
+
+// `debugTrace` is an explicit dev/E2E-only collector. Production callers do
+// not pass it, and no trace metadata is returned to or rendered by the chat UI.
+export async function routeChatIntent(args = {}) {
+  const currentTrack = args.currentSong || args.player?.getState?.()?.currentTrack || null
+  const planned = planNeteaseCapability({
+    message: args.message,
+    inputMode: args.inputMode,
+    currentTrack,
+  })
+  const result = await routeChatIntentImpl(args)
+  const trace = args.debugTrace
+  if (trace && typeof trace === 'object') {
+    const actualPlan = result?.capabilityPlan || planned
+    const definition = getCapability(actualPlan?.capability)
+    const exactExecution = result?.playbackResult || result?.capabilityResult || null
+    Object.assign(trace, {
+      input: String(args.message || ''),
+      inputMode: args.inputMode === 'voice' ? 'voice' : 'text',
+      detectedIntent: actualPlan?.detectedIntent || null,
+      plannedCapability: actualPlan?.capability || null,
+      transport: definition?.transport || null,
+      adapterAction: actualPlan?.action || null,
+      planArgs: actualPlan?.args || null,
+      executorResult: exactExecution
+        ? summarizeTraceResult(exactExecution)
+        : result?.song
+          ? { ok: true, inferredFrom: 'completed_route_result' }
+          : null,
+      capabilityExecutorResult: result?.capabilityResult
+        ? summarizeTraceResult(result.capabilityResult)
+        : null,
+      finalReply: String(result?.reply || ''),
+    })
+  }
+  return result
 }

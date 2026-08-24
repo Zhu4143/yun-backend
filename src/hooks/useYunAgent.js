@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react'
 import { executeYunAgentActions } from '../services/yunAgentActions'
+import { buildYunAgentFinalReply } from '../services/yunAgentReply.js'
 
 function makeSessionId() {
   return `yun_agent_${globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(16).slice(2)}`}`
@@ -14,15 +15,11 @@ export function useYunAgent({ player, playerState, setResponseMode, voice, libra
   }), [currentSong, libraryTracks, playerState?.currentTime, playerState?.duration, playerState?.isPlaying, playerState?.playbackMode])
 
   return useMemo(() => ({
-    run: async (message, { isCurrentRequest = () => true, onPlan = null } = {}) => {
+    run: async (message, { isCurrentRequest = () => true, inputMode = 'text' } = {}) => {
       const startedAt = new Date().toISOString()
-      const response = await fetch('/api/yun/agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId: sessionIdRef.current, context }) })
+      const response = await fetch('/api/yun/agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, inputMode, sessionId: sessionIdRef.current, context }) })
       const result = await response.json().catch(() => ({}))
       if (!response.ok || !result.ok) return result
-      // A companion acknowledgement should not wait behind network search or
-      // audio startup. The caller can render/speak this plan while the safe,
-      // declarative actions below continue in the background of the same turn.
-      if (isCurrentRequest()) onPlan?.(result)
       const executions = await executeYunAgentActions(result.actions, {
         player,
         voice,
@@ -48,7 +45,15 @@ export function useYunAgent({ player, playerState, setResponseMode, voice, libra
           // never turn a successful music action into a visible failure.
         }
       }
-      return { ...result, executions, skillCandidate, startedAt, cancelled, analysisQueued: Boolean(learningOutcome?.analysisQueued) }
+      return {
+        ...result,
+        message: buildYunAgentFinalReply(result, executions),
+        executions,
+        skillCandidate,
+        startedAt,
+        cancelled,
+        analysisQueued: Boolean(learningOutcome?.analysisQueued),
+      }
     },
     waitForSkillCandidate: async (since) => {
       for (const delay of [1500, 3000, 5000]) {

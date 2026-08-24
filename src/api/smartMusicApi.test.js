@@ -23,3 +23,19 @@ test('retries one transient smart-music failure before rejecting', async () => {
     globalThis.window = originalWindow
   }
 })
+
+test('forwards explicit voice input mode to the intent service', async () => {
+  const originalFetch = globalThis.fetch
+  let requestBody = null
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body)
+    return { ok: true, json: async () => ({ should_execute: false, command: { type: 'none' } }) }
+  }
+
+  try {
+    await requestSmartMusicCommand({ message: '播放与爱', inputMode: 'voice' })
+    assert.equal(requestBody.inputMode, 'voice')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

@@ -1117,7 +1117,7 @@ function App({ onVisualReady }) {
     cancelActiveChatRequest()
     setVoiceCallStatus(chatIsThinking ? '已听到，优先处理这句' : '理解中')
     voiceController.startResponse()
-    sendChatMessage(text)
+    sendChatMessage(text, { inputMode: 'voice' })
     return 'submitted'
   }, [cancelActiveChatRequest, chatIsThinking, sendChatMessage, voiceController, yunVoice])
 

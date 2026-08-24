@@ -30,6 +30,15 @@ import { createRequirementDiscovery } from "./server/discovery/index.js";
 import { createFeedbackLoop } from "./server/discovery/feedbackLoop.js";
 import { createListeningProfile, importNeteaseHistory, recordListeningEvent, scoreSongForListeningProfile, summarizeListeningProfile } from "./server/listeningProfile.js";
 import { createCowAgentCommandQueue, extractCowAgentCommand } from "./server/cowagentBridge.js";
+import {
+  createNeteaseCapabilityService,
+  NETEASE_STREAM_LEVELS,
+  neteaseErrorHttpStatus,
+  normalizeNeteaseCapabilityError,
+  normalizeNeteaseCoverUrl,
+  normalizeNeteaseSongRecord,
+} from "./server/netease/capabilityService.js";
+import { getRelevantNeteaseCapabilityTruth } from "./src/services/netease/capabilityTruth.js";
 
 const {
   login_qr_key: neteaseLoginQrKey,
@@ -252,16 +261,9 @@ async function saveNeteaseCookie(cookie) {
 }
 
 function normalizeNeteaseApiSong(song = {}) {
+  const normalized = normalizeNeteaseSongRecord(song);
   return {
-    id: String(song.id || ""),
-    title: String(song.name || "未知歌曲"),
-    name: String(song.name || "未知歌曲"),
-    artist: (song.ar || song.artists || []).map((artist) => artist.name).filter(Boolean).join(" / ") || "未知歌手",
-    album: song.al?.name || song.album?.name || "",
-    coverUrl: normalizeNeteaseCoverUrl(song),
-    duration: song.dt || song.duration || 0,
-    fee: song.fee,
-    source: "netease",
+    ...normalized,
     language: normalizeLanguage(song.language),
     languageTags: uniqueStrings(song.languageTags),
   };
@@ -773,6 +775,77 @@ async function getNeteaseLoginInfo() {
     };
   } catch {
     return { loggedIn: false, hasCookie: Boolean(neteaseUserCookie) };
+  }
+}
+
+const neteaseCapabilityService = createNeteaseCapabilityService({
+  api: neteaseCloudMusicApi,
+  getCookie: () => neteaseUserCookie,
+  getLoginInfo: getNeteaseLoginInfo,
+});
+
+const neteaseCapabilityReadRoutes = Object.freeze({
+  "/api/netease/recommend/daily-songs": "dailySongs",
+  "/api/netease/recommend/playlists": "recommendedPlaylists",
+  "/api/netease/recommend/personal-fm": "personalFm",
+  "/api/netease/history/recent": "recent",
+  "/api/netease/history/user-record": "userRecord",
+  "/api/netease/podcasts": "podcasts",
+  "/api/netease/podcast/programs": "podcastPrograms",
+  "/api/netease/cloud": "cloud",
+  "/api/netease/search/suggest": "searchSuggest",
+  "/api/netease/song/detail": "songDetails",
+  "/api/netease/song/playability": "checkPlayable",
+  "/api/netease/song/stream": "resolveStream",
+  "/api/netease/library/liked-status": "likedStatus",
+  "/api/netease/library/subscription-counts": "subscriptionCounts",
+  "/api/netease/library/subscribed-albums": "subscribedAlbums",
+  "/api/netease/library/subscribed-artists": "subscribedArtists",
+  "/api/netease/account/membership": "membership",
+  "/api/netease/playlist/detail": "playlistDetail",
+  "/api/netease/state-summary": "stateSummary",
+});
+
+function neteaseCapabilityQuery(req) {
+  return new URL(req.url || "/", `http://${req.headers.host || "localhost"}`).searchParams;
+}
+
+async function handleNeteaseCapabilityRead(req, res, operation) {
+  try {
+    const params = neteaseCapabilityQuery(req);
+    const handlers = {
+      dailySongs: () => neteaseCapabilityService.dailySongs(),
+      recommendedPlaylists: () => neteaseCapabilityService.recommendedPlaylists(),
+      personalFm: () => neteaseCapabilityService.personalFm(),
+      recent: () => neteaseCapabilityService.recent({ type: params.get("type") || "song", limit: params.get("limit") }),
+      userRecord: () => neteaseCapabilityService.userRecord({ type: params.get("type") || "week", limit: params.get("limit") }),
+      podcasts: () => neteaseCapabilityService.podcasts({ source: params.get("source") || "subscribed", limit: params.get("limit"), offset: params.get("offset") }),
+      podcastPrograms: () => neteaseCapabilityService.podcastPrograms({ podcastId: params.get("id"), limit: params.get("limit"), offset: params.get("offset"), asc: params.get("asc") === "true" }),
+      cloud: () => neteaseCapabilityService.cloud({ limit: params.get("limit"), offset: params.get("offset") }),
+      searchSuggest: () => neteaseCapabilityService.searchSuggest({ keywords: params.get("keywords"), type: params.get("type") || "web" }),
+      songDetails: () => neteaseCapabilityService.songDetails({ ids: params.get("ids") || params.get("id") }),
+      checkPlayable: () => neteaseCapabilityService.checkPlayable({ id: params.get("id"), br: params.get("br") }),
+      resolveStream: () => neteaseCapabilityService.resolveStream({ id: params.get("id"), level: params.get("level") || "exhigh" }),
+      likedStatus: () => neteaseCapabilityService.likedStatus({ ids: params.get("ids") || params.get("id") }),
+      subscriptionCounts: () => neteaseCapabilityService.subscriptionCounts(),
+      subscribedAlbums: () => neteaseCapabilityService.subscribedAlbums({ limit: params.get("limit"), offset: params.get("offset") }),
+      subscribedArtists: () => neteaseCapabilityService.subscribedArtists({ limit: params.get("limit"), offset: params.get("offset") }),
+      membership: () => neteaseCapabilityService.membership(),
+      playlistDetail: () => neteaseCapabilityService.playlistDetail({ id: params.get("id") }),
+      stateSummary: () => neteaseCapabilityService.stateSummary(),
+    };
+    if (!handlers[operation]) {
+      return sendJson(res, 501, { ok: false, code: "unsupported", error: "未实现的网易云 capability endpoint" });
+    }
+    return sendJson(res, 200, { ok: true, ...(await handlers[operation]()) });
+  } catch (error) {
+    const normalized = normalizeNeteaseCapabilityError(error);
+    return sendJson(res, neteaseErrorHttpStatus(normalized.code), {
+      ok: false,
+      code: normalized.code,
+      error: normalized.message,
+      ...(normalized.details ? { details: normalized.details } : {}),
+    });
   }
 }
 
@@ -1855,23 +1928,35 @@ async function handleMusicLibrary(req, res) {
   }
 }
 
-async function getNeteasePlayableUrl(id) {
+function getNeteasePlayableUrlCacheKey(id, level = "") {
+  return level ? `${id}:${level}` : String(id);
+}
+
+async function getNeteasePlayableUrl(id, { level = "", strictLevel = false } = {}) {
   const safeId = String(id || "").trim();
   if (!safeId) return null;
+  const requestedLevel = String(level || "").trim();
+  if (requestedLevel && !NETEASE_STREAM_LEVELS.includes(requestedLevel)) return null;
+  const cacheKey = getNeteasePlayableUrlCacheKey(safeId, requestedLevel);
 
-  const cached = neteasePlayableUrlCache.get(safeId);
+  const cached = neteasePlayableUrlCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.url;
 
-  if (neteaseUserCookie) {
+  if (neteaseUserCookie || requestedLevel) {
     try {
-      const authorized = await neteaseSongUrlV1({ id: safeId, level: "exhigh", cookie: neteaseUserCookie, timestamp: Date.now() });
+      const authorized = await neteaseSongUrlV1({ id: safeId, level: requestedLevel || "exhigh", cookie: neteaseUserCookie, timestamp: Date.now() });
       const authorizedUrl = authorized?.body?.data?.[0]?.url || null;
       if (authorizedUrl) {
-        neteasePlayableUrlCache.set(safeId, { url: authorizedUrl, expiresAt: Date.now() + neteasePlayableUrlCacheTtl });
+        neteasePlayableUrlCache.set(cacheKey, { url: authorizedUrl, expiresAt: Date.now() + neteasePlayableUrlCacheTtl });
         return authorizedUrl;
       }
     } catch { /* Fall through to the public URL endpoint. */ }
   }
+
+  // An explicit quality request must never silently degrade to the legacy
+  // 320 kbps endpoint. The caller can report the provider's unavailable/VIP
+  // result while ordinary playback keeps its historical fallback behavior.
+  if (strictLevel || requestedLevel) return null;
 
   const url = `https://music.163.com/api/song/enhance/player/url?id=${encodeURIComponent(safeId)}&ids=%5B${encodeURIComponent(safeId)}%5D&br=320000`;
   const response = await fetchNeteaseWithRetry(url, { headers: neteaseHeaders });
@@ -1879,7 +1964,7 @@ async function getNeteasePlayableUrl(id) {
 
   const data = await response.json();
   const playableUrl = data?.data?.[0]?.url || null;
-  neteasePlayableUrlCache.set(safeId, {
+  neteasePlayableUrlCache.set(cacheKey, {
     url: playableUrl,
     expiresAt: Date.now() + neteasePlayableUrlCacheTtl,
   });
@@ -1937,20 +2022,6 @@ function parseNeteaseLyrics(raw = "") {
   return parseSyncedLyrics(raw);
 }
 
-function normalizeNeteaseCoverUrl(song = {}) {
-  const rawUrl = song.album?.picUrl
-    || song.album?.blurPicUrl
-    || song.al?.picUrl
-    || song.picUrl
-    || "";
-
-  if (!rawUrl) return "";
-  const cleanUrl = String(rawUrl).replace(/^http:\/\//i, "https://");
-  return cleanUrl.includes("?")
-    ? cleanUrl
-    : `${cleanUrl}?param=240y240`;
-}
-
 async function handleNeteaseSearch(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
@@ -1989,17 +2060,7 @@ async function handleNeteaseSearch(req, res) {
     }
 
     const data = await response.json();
-    const rawSongs = (data?.result?.songs || []).map((song) => ({
-      id: String(song.id || ""),
-      title: String(song.name || "Unknown track"),
-      name: String(song.name || "Unknown track"),
-      artist: (song.artists || []).map((artist) => artist.name).filter(Boolean).join(" / ") || "Unknown artist",
-      album: song.album?.name || "",
-      coverUrl: normalizeNeteaseCoverUrl(song),
-      duration: song.duration || 0,
-      fee: song.fee,
-      source: "netease",
-    })).filter(song => song.id);
+    const rawSongs = (data?.result?.songs || []).map(normalizeNeteaseApiSong).filter(song => song.id);
     const playableSongs = await filterNeteasePlayableSongs(rawSongs, resultLimit);
     const songs = await enrichNeteaseSongCovers(playableSongs);
     neteaseSearchCache.set(cacheKey, { songs, expiresAt: Date.now() + neteaseSearchCacheTtl });
@@ -2214,7 +2275,8 @@ async function handleNeteaseUrl(req, res) {
       return sendJson(res, 400, { ok: false, error: "Missing id" });
     }
 
-    return sendJson(res, 200, { ok: true, url: await getNeteasePlayableUrl(id) });
+    const level = String(url.searchParams.get("level") || "").trim();
+    return sendJson(res, 200, { ok: true, url: await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level) }) });
   } catch (error) {
     return sendJson(res, 500, {
       ok: false,
@@ -2227,22 +2289,27 @@ async function handleNeteaseAudio(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const id = String(url.searchParams.get("id") || "").trim();
+    const level = String(url.searchParams.get("level") || "").trim();
     if (!id) {
       return sendJson(res, 400, { ok: false, error: "Missing id" });
+    }
+    if (level && !NETEASE_STREAM_LEVELS.includes(level)) {
+      return sendJson(res, 400, { ok: false, code: "unsupported", error: `Unsupported stream level: ${level}` });
     }
 
     const headers = { ...neteaseHeaders };
     if (req.headers.range) headers.Range = req.headers.range;
-    let playableUrl = await getNeteasePlayableUrl(id);
-    if (!playableUrl) return sendJson(res, 404, { ok: false, error: "No playable url for this song" });
+    const cacheKey = getNeteasePlayableUrlCacheKey(id, level);
+    let playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level) });
+    if (!playableUrl) return sendJson(res, 404, { ok: false, code: "not_found", error: "No playable url for this song and requested level" });
 
     let audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers });
     // CDN stream URLs can expire while a song is playing. Do not keep serving
     // a cached, expired address on the next Range request: evict it and obtain
     // one fresh URL before the browser turns the player into a silent state.
     if (!audioResponse.ok && audioResponse.status !== 206) {
-      neteasePlayableUrlCache.delete(id);
-      playableUrl = await getNeteasePlayableUrl(id);
+      neteasePlayableUrlCache.delete(cacheKey);
+      playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level) });
       if (playableUrl) audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers });
     }
     if (!audioResponse.ok && audioResponse.status !== 206) {
@@ -3862,7 +3929,9 @@ async function handleSmartMusicCommand(req, res) {
       playHistory = [],
       rejectedTracks = [],
       recentRecommendations = [],
+      inputMode: rawInputMode = "text",
     } = await readJson(req);
+    const inputMode = rawInputMode === "voice" ? "voice" : "text";
 
     const songs = await readMusicLibraryForServer();
     if (!songs.length) {
@@ -3907,6 +3976,7 @@ async function handleSmartMusicCommand(req, res) {
       systemPrompt,
       userPrompt: [
         `用户输入：${message}`,
+        `输入方式：${inputMode}`,
         `当前 responseMode：${responseMode}`,
         `当前人格：${persona}`,
         `当前播放歌曲：${currentSong ? JSON.stringify(currentSong).slice(0, 800) : "无"}`,
@@ -5332,6 +5402,7 @@ async function handleCompanionChat(req, res) {
       })
       : null;
     const companionModel = selectCompanionModel(userText, { relationshipSupportActive, recentChat });
+    const capabilityTruth = getRelevantNeteaseCapabilityTruth({ message: userText, currentTrack: currentSong });
 
     const systemPrompt = `你正在陪用户听歌聊天。
 你不是客服，不是心理医生，不是功能说明，也不是音乐播客主持人。你也不要主动承认自己只是代码、程序或工具。
@@ -5433,6 +5504,9 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
         `兼容近期记忆：${JSON.stringify(companionMemory).slice(0, 1000)}`,
         `最近三次回复已问问题次数：${questionCountWindow}`,
         `硬约束：explicitNoQuestions=${explicitNoQuestions}; explicitNoChange=${explicitNoChange}; explicitPickSong=${explicitPickSong}; explicitNext=${explicitNext}; explicitPause=${explicitPause}; textHint=${lowerText.slice(0, 80)}`,
+        capabilityTruth?.capabilities?.length
+          ? `相关能力真相（来自 Capability Registry，仅供判断可用性；没有 executor 成功结果时不得声称已执行）：${JSON.stringify(capabilityTruth).slice(0, 1400)}`
+          : "",
         "记忆写入规则：只有用户明确说“记住/以后/我喜欢/我讨厌”、表达重要长期偏好、长期项目信息、关系设定、昀自己的稳定设定，或明显影响后续陪伴方式的情绪信息时，才写 memoryUpdates。普通闲聊 memoryUpdates=[]。",
         "使用记忆时要自然，不要说“根据记忆库”。不要突然提起敏感过去，只在用户主动提到相关话题时轻轻接住。",
       ].filter(Boolean).join("\n"),
@@ -6604,14 +6678,36 @@ async function handleMossChat(req, res) {
 async function handleYunAgent(req, res) {
   try {
     const body = await readJson(req);
+    const inputMode = body.inputMode === "voice" ? "voice" : "text";
+    const capabilityTruth = getRelevantNeteaseCapabilityTruth({ message: body.message, inputMode });
     const result = await yunAgent.handle({
       message: body.message,
       sessionId: body.sessionId,
-      context: body.context && typeof body.context === "object" ? body.context : {},
+      context: {
+        ...(body.context && typeof body.context === "object" ? body.context : {}),
+        inputMode,
+        capabilityTruth,
+      },
     });
     return sendJson(res, result.ok ? 200 : 422, result);
   } catch (error) {
     return sendJson(res, 400, { ok: false, message: `昀 Agent 请求失败：${error instanceof Error ? error.message : String(error)}`, actions: [] });
+  }
+}
+
+async function handleNeteaseDesktopCapability(req, res) {
+  try {
+    const body = await readJson(req);
+    if (body.capability !== "netease.client.open" || body.action !== "open") {
+      return sendJson(res, 422, { ok: false, unsupported: true, error: "unsupported_netease_desktop_capability" });
+    }
+    const result = await callDesktopAgent({ tool: "open_app", arguments: { app: "cloudmusic" } });
+    if (result?.started !== true) {
+      return sendJson(res, 502, { ok: false, error: "netease_client_open_not_verified" });
+    }
+    return sendJson(res, 200, { ok: true, verified: true, result });
+  } catch (error) {
+    return sendJson(res, 503, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -6852,6 +6948,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/api/yun/agent") {
     return handleYunAgent(req, res);
   }
+  if (req.method === "POST" && req.url === "/api/netease/desktop-capability") {
+    return handleNeteaseDesktopCapability(req, res);
+  }
   if (req.method === "POST" && requestPath === "/api/yun/cowagent/command") {
     return handleCowAgentCommand(req, res);
   }
@@ -6915,6 +7014,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && req.url?.startsWith("/api/music/import")) {
     return handleMusicImport(req, res);
+  }
+  if (req.method === "GET") {
+    const pathname = String(req.url || "").split("?", 1)[0];
+    const operation = neteaseCapabilityReadRoutes[pathname];
+    if (operation) return handleNeteaseCapabilityRead(req, res, operation);
   }
   if (req.method === "GET" && req.url?.startsWith("/api/netease/me")) {
     return handleNeteaseMe(req, res);

@@ -13,17 +13,25 @@ function safeLibrary(library) {
   }))
 }
 
-function promptFor(skills) {
+function capabilityTruthPrompt(context = {}) {
+  const truth = context.capabilityTruth
+  const capabilities = Array.isArray(truth?.capabilities) ? truth.capabilities.slice(0, 3) : []
+  if (!capabilities.length) return ''
+  return `Relevant capability registry facts: ${JSON.stringify({ detectedIntent: truth.detectedIntent, requestedAction: truth.requestedAction, capabilities })}. Treat these facts as authoritative. Do not claim an available capability is unsupported, and do not claim execution success before the renderer reports it.`
+}
+
+function promptFor(skills, context) {
   return [
     'You are Yun, a music assistant. Use tools only for explicit music actions.',
     'Never claim an action succeeded before the renderer executes the returned plan.',
     'For a multi-step request, return every safe action in the user\'s stated order. Use music_add_to_collection only to add the currently playing song to NetEase liked music.',
     'Use music_get_state only when the user explicitly asks about playback state or diagnostics. Never use it as the final action for a recommendation, mood, scene, or companion request; choose a music action instead.',
     `Available reusable skills: ${skills.map((skill) => `${skill.name}: ${skill.description}`).join('; ')}`,
-  ].join('\n')
+    capabilityTruthPrompt(context),
+  ].filter(Boolean).join('\n')
 }
 
-function textPlanPrompt(tools) {
+function textPlanPrompt(tools, context) {
   const availableTools = tools.map((tool) => ({ name: tool.name, parameters: tool.parameters, description: tool.description }))
   return [
     'You are Yun, a music companion. Return one strict JSON object and nothing else.',
@@ -32,7 +40,8 @@ function textPlanPrompt(tools) {
     'Use music_get_state only for an explicit playback-status or diagnostic request. For music recommendations, mood, scene, or companion requests, it is not a valid final action: choose a music action instead.',
     'Do not add keys that are not declared in a tool\'s parameters. Return no more than four tool calls.',
     `Available tools: ${JSON.stringify(availableTools)}`,
-  ].join('\n')
+    capabilityTruthPrompt(context),
+  ].filter(Boolean).join('\n')
 }
 
 function needsTextPlanFallback(error) {
@@ -133,7 +142,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
       const runtimeState = await core.state.get()
       try {
         result = await core.model.sendMessage({
-          systemPrompt: promptFor(skills),
+          systemPrompt: promptFor(skills, runtimeContext),
           messages: [{ role: 'user', content: cleanMessage }],
           tools: core.registry.toModelTools(),
           runtimeState,
@@ -144,7 +153,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
       } catch (error) {
         if (!needsTextPlanFallback(error)) throw error
         result = await core.model.sendMessage({
-          systemPrompt: textPlanPrompt(core.registry.listEnabled()),
+          systemPrompt: textPlanPrompt(core.registry.listEnabled(), runtimeContext),
           messages: [{ role: 'user', content: cleanMessage }],
           tools: [],
           runtimeState,
@@ -159,7 +168,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
       const actions = executions.filter((item) => item.ok).map((item) => item.data)
       const runId = actions.length ? id('run') : null
       if (runId) await skillMining.recordPlan({ runId, message: cleanMessage, actions })
-      const messageText = result.response?.answer || result.response?.message || (actions.length ? '我已经准备好执行这些操作。' : '我还需要你再说明一点想做什么。')
+      const messageText = result.response?.answer || result.response?.message || (actions.length ? '计划已生成，等待播放器执行结果。' : '我还需要你再说明一点想做什么。')
       await core.memory.appendTurn(sessionId, { at: now().toISOString(), user: cleanMessage, assistant: messageText })
       await core.state.update({ status: actions.length ? 'SUCCESS' : 'READY', currentTask: null, activeTool: null, lastError: null, lastToolResult: executions.at(-1) || null })
       return { ok: true, sessionId, runId, source: 'model', message: messageText, actions, executions, runtimeState: await core.state.get() }
