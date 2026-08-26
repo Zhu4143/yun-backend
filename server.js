@@ -30,6 +30,8 @@ import { createRequirementDiscovery } from "./server/discovery/index.js";
 import { createFeedbackLoop } from "./server/discovery/feedbackLoop.js";
 import { createListeningProfile, importNeteaseHistory, recordListeningEvent, scoreSongForListeningProfile, summarizeListeningProfile } from "./server/listeningProfile.js";
 import { createCowAgentCommandQueue, extractCowAgentCommand } from "./server/cowagentBridge.js";
+import { createNetEaseAccountSessionService } from "./server/netease/accountSessionService.js";
+import { createFileNetEaseSessionStore, normalizeNeteaseSessionCookie } from "./server/netease/sessionStore.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -79,7 +81,6 @@ const manualMusicTagsPath = path.join(dataDir, "manualMusicTags.json");
 const yunMemoryPath = path.join(dataDir, "yunMemory.json");
 const yunSettingsPath = path.join(dataDir, "yunSettings.json");
 const listeningProfilePath = path.join(dataDir, "yunListeningProfile.json");
-const neteaseCookiePath = path.join(dataDir, "netease-cookie.txt");
 const defaultCoverPath = "/covers/default-cover.jpg";
 const execFileAsync = promisify(execFile);
 const audioExtensions = new Set([".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"]);
@@ -156,9 +157,9 @@ async function handleListeningProfile(req, res) {
       const info = await getNeteaseLoginInfo();
       if (!info.loggedIn) return sendJson(res, 401, { ok: false, error: "请先登录网易云" });
       const [recent, weekly, all] = await Promise.all([
-        neteaseRecordRecentSong({ limit: 100, cookie: neteaseUserCookie, timestamp: Date.now() }),
-        neteaseUserRecord({ uid: info.userId, type: 1, cookie: neteaseUserCookie, timestamp: Date.now() }),
-        neteaseUserRecord({ uid: info.userId, type: 0, cookie: neteaseUserCookie, timestamp: Date.now() }),
+        neteaseRecordRecentSong({ limit: 100, cookie: getNeteaseCookie(), timestamp: Date.now() }),
+        neteaseUserRecord({ uid: info.userId, type: 1, cookie: getNeteaseCookie(), timestamp: Date.now() }),
+        neteaseUserRecord({ uid: info.userId, type: 0, cookie: getNeteaseCookie(), timestamp: Date.now() }),
       ]);
       importNeteaseHistory(profile, { recent: neteaseHistoryRows(recent, "list"), weekly: neteaseHistoryRows(weekly, "weekData"), all: neteaseHistoryRows(all, "allData") });
       await saveListeningProfile(profile);
@@ -189,7 +190,32 @@ const neteaseSearchCache = new Map();
 const neteasePlayableUrlCacheTtl = 1000 * 60 * 10;
 const neteaseSearchCacheTtl = 1000 * 60 * 5;
 const neteaseLanguageCache = new Map();
-let neteaseUserCookie = existsSync(neteaseCookiePath) ? readFileSync(neteaseCookiePath, "utf8").trim() : "";
+const neteaseSessionService = createNetEaseAccountSessionService({
+  store: createFileNetEaseSessionStore({ filePath: path.join(dataDir, "netease-cookie.txt") }),
+  validate: async ({ cookie }) => {
+    const response = await neteaseLoginStatus({ cookie, timestamp: Date.now() });
+    const body = response?.body || {};
+    const data = body.data || body;
+    const profile = data.profile || body.profile;
+    if (profile?.userId) {
+      return {
+        status: "logged_in",
+        user: {
+          userId: profile.userId,
+          nickname: profile.nickname || "网易云用户",
+          avatar: profile.avatarUrl || "",
+          vipType: Number(profile.vipType || 0),
+        },
+      };
+    }
+    const providerCode = Number(body.code || response?.code || 0);
+    return { status: providerCode === 301 ? "expired" : "invalid" };
+  },
+});
+
+function getNeteaseCookie() {
+  return neteaseSessionService.getSession()?.cookie || "";
+}
 
 function waitFor(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -228,36 +254,13 @@ const visionUpload = multer({
   },
 });
 
-function normalizeNeteaseCookie(input) {
-  const items = Array.isArray(input) ? input : [input];
-  const ignored = new Set(["path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "priority"]);
-  const cookies = new Map();
-  items.flatMap((item) => String(item || "").split(/\r?\n|;\s*/)).forEach((part) => {
-    const raw = part.trim();
-    const separator = raw.indexOf("=");
-    if (separator <= 0) return;
-    const name = raw.slice(0, separator).trim();
-    const value = raw.slice(separator + 1).trim();
-    if (!name || !value || ignored.has(name.toLowerCase())) return;
-    cookies.set(name, value);
-  });
-  return Array.from(cookies, ([name, value]) => `${name}=${value}`).join("; ");
-}
-
 function readNeteaseCookie(response) {
   const candidates = [response?.cookie, response?.body?.cookie, response?.body?.data?.cookie, response?.body?.data?.cookies];
   for (const candidate of candidates) {
-    const cookie = normalizeNeteaseCookie(candidate);
+    const cookie = normalizeNeteaseSessionCookie(candidate);
     if (cookie) return cookie;
   }
   return "";
-}
-
-async function saveNeteaseCookie(cookie) {
-  neteaseUserCookie = normalizeNeteaseCookie(cookie);
-  await mkdir(dataDir, { recursive: true });
-  await writeFile(neteaseCookiePath, neteaseUserCookie, "utf8");
-  neteasePlayableUrlCache.clear();
 }
 
 function normalizeNeteaseApiSong(song = {}) {
@@ -301,7 +304,7 @@ async function fetchNeteaseLikedTracks(limit = 160) {
   const playlistsResponse = await neteaseUserPlaylist({
     uid: info.userId,
     limit: 80,
-    cookie: neteaseUserCookie,
+    cookie: getNeteaseCookie(),
     timestamp: Date.now(),
   });
   const likedPlaylist = (playlistsResponse?.body?.playlist || []).find((playlist) => (
@@ -312,7 +315,7 @@ async function fetchNeteaseLikedTracks(limit = 160) {
     id: likedPlaylist.id,
     limit: Math.max(1, Math.min(Number(limit) || 160, 500)),
     offset: 0,
-    cookie: neteaseUserCookie,
+    cookie: getNeteaseCookie(),
     timestamp: Date.now(),
   });
   return (tracksResponse?.body?.songs || []).map(normalizeNeteaseApiSong).filter((song) => song.id);
@@ -394,7 +397,7 @@ async function resolveNeteaseRecommendationSeed(currentSong = null) {
       limit: 8,
       offset: 0,
       type: 1,
-      cookie: neteaseUserCookie,
+      cookie: getNeteaseCookie(),
       timestamp: Date.now(),
     });
     const songs = (response?.body?.result?.songs || response?.body?.result?.song?.songs || [])
@@ -433,7 +436,7 @@ async function getNeteaseAiRecommendations({
 
   if (currentId) {
     try {
-      const response = await neteaseSimilarSongs({ id: currentId, limit: 24, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+      const response = await neteaseSimilarSongs({ id: currentId, limit: 24, offset: 0, cookie: getNeteaseCookie(), timestamp: Date.now() });
       (response?.body?.songs || []).forEach((song) => pushNeteaseRecommendation(
         pool,
         song,
@@ -444,9 +447,9 @@ async function getNeteaseAiRecommendations({
     } catch { /* Personalized sources below remain available. */ }
   }
 
-  if (neteaseUserCookie) {
+  if (getNeteaseCookie()) {
     try {
-      const response = await neteaseRecommendedSongs({ cookie: neteaseUserCookie, timestamp: Date.now() });
+      const response = await neteaseRecommendedSongs({ cookie: getNeteaseCookie(), timestamp: Date.now() });
       const dailySongs = response?.body?.data?.dailySongs || response?.body?.recommend || [];
       dailySongs.slice(0, 30).forEach((song) => pushNeteaseRecommendation(
         pool,
@@ -464,7 +467,7 @@ async function getNeteaseAiRecommendations({
         const seeds = [likedTracks[seedStart], likedTracks[(seedStart + 17) % likedTracks.length]].filter(Boolean);
         for (const seed of uniqueNeteaseSongs(seeds)) {
           try {
-            const response = await neteaseSimilarSongs({ id: seed.id, limit: 18, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+            const response = await neteaseSimilarSongs({ id: seed.id, limit: 18, offset: 0, cookie: getNeteaseCookie(), timestamp: Date.now() });
             (response?.body?.songs || []).forEach((song) => pushNeteaseRecommendation(
               pool,
               song,
@@ -553,7 +556,7 @@ async function filterNeteasePlayableSongsBatch(rawSongs = [], resultLimit = 2000
       const response = await neteaseSongUrl({
         id: batch.map((song) => getNeteaseProviderId(song)).join(","),
         br: 320000,
-        cookie: neteaseUserCookie,
+        cookie: getNeteaseCookie(),
         timestamp: Date.now(),
       });
       (response?.body?.data || []).forEach((item) => {
@@ -577,7 +580,7 @@ async function handleNeteaseArtistSongs(req, res) {
       type: 100,
       limit: 12,
       offset: 0,
-      cookie: neteaseUserCookie,
+      cookie: getNeteaseCookie(),
       timestamp: Date.now(),
     });
     const artists = searchResponse?.body?.result?.artists || [];
@@ -592,7 +595,7 @@ async function handleNeteaseArtistSongs(req, res) {
         order: "hot",
         limit: Math.min(100, limit - offset),
         offset,
-        cookie: neteaseUserCookie,
+        cookie: getNeteaseCookie(),
         timestamp: Date.now(),
       });
       const pageSongs = response?.body?.songs || [];
@@ -616,7 +619,7 @@ async function handleNeteaseMe(req, res) {
   try {
     const info = await getNeteaseLoginInfo();
     if (!info.loggedIn) return sendJson(res, 200, { loggedIn: false, playlists: [] });
-    const response = await neteaseUserPlaylist({ uid: info.userId, limit: 80, cookie: neteaseUserCookie, timestamp: Date.now() });
+    const response = await neteaseUserPlaylist({ uid: info.userId, limit: 80, cookie: getNeteaseCookie(), timestamp: Date.now() });
     const playlists = (response?.body?.playlist || []).map((playlist) => ({
       id: String(playlist.id),
       name: playlist.name || "未命名歌单",
@@ -636,7 +639,7 @@ async function handleNeteasePlaylistTracks(req, res) {
     if (!info.loggedIn) return sendJson(res, 401, { error: "请先登录网易云" });
     const id = new URL(req.url, "http://localhost").searchParams.get("id");
     if (!id) return sendJson(res, 400, { error: "缺少歌单 id" });
-    const response = await neteasePlaylistTrackAll({ id, limit: 500, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+    const response = await neteasePlaylistTrackAll({ id, limit: 500, offset: 0, cookie: getNeteaseCookie(), timestamp: Date.now() });
     const songs = (response?.body?.songs || []).map(normalizeNeteaseApiSong).filter((song) => song.id);
     sendJson(res, 200, { ok: true, songs });
   } catch (error) {
@@ -674,7 +677,7 @@ async function resolveNeteaseCollectionSong(song = {}) {
     type: 1,
     limit: 10,
     offset: 0,
-    cookie: neteaseUserCookie,
+    cookie: getNeteaseCookie(),
     timestamp: Date.now(),
   });
   const candidates = response?.body?.result?.songs || [];
@@ -694,7 +697,7 @@ async function handleNeteaseCollectionAdd(req, res) {
     if (!info.loggedIn) return sendJson(res, 401, { ok: false, error: "请先登录网易云音乐" });
     const body = await readJson(req);
     const target = body?.target === "liked" ? "liked" : "playlist";
-    const playlistsResponse = await neteaseUserPlaylist({ uid: info.userId, limit: 80, cookie: neteaseUserCookie, timestamp: Date.now() });
+    const playlistsResponse = await neteaseUserPlaylist({ uid: info.userId, limit: 80, cookie: getNeteaseCookie(), timestamp: Date.now() });
     const playlist = findNeteasePlaylist(playlistsResponse?.body?.playlist, {
       target,
       playlistId: body?.playlistId,
@@ -714,15 +717,15 @@ async function handleNeteaseCollectionAdd(req, res) {
       id: playlist.id,
       limit: 500,
       offset: 0,
-      cookie: neteaseUserCookie,
+      cookie: getNeteaseCookie(),
       timestamp: Date.now(),
     });
     const alreadyExists = (existingResponse?.body?.songs || []).some((item) => String(item.id) === song.id);
     if (alreadyExists) return sendJson(res, 200, { ok: true, alreadyExists: true, song, playlist: { id: String(playlist.id), name: playlist.name, liked: target === "liked" } });
 
     const mutation = target === "liked"
-      ? await neteaseLike({ id: song.id, like: true, cookie: neteaseUserCookie, timestamp: Date.now() })
-      : await neteasePlaylistTracks({ op: "add", pid: playlist.id, tracks: song.id, cookie: neteaseUserCookie, timestamp: Date.now() });
+      ? await neteaseLike({ id: song.id, like: true, cookie: getNeteaseCookie(), timestamp: Date.now() })
+      : await neteasePlaylistTracks({ op: "add", pid: playlist.id, tracks: song.id, cookie: getNeteaseCookie(), timestamp: Date.now() });
     const code = Number(mutation?.body?.code || mutation?.status || 0);
     if (code !== 200) throw new Error(mutation?.body?.message || mutation?.body?.msg || "网易云没有确认写入成功");
     return sendJson(res, 200, { ok: true, alreadyExists: false, song, playlist: { id: String(playlist.id), name: playlist.name, liked: target === "liked" } });
@@ -759,28 +762,12 @@ async function handleMusicImport(req, res) {
 }
 
 async function getNeteaseLoginInfo() {
-  if (!neteaseUserCookie) return { loggedIn: false };
-  try {
-    const response = await neteaseLoginStatus({ cookie: neteaseUserCookie, timestamp: Date.now() });
-    const body = response?.body || {};
-    const data = body.data || body;
-    const profile = data.profile || body.profile;
-    if (!profile?.userId) return { loggedIn: false, hasCookie: true };
-    return {
-      loggedIn: true,
-      userId: profile.userId,
-      nickname: profile.nickname || "网易云用户",
-      avatar: profile.avatarUrl || "",
-      vipType: Number(profile.vipType || 0),
-    };
-  } catch {
-    return { loggedIn: false, hasCookie: Boolean(neteaseUserCookie) };
-  }
+  return neteaseSessionService.validateSession();
 }
 
 const neteaseCapabilityService = createNeteaseCapabilityService({
   api: neteaseCloudMusicApi,
-  getCookie: () => neteaseUserCookie,
+  getCookie: getNeteaseCookie,
   getLoginInfo: getNeteaseLoginInfo,
 });
 
@@ -880,9 +867,12 @@ async function handleNeteaseLoginQrCheck(req, res) {
     const code = Number(body.code || response?.code || 0);
     if (code === 803) {
       const cookie = readNeteaseCookie(response);
-      if (cookie) await saveNeteaseCookie(cookie);
+      if (cookie) {
+        await neteaseSessionService.setSession({ cookie });
+        neteasePlayableUrlCache.clear();
+      }
       const info = await getNeteaseLoginInfo();
-      return sendJson(res, 200, { code, message: body.message || "登录成功", ...info, hasCookie: Boolean(cookie) });
+      return sendJson(res, 200, { code, message: body.message || "登录成功", ...info });
     }
     sendJson(res, 200, { code, message: body.message || "" });
   } catch (error) {
@@ -895,8 +885,9 @@ async function handleNeteaseLoginStatus(req, res) {
 }
 
 async function handleNeteaseLogout(req, res) {
-  try { await neteaseLogout({ cookie: neteaseUserCookie, timestamp: Date.now() }); } catch { /* Clear local state regardless. */ }
-  await saveNeteaseCookie("");
+  try { await neteaseLogout({ cookie: getNeteaseCookie(), timestamp: Date.now() }); } catch { /* Clear local state regardless. */ }
+  await neteaseSessionService.clearSession();
+  neteasePlayableUrlCache.clear();
   sendJson(res, 200, { ok: true });
 }
 
@@ -1162,7 +1153,7 @@ async function resolveNeteaseSongLanguage(song = {}) {
   if (neteaseLanguageCache.has(id)) return neteaseLanguageCache.get(id);
   const pending = (async () => {
     try {
-      const response = await neteaseLyric({ id, cookie: neteaseUserCookie, timestamp: Date.now() });
+      const response = await neteaseLyric({ id, cookie: getNeteaseCookie(), timestamp: Date.now() });
       const lyrics = response?.body?.lrc?.lyric || response?.body?.tlyric?.lyric || "";
       const fromLyrics = detectLanguageFromLyrics(lyrics);
       if (fromLyrics !== "unknown") return fromLyrics;
@@ -1942,9 +1933,9 @@ async function getNeteasePlayableUrl(id, { level = "", strictLevel = false } = {
   const cached = neteasePlayableUrlCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.url;
 
-  if (neteaseUserCookie || requestedLevel) {
+  if (getNeteaseCookie() || requestedLevel) {
     try {
-      const authorized = await neteaseSongUrlV1({ id: safeId, level: requestedLevel || "exhigh", cookie: neteaseUserCookie, timestamp: Date.now() });
+      const authorized = await neteaseSongUrlV1({ id: safeId, level: requestedLevel || "exhigh", cookie: getNeteaseCookie(), timestamp: Date.now() });
       const authorizedUrl = authorized?.body?.data?.[0]?.url || null;
       if (authorizedUrl) {
         neteasePlayableUrlCache.set(cacheKey, { url: authorizedUrl, expiresAt: Date.now() + neteasePlayableUrlCacheTtl });
@@ -2140,7 +2131,7 @@ async function searchNeteaseLyricsWithRetry(keywords, type) {
         type,
         limit: 12,
         offset: 0,
-        cookie: neteaseUserCookie,
+        cookie: getNeteaseCookie(),
         timestamp: Date.now(),
       });
     } catch (error) {
@@ -2178,7 +2169,7 @@ async function handleNeteaseLyricSongResolution(req, res) {
     }
     const evidence = await Promise.all([...byId.values()].slice(0, 12).map(async (song, index) => {
       try {
-        const response = await neteaseLyric({ id: song.id, cookie: neteaseUserCookie, timestamp: Date.now() });
+        const response = await neteaseLyric({ id: song.id, cookie: getNeteaseCookie(), timestamp: Date.now() });
         const lyricText = response?.body?.lrc?.lyric || response?.body?.tlyric?.lyric || "";
         return { song, index, lyricEvidence: scoreLyricEvidence(lyric, lyricText) };
       } catch {
@@ -2253,7 +2244,7 @@ async function handleNeteaseSongComments(req, res) {
     const id = String(url.searchParams.get("id") || "").trim();
     const limit = Math.max(1, Math.min(12, Number(url.searchParams.get("limit")) || 3));
     if (!id) return sendJson(res, 400, { ok: false, error: "Missing song id" });
-    const response = await neteaseCommentMusic({ id, limit, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+    const response = await neteaseCommentMusic({ id, limit, offset: 0, cookie: getNeteaseCookie(), timestamp: Date.now() });
     const rows = response?.body?.hotComments || response?.body?.comments || [];
     const comments = rows.slice(0, limit).map((item) => ({
       id: String(item?.commentId || ""),
@@ -7183,9 +7174,10 @@ const server = http.createServer(async (req, res) => {
   return serveStatic(req, res);
 });
 
-export function startServer(requestedPort = port) {
+export async function startServer(requestedPort = port) {
+  await neteaseSessionService.initialize();
   if (server.listening) {
-    return Promise.resolve(server.address());
+    return server.address();
   }
 
   return new Promise((resolve, reject) => {
