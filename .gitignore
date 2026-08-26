@@ -15,6 +15,7 @@ tools/moss-tts-service/model/*.pth
 tools/moss-tts-service/outputs/
 *.wav
 server/data/netease-cookie.txt
+server/data/music-memory/
 
 # Yun Telemetry runtime data (append-only event log + aggregator snapshot).
 server/data/yun_telemetry.ndjson
