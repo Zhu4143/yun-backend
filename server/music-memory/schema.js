@@ -19,11 +19,13 @@ function text(value, fallback = '') {
 }
 
 function finiteNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
 }
 
 function timestamp(value) {
+  if (value === null || value === undefined || value === '') return ''
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }
@@ -42,7 +44,7 @@ function cleanMetadata(value, depth = 0) {
   return typeof value === 'number' || typeof value === 'boolean' ? value : null
 }
 
-function normalizeTrack(input = {}) {
+function normalizeTrack(input = {}, { ignoreTopLevelSource = false } = {}) {
   const track = input.track && typeof input.track === 'object' ? input.track : input
   // Top-level `id` belongs to the event/observation itself. Only a nested
   // canonical track may use `id` as its track identifier.
@@ -51,7 +53,7 @@ function normalizeTrack(input = {}) {
   return {
     trackId,
     providerId: text(input.providerId || track.providerId) || null,
-    source: text(input.source || track.source) || null,
+    source: text(track.source || (ignoreTopLevelSource ? '' : input.source)) || null,
     title: text(track.title || track.name) || null,
     artist: text(track.artist) || null,
     album: text(track.album) || null,
@@ -80,16 +82,16 @@ export function normalizeListeningEvent(input = {}) {
 
 export function normalizeMusicObservation(input = {}) {
   const id = text(input.id)
-  const source = text(input.source)
+  const provenance = text(input.provenance || input.observationSource || input.source)
   const observedAt = timestamp(input.observedAt)
-  const track = normalizeTrack(input)
+  const track = normalizeTrack(input, { ignoreTopLevelSource: true })
   const confidence = text(input.confidence, 'medium')
-  if (!id || source !== 'netease_history_sync' || !observedAt || !track || !CONFIDENCE_LEVELS.has(confidence)) return null
+  if (!id || provenance !== 'netease_history_sync' || !observedAt || !track?.source || !CONFIDENCE_LEVELS.has(confidence)) return null
   return {
     kind: 'music_observation',
     id,
-    source,
     ...track,
+    provenance,
     observedAt,
     playCount: finiteNumber(input.playCount, null),
     playCountDelta: finiteNumber(input.playCountDelta, null),

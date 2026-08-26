@@ -2,13 +2,23 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 function parseJsonLines(raw) {
-  return raw.split(/\r?\n/).filter(Boolean).flatMap((line) => {
-    try { return [JSON.parse(line)] } catch { return [] }
+  return raw.split(/\r?\n/).flatMap((line, index) => {
+    if (!line.trim()) return []
+    try { return [JSON.parse(line)] } catch (cause) {
+      const error = new Error(`music_memory_corruption: malformed JSONL at line ${index + 1}`, { cause })
+      error.code = 'music_memory_corruption'
+      throw error
+    }
   })
 }
 
 async function readEvents(filePath) {
-  try { return parseJsonLines(await readFile(filePath, 'utf8')) } catch { return [] }
+  try {
+    return parseJsonLines(await readFile(filePath, 'utf8'))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
 }
 
 export function createMusicMemoryRepository({ dataDir }) {
@@ -19,6 +29,7 @@ export function createMusicMemoryRepository({ dataDir }) {
     musicObservations: path.join(directory, 'music-observations.jsonl'),
   }
   const ids = { listeningEvents: null, musicObservations: null }
+  const queues = { listeningEvents: Promise.resolve(), musicObservations: Promise.resolve() }
 
   async function loadIds(kind) {
     if (ids[kind]) return ids[kind]
@@ -27,12 +38,19 @@ export function createMusicMemoryRepository({ dataDir }) {
   }
 
   async function append(kind, event) {
-    const knownIds = await loadIds(kind)
-    if (knownIds.has(event.id)) return { written: false, duplicate: true, event }
-    await mkdir(directory, { recursive: true })
-    await appendFile(files[kind], `${JSON.stringify(event)}\n`, 'utf8')
-    knownIds.add(event.id)
-    return { written: true, duplicate: false, event }
+    const operation = async () => {
+      const knownIds = await loadIds(kind)
+      if (knownIds.has(event.id)) return { written: false, duplicate: true, event }
+      await mkdir(directory, { recursive: true })
+      await appendFile(files[kind], `${JSON.stringify(event)}\n`, 'utf8')
+      knownIds.add(event.id)
+      return { written: true, duplicate: false, event }
+    }
+    const result = queues[kind].then(operation, operation)
+    // A failed write must not poison the queue; later callers still need a
+    // chance to surface their own filesystem or corruption error.
+    queues[kind] = result.catch(() => {})
+    return result
   }
 
   return {
