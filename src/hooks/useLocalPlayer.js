@@ -3,6 +3,7 @@ import { AudioEngine } from '../player/audio/AudioEngine.js'
 import { createListeningEventReporter } from '../player/listening/ListeningEventReporter.js'
 import { ListeningSessionTracker } from '../player/listening/ListeningSessionTracker.js'
 import { createCrossfadeListeningOwnership } from '../player/listening/CrossfadeListeningOwnership.js'
+import { PauseSuppressionGate } from '../player/listening/PauseSuppressionGate.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
 const PLAYBACK_MODES = ['sequence', 'loop_one', 'shuffle', 'ai_recommend', 'companion_continue']
@@ -155,9 +156,9 @@ export function useLocalPlayer(playlist) {
   const mediaRecoveryRef = useRef({ source: '', attempts: 0, timer: 0 })
   const [listeningTracker] = useState(() => new ListeningSessionTracker({ reporter: createListeningEventReporter(), device: 'web' }))
   const [listeningOwnership] = useState(() => createCrossfadeListeningOwnership({ tracker: listeningTracker }))
+  const [pauseSuppressionGate] = useState(() => new PauseSuppressionGate())
   const listeningTrackerRef = useRef(listeningTracker)
   const listeningOwnershipRef = useRef(listeningOwnership)
-  const suppressedPauseDecksRef = useRef(new WeakMap())
 
   useEffect(() => {
     playlistRef.current = playlist
@@ -560,7 +561,7 @@ export function useLocalPlayer(playlist) {
 
     if (currentId !== nextId) {
       resetSilenceDetection()
-      suppressedPauseDecksRef.current.set(audio, audio.currentSrc || audio.src || '')
+      pauseSuppressionGate.arm(audio)
       audio.pause()
       audio.src = song.fileUrl
       audio.currentTime = 0
@@ -596,7 +597,7 @@ export function useLocalPlayer(playlist) {
         error: error instanceof Error ? error.message : 'play_failed',
       }
     }
-  }, [audioEngine, cancelCrossfade, ensureActiveAudio, getEffectiveVolume, recordActualPlay, resetSilenceDetection, resumeMusicOutput])
+  }, [audioEngine, cancelCrossfade, ensureActiveAudio, getEffectiveVolume, pauseSuppressionGate, recordActualPlay, resetSilenceDetection, resumeMusicOutput])
 
   const crossfadeToSong = useCallback(async (song, options = {}) => {
     if (!song?.fileUrl) {
@@ -700,7 +701,7 @@ export function useLocalPlayer(playlist) {
         }
         crossfadeFrameRef.current = 0
         isCrossfadingRef.current = false
-        suppressedPauseDecksRef.current.set(fromAudio, fromAudio.currentSrc || fromAudio.src || '')
+        pauseSuppressionGate.arm(fromAudio)
         fromAudio.pause()
         fromAudio.currentTime = 0
         fromAudio.volume = 0
@@ -772,7 +773,7 @@ export function useLocalPlayer(playlist) {
 
       crossfadeFrameRef.current = requestAnimationFrame(step)
     })
-  }, [assertStableDeckState, audioEngine, cancelCrossfade, ensureStandbyAudio, getEffectiveVolume, playSongHard, rampPlaybackRate, resetSilenceDetection, resumeMusicOutput])
+  }, [assertStableDeckState, audioEngine, cancelCrossfade, ensureStandbyAudio, getEffectiveVolume, pauseSuppressionGate, playSongHard, rampPlaybackRate, resetSilenceDetection, resumeMusicOutput])
 
   const playSong = useCallback((song, options = {}) => {
     if (!options.fromRadioQueue) queuedNextSongRef.current = null
@@ -1077,14 +1078,9 @@ export function useLocalPlayer(playlist) {
     }
 
     const handlePause = () => {
+      if (pauseSuppressionGate.consume(audio)) return
       if (audio !== audioEngine.getActiveDeck()) {
         return
-      }
-
-      const suppressedSource = suppressedPauseDecksRef.current.get(audio)
-      if (suppressedSource !== undefined) {
-        suppressedPauseDecksRef.current.delete(audio)
-        if (suppressedSource === (audio.currentSrc || audio.src || '')) return
       }
 
       setIsPlaying(false)
@@ -1145,7 +1141,7 @@ export function useLocalPlayer(playlist) {
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)
     }
-  }, [audioEngine, playNext, currentSong, audioVersion, rememberTailSilence, recordActualPause, recordActualPlay, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
+  }, [audioEngine, pauseSuppressionGate, playNext, currentSong, audioVersion, rememberTailSilence, recordActualPause, recordActualPlay, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
 
   useEffect(() => () => {
     cancelCrossfade()

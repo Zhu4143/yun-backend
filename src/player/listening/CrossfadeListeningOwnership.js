@@ -23,10 +23,12 @@ export function createCrossfadeListeningOwnership({ tracker } = {}) {
 
   function commit(transaction, { positionMs, durationMs, metadata } = {}) {
     if (!transaction || pending !== transaction) return null
+    const committed = tracker.commitTransition(transaction.transition, transaction.track, { positionMs, durationMs, metadata })
+    if (!committed) return null
     activeDeck = transaction.toDeck
     activeTrack = transaction.track
     pending = null
-    return tracker.commitTransition(transaction.transition, transaction.track, { positionMs, durationMs, metadata })
+    return committed
   }
 
   function rollback(transaction) {

@@ -40,12 +40,13 @@ export class ListeningSessionTracker {
     this.device = device
     this.session = null
     this.pendingTransition = null
+    this.transitionSequence = 0
     this.lastCompleted = null
   }
 
   prepareTransition({ type = null, reason = 'track_replaced', deferUntilCommit = false } = {}) {
     if (!this.session) return null
-    const transition = { id: `${this.session.sessionId}:transition:${this.session.sequence + 1}`, type, reason, deferUntilCommit }
+    const transition = { id: `${this.session.sessionId}:transition:${++this.transitionSequence}`, type, reason, deferUntilCommit }
     this.pendingTransition = transition
     return transition
   }

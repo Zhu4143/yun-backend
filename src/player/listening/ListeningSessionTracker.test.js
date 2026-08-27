@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ListeningSessionTracker } from './ListeningSessionTracker.js'
 import { createCrossfadeListeningOwnership } from './CrossfadeListeningOwnership.js'
+import { PauseSuppressionGate } from './PauseSuppressionGate.js'
 
 const trackA = { id: 'netease-1', providerId: '1', source: 'netease', title: 'A', artist: 'Artist', durationMs: 100000 }
 const trackB = { id: 'netease-2', providerId: '2', source: 'netease', title: 'B', artist: 'Artist', durationMs: 100000 }
@@ -95,6 +96,76 @@ test('failed crossfades rollback their transition and do not leak a next or natu
   context.tracker.actualPlay(trackB)
   assert.deepEqual(context.events.map((event) => event.type), ['play', 'skip', 'play'])
   assert.equal(context.events[1].metadata.reason, 'track_replaced')
+})
+
+test('transition tokens are unique and a stale rollback or commit cannot replace a newer intent', () => {
+  const context = fixture()
+  context.tracker.actualPlay(trackA, { positionMs: 30000, durationMs: 100000 })
+  const first = context.tracker.prepareTransition({ type: 'next', reason: 'user_next', deferUntilCommit: true })
+  const second = context.tracker.prepareTransition({ type: 'previous', reason: 'user_previous', deferUntilCommit: true })
+  assert.notEqual(first.id, second.id)
+  context.tracker.rollbackTransition(first)
+  assert.equal(context.tracker.commitTransition(first, trackB), null)
+  assert.equal(context.tracker.getCurrentSession().trackId, 'netease-1')
+  assert.ok(context.tracker.commitTransition(second, trackB, { positionMs: 0, durationMs: 100000 }))
+  assert.deepEqual(context.events.map((event) => event.type), ['play', 'previous', 'skip', 'play'])
+  assert.equal(context.events[2].metadata.reason, 'user_previous')
+})
+
+test('ownership commit is atomic: stale handoff keeps A owner while the valid handoff moves both tracker and owner to B', () => {
+  const context = fixture()
+  const ownership = createCrossfadeListeningOwnership({ tracker: context.tracker })
+  const deckA = {}
+  const deckB = {}
+  context.tracker.actualPlay(trackA)
+  ownership.activate(deckA, trackA)
+  const first = context.tracker.prepareTransition({ type: 'next', reason: 'user_next', deferUntilCommit: true })
+  const firstHandoff = ownership.prepare({ fromDeck: deckA, toDeck: deckB, track: trackB, transition: first })
+  const second = context.tracker.prepareTransition({ type: 'previous', reason: 'user_previous', deferUntilCommit: true })
+  const secondHandoff = ownership.prepare({ fromDeck: deckA, toDeck: deckB, track: trackB, transition: second })
+  assert.equal(ownership.commit(firstHandoff, { positionMs: 0, durationMs: 100000 }), null)
+  assert.equal(ownership.getActiveTrack().id, 'netease-1')
+  assert.equal(context.tracker.getCurrentSession().trackId, 'netease-1')
+  assert.ok(ownership.commit(secondHandoff, { positionMs: 0, durationMs: 100000 }))
+  assert.equal(ownership.getActiveTrack().id, 'netease-2')
+  assert.equal(context.tracker.getCurrentSession().trackId, 'netease-2')
+})
+
+test('deck-scoped suppression is consumed for an old crossfade deck and cannot swallow a reused deck user pause', () => {
+  const context = fixture()
+  const gate = new PauseSuppressionGate()
+  const deck1 = { paused: false }
+  const deck2 = { paused: false }
+  context.tracker.actualPlay(trackA)
+  assert.equal(gate.arm(deck1), true)
+  // The old deck can become inactive before its pause callback arrives.
+  deck1.paused = true
+  assert.equal(gate.consume(deck1), true)
+  context.tracker.actualPlay(trackB)
+  context.tracker.actualPlay(trackA)
+  deck1.paused = false
+  assert.equal(gate.consume(deck1), false)
+  context.tracker.actualPause({ positionMs: 1000 })
+  assert.equal(context.events.at(-1).type, 'pause')
+  assert.equal(deck2.paused, false)
+})
+
+test('hard source replacement consumes only its internal pause and does not leave a token when already paused', () => {
+  const context = fixture()
+  const gate = new PauseSuppressionGate()
+  const deck = { paused: false }
+  context.tracker.actualPlay(trackA)
+  assert.equal(gate.arm(deck), true)
+  deck.paused = true
+  assert.equal(gate.consume(deck), true)
+  context.tracker.actualPlay(trackB)
+  deck.paused = false
+  assert.equal(gate.consume(deck), false)
+  context.tracker.actualPause({ positionMs: 5000 })
+  assert.equal(context.events.at(-1).type, 'pause')
+  deck.paused = true
+  assert.equal(gate.arm(deck), false)
+  assert.equal(gate.consume(deck), false)
 })
 
 test('post-commit B pause and resume accrue only B playing intervals', () => {
