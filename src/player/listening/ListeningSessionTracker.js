@@ -57,24 +57,33 @@ export class ListeningSessionTracker {
 
   // A hard source replacement stops media, but is not a user pause and does
   // not prove that its requested target will play.
-  freezeForReplacement(transition, { positionMs = null } = {}) {
+  freezeForReplacement(transition, { positionMs = null, durationMs = null } = {}) {
     if (!transition || this.pendingTransition?.id !== transition.id || !this.session) return false
     const now = this.now()
     this.finishInterval(now)
     this.session.playing = false
     this.session.positionMs = value(positionMs, this.session.positionMs)
+    transition.frozenReplacementEvidence = {
+      positionMs: this.session.positionMs,
+      durationMs: value(durationMs, this.session.track.durationMs),
+      listenDurationMs: this.session.listenDurationMs,
+    }
     return true
   }
 
-  failReplacement(transition, { positionMs = null, durationMs = null } = {}) {
+  failReplacement(transition, { reason = 'replacement_failed' } = {}) {
     if (!transition || this.pendingTransition?.id !== transition.id || !this.session) return false
     const now = this.now()
+    const evidence = transition.frozenReplacementEvidence
     this.finishInterval(now)
-    this.session.positionMs = value(positionMs, this.session.positionMs)
+    if (evidence) {
+      this.session.positionMs = evidence.positionMs
+      this.session.listenDurationMs = evidence.listenDurationMs
+    }
     this.emit('skip', {
       positionMs: this.session.positionMs,
-      durationMs: value(durationMs, this.session.track.durationMs),
-      metadata: this.terminalMetadata('replacement_failed'),
+      durationMs: evidence?.durationMs ?? this.session.track.durationMs,
+      metadata: this.terminalMetadata(reason),
     })
     this.session = null
     this.pendingTransition = null

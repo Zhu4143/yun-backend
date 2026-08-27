@@ -3,7 +3,7 @@ import test from 'node:test'
 import { ListeningSessionTracker } from './ListeningSessionTracker.js'
 import { createCrossfadeListeningOwnership } from './CrossfadeListeningOwnership.js'
 import { PauseSuppressionGate } from './PauseSuppressionGate.js'
-import { HardPlaybackRequestGate } from './HardPlaybackRequestGate.js'
+import { PlaybackRequestGate } from './HardPlaybackRequestGate.js'
 
 const trackA = { id: 'netease-1', providerId: '1', source: 'netease', title: 'A', artist: 'Artist', durationMs: 100000 }
 const trackB = { id: 'netease-2', providerId: '2', source: 'netease', title: 'B', artist: 'Artist', durationMs: 100000 }
@@ -203,19 +203,23 @@ test('previous intent is attached to the old session only after the replacement 
   assert.equal(context.events[1].durationMs, 100000)
 })
 
-test('a failed hard replacement freezes the old playing interval and ends it without a target play', () => {
+test('a failed hard replacement reports frozen old-source evidence, never target media evidence', () => {
   const context = fixture()
   context.tracker.actualPlay(trackA, { positionMs: 0, durationMs: 100000 })
   context.advance(30000)
   const replacement = context.tracker.prepareTransition({ type: 'previous', reason: 'user_previous' })
-  context.tracker.freezeForReplacement(replacement, { positionMs: 30000 })
+  context.tracker.freezeForReplacement(replacement, { positionMs: 30000, durationMs: 100000 })
   assert.equal(context.tracker.getCurrentSession().playing, false)
   context.advance(10 * 60 * 1000)
-  assert.equal(context.tracker.failReplacement(replacement, { positionMs: 30000 }), true)
+  // A failed B would now report 0/240s; that must not affect A's terminal event.
+  assert.equal(context.tracker.failReplacement(replacement), true)
   assert.equal(context.tracker.getCurrentSession(), null)
   assert.deepEqual(context.events.map((event) => event.type), ['play', 'skip'])
   assert.equal(context.events[1].metadata.reason, 'replacement_failed')
   assert.equal(context.events[1].metadata.listenDurationMs, 30000)
+  assert.equal(context.events[1].positionMs, 30000)
+  assert.equal(context.events[1].durationMs, 100000)
+  assert.equal(context.events[1].metadata.completionRatio, 0.3)
   assert.equal(context.events.some((event) => event.trackId === 'netease-2' && event.type === 'play'), false)
 })
 
@@ -234,14 +238,14 @@ test('a stale hard replacement cannot fail or clear the newer exact transition',
 
 test('rapid hard requests commit only the newest exact transition and never play the stale target', () => {
   const context = fixture()
-  const requests = new HardPlaybackRequestGate()
+  const requests = new PlaybackRequestGate()
   context.tracker.actualPlay(trackA, { positionMs: 10000, durationMs: 100000 })
   const firstTransition = context.tracker.prepareTransition({ type: 'previous', reason: 'user_previous' })
-  const firstRequest = requests.begin(trackB)
+  const firstRequest = requests.beginHard(trackB)
   context.tracker.freezeForReplacement(firstTransition, { positionMs: 10000 })
   const trackC = { ...trackB, id: 'netease-3', providerId: '3', title: 'C' }
   const secondTransition = context.tracker.prepareTransition({ type: 'previous', reason: 'user_previous' })
-  const secondRequest = requests.begin(trackC)
+  const secondRequest = requests.beginHard(trackC)
 
   // T1 resolves after T2 started: it has no authority to commit or fail.
   assert.equal(requests.isCurrent(firstRequest, trackB), false)
