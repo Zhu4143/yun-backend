@@ -37,6 +37,7 @@ import { createFileNetEaseHistorySyncStateStore } from "./server/netease/history
 import { createNetEaseListeningHistorySyncService } from "./server/netease/listeningHistorySyncService.js";
 import { createMusicMemoryRepository } from "./server/music-memory/repository.js";
 import { createMusicMemoryService } from "./server/music-memory/service.js";
+import { createListeningEventHandler } from "./server/music-memory/http.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -87,6 +88,7 @@ const yunMemoryPath = path.join(dataDir, "yunMemory.json");
 const yunSettingsPath = path.join(dataDir, "yunSettings.json");
 const listeningProfilePath = path.join(dataDir, "yunListeningProfile.json");
 const musicMemoryService = createMusicMemoryService({ repository: createMusicMemoryRepository({ dataDir }) });
+const handleMusicMemoryListeningEvent = createListeningEventHandler({ musicMemoryService, readJson, sendJson });
 const defaultCoverPath = "/covers/default-cover.jpg";
 const execFileAsync = promisify(execFile);
 const audioExtensions = new Set([".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"]);
@@ -2612,9 +2614,18 @@ async function handleMusicFile(req, res, id) {
   }
 }
 
-async function readJson(req) {
+async function readJson(req, { maxBytes = 1024 * 1024 } = {}) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      const error = new Error("request_body_too_large");
+      error.code = "request_body_too_large";
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }
@@ -7047,6 +7058,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && req.url === "/api/netease/history/sync") {
     return handleNeteaseHistorySync(req, res);
+  }
+  if (req.method === "POST" && req.url === "/api/music-memory/listening-event") {
+    return handleMusicMemoryListeningEvent(req, res);
   }
   if (req.method === "POST" && req.url === "/api/chat") {
     return handleApiChat(req, res);
