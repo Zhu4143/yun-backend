@@ -6,6 +6,7 @@ function randomId() {
 }
 
 function value(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
 }
@@ -40,29 +41,38 @@ export class ListeningSessionTracker {
     this.session = null
     this.pendingTransition = null
     this.lastCompleted = null
-    this.ignoreNextPause = false
   }
 
-  transitionIntent(type, reason = type === 'previous' ? 'user_previous' : 'user_next') {
-    if (!this.session || !['next', 'previous'].includes(type)) return
-    this.pendingTransition = { type, reason }
+  prepareTransition({ type = null, reason = 'track_replaced', deferUntilCommit = false } = {}) {
+    if (!this.session) return null
+    const transition = { id: `${this.session.sessionId}:transition:${this.session.sequence + 1}`, type, reason, deferUntilCommit }
+    this.pendingTransition = transition
+    return transition
   }
 
-  naturalCrossfade() {
-    if (this.session) this.pendingTransition = { type: null, reason: 'natural_end' }
+  rollbackTransition(transition) {
+    if (transition && this.pendingTransition?.id === transition.id) this.pendingTransition = null
   }
 
-  suppressNextPause() {
-    this.ignoreNextPause = true
+  getCurrentSession() {
+    return this.session ? {
+      sessionId: this.session.sessionId,
+      trackId: this.session.track.trackId,
+      positionMs: this.session.positionMs,
+      listenDurationMs: this.session.listenDurationMs,
+      playing: this.session.playing,
+    } : null
   }
 
-  actualPlay(track, { positionMs = 0, durationMs = null, metadata = {} } = {}) {
+  commitTransition(transition, track, options = {}) {
+    if (transition && this.pendingTransition?.id !== transition.id) return null
+    return this.actualPlay(track, { ...options, transition, commitPrepared: true })
+  }
+
+  actualPlay(track, { positionMs = 0, durationMs = null, metadata = {}, transition = null, commitPrepared = false } = {}) {
     const nextKey = trackKey(track)
     if (!nextKey) return null
     const now = this.now()
-    // A synchronous media pause from replacing the prior source may not fire
-    // in every browser; never let that one-shot guard leak into this session.
-    this.ignoreNextPause = false
     if (this.session && this.session.trackKey === nextKey) {
       if (!this.session.playing) {
         this.session.playing = true
@@ -74,24 +84,25 @@ export class ListeningSessionTracker {
     }
 
     const previous = this.session
-    const transition = this.pendingTransition
-    this.pendingTransition = null
+    const prepared = transition || this.pendingTransition
+    if (prepared?.deferUntilCommit && !commitPrepared) return null
+    if (!transition || this.pendingTransition?.id === transition.id) this.pendingTransition = null
     if (previous) {
       this.finishInterval(now)
-      if (transition?.type) this.emit(transition.type, { metadata: { reason: transition.reason } })
-      this.emit(transition?.reason === 'natural_end' ? 'complete' : 'skip', {
+      if (prepared?.type) this.emit(prepared.type, { metadata: { reason: prepared.reason } })
+      this.emit(prepared?.reason === 'natural_end' ? 'complete' : 'skip', {
         positionMs: previous.positionMs,
         durationMs: previous.track.durationMs,
-        metadata: this.terminalMetadata(transition?.reason || 'track_replaced'),
+        metadata: this.terminalMetadata(prepared?.reason || 'track_replaced'),
       })
-      if (transition?.reason === 'natural_end') this.lastCompleted = { sessionId: previous.sessionId, trackKey: previous.trackKey }
+      if (prepared?.reason === 'natural_end') this.lastCompleted = { sessionId: previous.sessionId, trackKey: previous.trackKey }
       this.session = null
     }
 
     this.session = {
       sessionId: `listening-${this.idFactory()}`,
       sequence: 0,
-      track: canonicalTrack({ ...track, durationMs: durationMs ?? track.durationMs }),
+      track: canonicalTrack({ ...track, durationMs: value(durationMs, track.durationMs) }),
       trackKey: nextKey,
       positionMs: value(positionMs, 0),
       playing: true,
@@ -107,10 +118,6 @@ export class ListeningSessionTracker {
   }
 
   actualPause({ positionMs = null, durationMs = null } = {}) {
-    if (this.ignoreNextPause) {
-      this.ignoreNextPause = false
-      return
-    }
     if (!this.session || !this.session.playing) return
     const now = this.now()
     this.finishInterval(now)
