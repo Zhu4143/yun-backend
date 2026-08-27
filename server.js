@@ -30,7 +30,8 @@ import { createRequirementDiscovery } from "./server/discovery/index.js";
 import { createFeedbackLoop } from "./server/discovery/feedbackLoop.js";
 import { createListeningProfile, importNeteaseHistory, recordListeningEvent, scoreSongForListeningProfile, summarizeListeningProfile } from "./server/listeningProfile.js";
 import { createCowAgentCommandQueue, extractCowAgentCommand } from "./server/cowagentBridge.js";
-import { createNetEaseAccountSessionService } from "./server/netease/accountSessionService.js";
+import { createNetEaseAccountSessionService, createNetEaseAccountSessionValidator } from "./server/netease/accountSessionService.js";
+import { toNeteaseLoginInfo } from "./server/netease/accountSessionCompatibility.js";
 import { createFileNetEaseSessionStore, normalizeNeteaseSessionCookie } from "./server/netease/sessionStore.js";
 import {
   createNeteaseCapabilityService,
@@ -192,25 +193,7 @@ const neteaseSearchCacheTtl = 1000 * 60 * 5;
 const neteaseLanguageCache = new Map();
 const neteaseSessionService = createNetEaseAccountSessionService({
   store: createFileNetEaseSessionStore({ filePath: path.join(dataDir, "netease-cookie.txt") }),
-  validate: async ({ cookie }) => {
-    const response = await neteaseLoginStatus({ cookie, timestamp: Date.now() });
-    const body = response?.body || {};
-    const data = body.data || body;
-    const profile = data.profile || body.profile;
-    if (profile?.userId) {
-      return {
-        status: "logged_in",
-        user: {
-          userId: profile.userId,
-          nickname: profile.nickname || "网易云用户",
-          avatar: profile.avatarUrl || "",
-          vipType: Number(profile.vipType || 0),
-        },
-      };
-    }
-    const providerCode = Number(body.code || response?.code || 0);
-    return { status: providerCode === 301 ? "expired" : "invalid" };
-  },
+  validate: createNetEaseAccountSessionValidator({ loginStatus: neteaseLoginStatus }),
 });
 
 function getNeteaseCookie() {
@@ -762,7 +745,7 @@ async function handleMusicImport(req, res) {
 }
 
 async function getNeteaseLoginInfo() {
-  return neteaseSessionService.validateSession();
+  return toNeteaseLoginInfo(await neteaseSessionService.validateSession());
 }
 
 const neteaseCapabilityService = createNeteaseCapabilityService({

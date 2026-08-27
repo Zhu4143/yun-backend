@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -17,13 +18,13 @@ export function normalizeNeteaseSessionCookie(input) {
   return Array.from(cookies, ([name, value]) => `${name}=${value}`).join('; ')
 }
 
-export function createFileNetEaseSessionStore({ filePath }) {
+export function createFileNetEaseSessionStore({ filePath, fs = { mkdir, readFile, rename, unlink, writeFile } }) {
   if (!filePath) throw new Error('netease_session_file_path_required')
 
   return {
     async get() {
       try {
-        const cookie = normalizeNeteaseSessionCookie(await readFile(filePath, 'utf8'))
+        const cookie = normalizeNeteaseSessionCookie(await fs.readFile(filePath, 'utf8'))
         return cookie ? { cookie } : null
       } catch (error) {
         if (error?.code === 'ENOENT') return null
@@ -33,13 +34,18 @@ export function createFileNetEaseSessionStore({ filePath }) {
     async set(session) {
       const cookie = normalizeNeteaseSessionCookie(session?.cookie)
       if (!cookie) throw new Error('netease_session_cookie_required')
-      await mkdir(path.dirname(filePath), { recursive: true })
-      const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-      await writeFile(temporaryPath, cookie, 'utf8')
-      await rename(temporaryPath, filePath)
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      const temporaryPath = `${filePath}.${randomUUID()}.tmp`
+      try {
+        await fs.writeFile(temporaryPath, cookie, { encoding: 'utf8', mode: 0o600 })
+        await fs.rename(temporaryPath, filePath)
+      } catch (error) {
+        try { await fs.unlink(temporaryPath) } catch { /* Preserve the original write or rename error. */ }
+        throw error
+      }
     },
     async clear() {
-      try { await unlink(filePath) } catch (error) {
+      try { await fs.unlink(filePath) } catch (error) {
         if (error?.code !== 'ENOENT') throw error
       }
     },

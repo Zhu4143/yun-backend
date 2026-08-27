@@ -23,7 +23,37 @@ function normalizedValidation(result = {}) {
 }
 
 function isNetworkFailure(error) {
-  return error?.code === 'network_error' || /network|timeout|socket|fetch|econn|enotfound/i.test(String(error?.message || ''))
+  const providerStatus = Number(error?.status ?? error?.statusCode ?? error?.code)
+  return error?.code === 'network_error'
+    || (Number.isFinite(providerStatus) && providerStatus >= 500)
+    || /network|timeout|socket|fetch|econn|enotfound/i.test(String(error?.message || ''))
+}
+
+export function createNetEaseAccountSessionValidator({ loginStatus } = {}) {
+  if (typeof loginStatus !== 'function') throw new Error('netease_login_status_required')
+
+  return async ({ cookie }) => {
+    const response = await loginStatus({ cookie, timestamp: Date.now() })
+    const body = response?.body || {}
+    const data = body.data || body
+    const profile = data.profile || body.profile
+    if (profile?.userId) {
+      return {
+        status: 'logged_in',
+        user: {
+          userId: profile.userId,
+          nickname: profile.nickname || '网易云用户',
+          avatar: profile.avatarUrl || '',
+          vipType: Number(profile.vipType || 0),
+        },
+      }
+    }
+    const providerCode = Number(body.code || response?.code || response?.status || 0)
+    if (providerCode === 301) return { status: 'expired' }
+    if (providerCode === 401 || providerCode === 403) return { status: 'invalid' }
+    if (providerCode >= 500) return { status: 'network_error' }
+    return { status: 'invalid' }
+  }
 }
 
 export function createNetEaseAccountSessionService({ store, validate = async () => ({ status: 'invalid' }) } = {}) {
