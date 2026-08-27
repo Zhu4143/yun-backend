@@ -55,6 +55,32 @@ export class ListeningSessionTracker {
     if (transition && this.pendingTransition?.id === transition.id) this.pendingTransition = null
   }
 
+  // A hard source replacement stops media, but is not a user pause and does
+  // not prove that its requested target will play.
+  freezeForReplacement(transition, { positionMs = null } = {}) {
+    if (!transition || this.pendingTransition?.id !== transition.id || !this.session) return false
+    const now = this.now()
+    this.finishInterval(now)
+    this.session.playing = false
+    this.session.positionMs = value(positionMs, this.session.positionMs)
+    return true
+  }
+
+  failReplacement(transition, { positionMs = null, durationMs = null } = {}) {
+    if (!transition || this.pendingTransition?.id !== transition.id || !this.session) return false
+    const now = this.now()
+    this.finishInterval(now)
+    this.session.positionMs = value(positionMs, this.session.positionMs)
+    this.emit('skip', {
+      positionMs: this.session.positionMs,
+      durationMs: value(durationMs, this.session.track.durationMs),
+      metadata: this.terminalMetadata('replacement_failed'),
+    })
+    this.session = null
+    this.pendingTransition = null
+    return true
+  }
+
   getCurrentSession() {
     return this.session ? {
       sessionId: this.session.sessionId,

@@ -4,6 +4,7 @@ import { createListeningEventReporter } from '../player/listening/ListeningEvent
 import { ListeningSessionTracker } from '../player/listening/ListeningSessionTracker.js'
 import { createCrossfadeListeningOwnership } from '../player/listening/CrossfadeListeningOwnership.js'
 import { PauseSuppressionGate } from '../player/listening/PauseSuppressionGate.js'
+import { HardPlaybackRequestGate } from '../player/listening/HardPlaybackRequestGate.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
 const PLAYBACK_MODES = ['sequence', 'loop_one', 'shuffle', 'ai_recommend', 'companion_continue']
@@ -157,6 +158,7 @@ export function useLocalPlayer(playlist) {
   const [listeningTracker] = useState(() => new ListeningSessionTracker({ reporter: createListeningEventReporter(), device: 'web' }))
   const [listeningOwnership] = useState(() => createCrossfadeListeningOwnership({ tracker: listeningTracker }))
   const [pauseSuppressionGate] = useState(() => new PauseSuppressionGate())
+  const [hardPlaybackRequestGate] = useState(() => new HardPlaybackRequestGate())
   const listeningTrackerRef = useRef(listeningTracker)
   const listeningOwnershipRef = useRef(listeningOwnership)
 
@@ -174,14 +176,15 @@ export function useLocalPlayer(playlist) {
   }, [])
 
   const recordActualPlay = useCallback((song, audio, options = {}) => {
-    if (!song || !audio) return
-    listeningTrackerRef.current.actualPlay(song, {
+    if (!song || !audio) return null
+    const sessionId = listeningTrackerRef.current.actualPlay(song, {
       positionMs: Math.round((audio.currentTime || 0) * 1000),
       durationMs: Math.round(getSafeDuration(audio) * 1000) || null,
       metadata: { playbackMode: playbackModeRef.current },
       ...options,
     })
-    listeningOwnershipRef.current.activate(audio, song)
+    if (sessionId) listeningOwnershipRef.current.activate(audio, song)
+    return sessionId
   }, [])
 
   const recordActualPause = useCallback((audio) => {
@@ -536,9 +539,23 @@ export function useLocalPlayer(playlist) {
       return { ok: false, error: 'missing_file_url' }
     }
 
+    const request = hardPlaybackRequestGate.begin(song)
+    const superseded = () => {
+      listeningTrackerRef.current.rollbackTransition(options.listeningTransition)
+      return { ok: false, song, error: 'play_superseded' }
+    }
     cancelCrossfade()
     const audio = ensureActiveAudio()
-    const outputReady = await resumeMusicOutput(audio)
+    let outputReady
+    try {
+      outputReady = await resumeMusicOutput(audio)
+    } catch (error) {
+      if (!hardPlaybackRequestGate.isCurrent(request, song)) return superseded()
+      listeningTrackerRef.current.rollbackTransition(options.listeningTransition)
+      hardPlaybackRequestGate.clear(request)
+      return { ok: false, song, error: error instanceof Error ? error.message : 'play_failed' }
+    }
+    if (!hardPlaybackRequestGate.isCurrent(request, song)) return superseded()
     const standbyAudio = audioEngine.getStandbyDeck()
     if (standbyAudio) {
       standbyAudio.pause()
@@ -563,6 +580,9 @@ export function useLocalPlayer(playlist) {
       resetSilenceDetection()
       pauseSuppressionGate.arm(audio)
       audio.pause()
+      listeningTrackerRef.current.freezeForReplacement(transition, {
+        positionMs: Math.round((audio.currentTime || 0) * 1000),
+      })
       audio.src = song.fileUrl
       audio.currentTime = 0
       audio.volume = getEffectiveVolume()
@@ -582,14 +602,33 @@ export function useLocalPlayer(playlist) {
         audio.load()
       }
       await audio.play()
+      if (!hardPlaybackRequestGate.isCurrent(request, song) || audioEngine.getActiveDeck() !== audio || !sameSong(requestedSongRef.current, song)) return superseded()
       // Some Chromium builds defer AudioContext activation until after the
       // media element begins. Retry once here before declaring success.
       if (!outputReady) await resumeMusicOutput(audio)
-      recordActualPlay(song, audio, transition?.deferUntilCommit ? { transition, commitPrepared: true } : {})
+      if (!hardPlaybackRequestGate.isCurrent(request, song) || audioEngine.getActiveDeck() !== audio || !sameSong(requestedSongRef.current, song)) return superseded()
+      const evidence = {
+        positionMs: Math.round((audio.currentTime || 0) * 1000),
+        durationMs: Math.round(getSafeDuration(audio) * 1000) || null,
+        metadata: { playbackMode: playbackModeRef.current },
+      }
+      const sessionId = transition
+        ? listeningTrackerRef.current.commitTransition(transition, song, evidence)
+        : recordActualPlay(song, audio)
+      if (!sessionId) return superseded()
+      if (transition) listeningOwnershipRef.current.activate(audio, song)
+      hardPlaybackRequestGate.clear(request)
       setIsPlaying(true)
       return { ok: true, song }
     } catch (error) {
-      listeningTrackerRef.current.rollbackTransition(transition)
+      if (!hardPlaybackRequestGate.isCurrent(request, song)) return superseded()
+      if (transition) {
+        listeningTrackerRef.current.failReplacement(transition, {
+          positionMs: Math.round((audio.currentTime || 0) * 1000),
+          durationMs: Math.round(getSafeDuration(audio) * 1000) || null,
+        })
+      }
+      hardPlaybackRequestGate.clear(request)
       setIsPlaying(false)
       return {
         ok: false,
@@ -597,7 +636,7 @@ export function useLocalPlayer(playlist) {
         error: error instanceof Error ? error.message : 'play_failed',
       }
     }
-  }, [audioEngine, cancelCrossfade, ensureActiveAudio, getEffectiveVolume, pauseSuppressionGate, recordActualPlay, resetSilenceDetection, resumeMusicOutput])
+  }, [audioEngine, cancelCrossfade, ensureActiveAudio, getEffectiveVolume, hardPlaybackRequestGate, pauseSuppressionGate, recordActualPlay, resetSilenceDetection, resumeMusicOutput])
 
   const crossfadeToSong = useCallback(async (song, options = {}) => {
     if (!song?.fileUrl) {
@@ -1073,6 +1112,11 @@ export function useLocalPlayer(playlist) {
         return
       }
 
+      // The hard-play call commits the exact transition after its promise and
+      // target guards settle. Do not let the media event consume a pending
+      // transition before then.
+      if (hardPlaybackRequestGate.hasCurrent()) return
+
       setIsPlaying(true)
       recordActualPlay(currentSongRef.current, audio)
     }
@@ -1141,7 +1185,7 @@ export function useLocalPlayer(playlist) {
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)
     }
-  }, [audioEngine, pauseSuppressionGate, playNext, currentSong, audioVersion, rememberTailSilence, recordActualPause, recordActualPlay, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
+  }, [audioEngine, hardPlaybackRequestGate, pauseSuppressionGate, playNext, currentSong, audioVersion, rememberTailSilence, recordActualPause, recordActualPlay, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
 
   useEffect(() => () => {
     cancelCrossfade()
