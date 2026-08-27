@@ -5,6 +5,11 @@ import { ListeningSessionTracker } from '../player/listening/ListeningSessionTra
 import { createCrossfadeListeningOwnership } from '../player/listening/CrossfadeListeningOwnership.js'
 import { PauseSuppressionGate } from '../player/listening/PauseSuppressionGate.js'
 import { PlaybackRequestGate } from '../player/listening/HardPlaybackRequestGate.js'
+import {
+  beginFreshCrossfadeRequest,
+  cancelCrossfadeRequest,
+  finalizeCrossfadeRequest,
+} from '../player/listening/CrossfadeRequestLifecycle.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
 const PLAYBACK_MODES = ['sequence', 'loop_one', 'shuffle', 'ai_recommend', 'companion_continue']
@@ -313,8 +318,11 @@ export function useLocalPlayer(playlist) {
   }, [cancelTempoRamp])
 
   const finalizePlaybackRequest = useCallback((request) => {
-    playbackRequestGate.clear(request)
-    if (crossfadePlaybackRequestRef.current === request) crossfadePlaybackRequestRef.current = null
+    finalizeCrossfadeRequest({
+      request,
+      playbackRequestGate,
+      requestRef: crossfadePlaybackRequestRef,
+    })
   }, [playbackRequestGate])
 
   const cancelCrossfade = useCallback(({ pauseActive = false } = {}) => {
@@ -332,7 +340,6 @@ export function useLocalPlayer(playlist) {
     }
 
     const transaction = crossfadeTransactionRef.current
-    const cancelledRequest = transaction?.playbackRequest || crossfadePlaybackRequestRef.current
     if (transaction) {
       const { fromAudio, toAudio, song, resolve, listeningHandoff } = transaction
       const promoteTarget = sameSong(currentSongRef.current, song) && !toAudio.paused
@@ -361,10 +368,14 @@ export function useLocalPlayer(playlist) {
       }
     }
 
-    finalizePlaybackRequest(cancelledRequest)
-    isCrossfadingRef.current = false
+    cancelCrossfadeRequest({
+      transaction,
+      playbackRequestGate,
+      requestRef: crossfadePlaybackRequestRef,
+      isCrossfadingRef,
+    })
     assertStableDeckState('cancel')
-  }, [assertStableDeckState, audioEngine, cancelTempoRamp, finalizePlaybackRequest, getEffectiveVolume])
+  }, [assertStableDeckState, audioEngine, cancelTempoRamp, getEffectiveVolume, playbackRequestGate])
 
   const setVolume = useCallback((nextVolume) => {
     const safeVolume = clampVolume(nextVolume)
@@ -659,9 +670,12 @@ export function useLocalPlayer(playlist) {
       return { ok: false, error: 'missing_file_url' }
     }
 
-    const playbackRequest = playbackRequestGate.beginCrossfade(song)
-    crossfadePlaybackRequestRef.current = playbackRequest
-    cancelCrossfade()
+    const playbackRequest = beginFreshCrossfadeRequest({
+      song,
+      cancelOldCrossfade: cancelCrossfade,
+      playbackRequestGate,
+      requestRef: crossfadePlaybackRequestRef,
+    })
     const fromAudio = audioEngine.getActiveDeck()
     const previousSong = currentSongRef.current
 
