@@ -59,22 +59,27 @@ export class ListeningSessionTracker {
   // not prove that its requested target will play.
   freezeForReplacement(transition, { positionMs = null, durationMs = null } = {}) {
     if (!transition || this.pendingTransition?.id !== transition.id || !this.session) return false
+    if (this.session.frozenReplacementEvidence) {
+      transition.frozenReplacementEvidence = this.session.frozenReplacementEvidence
+      return true
+    }
     const now = this.now()
     this.finishInterval(now)
     this.session.playing = false
     this.session.positionMs = value(positionMs, this.session.positionMs)
-    transition.frozenReplacementEvidence = {
+    this.session.frozenReplacementEvidence = {
       positionMs: this.session.positionMs,
       durationMs: value(durationMs, this.session.track.durationMs),
       listenDurationMs: this.session.listenDurationMs,
     }
+    transition.frozenReplacementEvidence = this.session.frozenReplacementEvidence
     return true
   }
 
   failReplacement(transition, { reason = 'replacement_failed' } = {}) {
     if (!transition || this.pendingTransition?.id !== transition.id || !this.session) return false
     const now = this.now()
-    const evidence = transition.frozenReplacementEvidence
+    const evidence = transition.frozenReplacementEvidence || this.session.frozenReplacementEvidence
     this.finishInterval(now)
     if (evidence) {
       this.session.positionMs = evidence.positionMs
@@ -124,11 +129,16 @@ export class ListeningSessionTracker {
     if (prepared?.deferUntilCommit && !commitPrepared) return null
     if (!transition || this.pendingTransition?.id === transition.id) this.pendingTransition = null
     if (previous) {
+      const frozenEvidence = previous.frozenReplacementEvidence || prepared?.frozenReplacementEvidence
+      if (frozenEvidence) {
+        previous.positionMs = frozenEvidence.positionMs
+        previous.listenDurationMs = frozenEvidence.listenDurationMs
+      }
       this.finishInterval(now)
       if (prepared?.type) this.emit(prepared.type, { metadata: { reason: prepared.reason } })
       this.emit(prepared?.reason === 'natural_end' ? 'complete' : 'skip', {
         positionMs: previous.positionMs,
-        durationMs: previous.track.durationMs,
+        durationMs: frozenEvidence?.durationMs ?? previous.track.durationMs,
         metadata: this.terminalMetadata(prepared?.reason || 'track_replaced'),
       })
       if (prepared?.reason === 'natural_end') this.lastCompleted = { sessionId: previous.sessionId, trackKey: previous.trackKey }
@@ -163,11 +173,13 @@ export class ListeningSessionTracker {
   }
 
   position(positionMs) {
+    if (this.session?.frozenReplacementEvidence) return
     if (this.session) this.session.positionMs = value(positionMs, this.session.positionMs)
   }
 
   seek(fromMs, toMs, durationMs = null) {
     if (!this.session) return
+    if (this.session.frozenReplacementEvidence) return
     const from = value(fromMs, this.session.positionMs)
     const to = value(toMs, from)
     if (Math.abs(to - from) < SEEK_THRESHOLD_MS) return this.position(to)
