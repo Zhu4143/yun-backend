@@ -95,7 +95,7 @@ function observationsForTransition({ accountId, previousHistory, currentHistory,
         playCountDelta: null,
         confidence: 'medium',
         observedAt,
-        metadata: { scope: 'all', newlyObserved: true },
+        metadata: { accountId, scope: 'all', newlyObserved: true },
       })
       continue
     }
@@ -107,7 +107,7 @@ function observationsForTransition({ accountId, previousHistory, currentHistory,
         playCountDelta: currentCount - previousCount,
         confidence: 'high',
         observedAt,
-        metadata: { scope: 'all', previousPlayCount: previousCount },
+        metadata: { accountId, scope: 'all', previousPlayCount: previousCount },
       })
     }
   }
@@ -126,9 +126,7 @@ function observationsForTransition({ accountId, previousHistory, currentHistory,
       playCountDelta: null,
       confidence: 'high',
       observedAt,
-      firstObservedAt: item.providerPlayedAt,
-      lastObservedAt: item.providerPlayedAt,
-      metadata: { scope: 'recent', providerPlayedAt: item.providerPlayedAt },
+      metadata: { accountId, scope: 'recent', providerPlayedAt: item.providerPlayedAt },
     })
   }
   return observations
@@ -140,15 +138,21 @@ export function createNetEaseListeningHistorySyncService({ sessionService, capab
   if (!musicMemoryService || typeof musicMemoryService.persistMusicObservation !== 'function') throw new Error('music_memory_service_required')
   if (!stateStore || typeof stateStore.get !== 'function' || typeof stateStore.set !== 'function') throw new Error('netease_history_sync_state_store_required')
 
-  async function activeAccount() {
-    const status = await sessionService.validateSession()
-    const accountId = accountIdFrom(status)
-    return { status, accountId }
+  function currentRevision() {
+    return typeof sessionService.getRevision === 'function' ? sessionService.getRevision() : null
   }
 
-  async function stillSameAccount(accountId) {
+  async function activeAccount() {
+    const revisionBeforeValidation = currentRevision()
+    const status = await sessionService.validateSession()
+    const revision = currentRevision()
+    const accountId = accountIdFrom(status)
+    return { status, accountId, revision, changedDuringValidation: revisionBeforeValidation !== null && revisionBeforeValidation !== revision }
+  }
+
+  async function stillSameAccount(accountId, revision) {
     const current = await activeAccount()
-    return current.accountId === accountId ? current : null
+    return !current.changedDuringValidation && current.accountId === accountId && current.revision === revision ? current : null
   }
 
   async function fetchHistory() {
@@ -160,9 +164,9 @@ export function createNetEaseListeningHistorySyncService({ sessionService, capab
     return normalizeNetEaseHistory({ recent, week, all })
   }
 
-  async function sync() {
+  async function runSync() {
     const started = await activeAccount()
-    if (!started.accountId) return { synced: false, reason: started.status?.status || 'not_logged_in' }
+    if (!started.accountId || started.changedDuringValidation) return { synced: false, reason: started.changedDuringValidation ? 'account_changed' : (started.status?.status || 'not_logged_in') }
 
     let history
     try {
@@ -171,11 +175,11 @@ export function createNetEaseListeningHistorySyncService({ sessionService, capab
       return { synced: false, reason: error?.code === 'network_error' ? 'network_error' : 'history_unavailable' }
     }
 
-    if (!(await stillSameAccount(started.accountId))) return { synced: false, reason: 'account_changed' }
+    if (!(await stillSameAccount(started.accountId, started.revision))) return { synced: false, reason: 'account_changed' }
     const snapshot = await stateStore.get()
     const observedAt = now().toISOString()
     if (!snapshot || snapshot.accountId !== started.accountId) {
-      if (!(await stillSameAccount(started.accountId))) return { synced: false, reason: 'account_changed' }
+      if (!(await stillSameAccount(started.accountId, started.revision))) return { synced: false, reason: 'account_changed' }
       const baseline = safeSnapshot({ accountId: started.accountId, history, attemptedAt: observedAt, successfulAt: observedAt })
       await stateStore.set(baseline)
       return { synced: true, baselineEstablished: true, observationsWritten: 0, lastSuccessfulSyncAt: observedAt }
@@ -184,14 +188,22 @@ export function createNetEaseListeningHistorySyncService({ sessionService, capab
     const observations = observationsForTransition({ accountId: started.accountId, previousHistory: snapshot.history, currentHistory: history, observedAt })
     let observationsWritten = 0
     for (const observation of observations) {
-      if (!(await stillSameAccount(started.accountId))) return { synced: false, reason: 'account_changed' }
+      if (!(await stillSameAccount(started.accountId, started.revision))) return { synced: false, reason: 'account_changed' }
       const result = await musicMemoryService.persistMusicObservation({ ...observation, provenance: OBSERVATION_PROVENANCE })
       if (result.written) observationsWritten += 1
     }
-    if (!(await stillSameAccount(started.accountId))) return { synced: false, reason: 'account_changed' }
+    if (!(await stillSameAccount(started.accountId, started.revision))) return { synced: false, reason: 'account_changed' }
     const nextSnapshot = safeSnapshot({ accountId: started.accountId, history, attemptedAt: observedAt, successfulAt: observedAt })
     await stateStore.set(nextSnapshot)
     return { synced: true, baselineEstablished: false, observationsWritten, lastSuccessfulSyncAt: observedAt }
+  }
+
+  let syncQueue = Promise.resolve()
+
+  function sync() {
+    const operation = syncQueue.then(runSync, runSync)
+    syncQueue = operation.catch(() => {})
+    return operation
   }
 
   return { sync, fetchHistory, normalizeHistory: normalizeNetEaseHistory }

@@ -81,6 +81,22 @@ test('the same service works with a memory store', async () => {
   assert.deepEqual(await store.get(), { cookie: FAKE_COOKIE })
 })
 
+test('session revision advances only after a successful session identity change', async () => {
+  const store = createMemoryNetEaseSessionStore()
+  const service = createNetEaseAccountSessionService({ store })
+  assert.equal(service.getRevision(), 0)
+  await service.setSession({ cookie: FAKE_COOKIE })
+  assert.equal(service.getRevision(), 1)
+  await service.setSession({ cookie: FAKE_COOKIE })
+  assert.equal(service.getRevision(), 1)
+  await service.setSession({ cookie: 'MUSIC_U=another-fake-session' })
+  assert.equal(service.getRevision(), 2)
+  await service.clearSession()
+  assert.equal(service.getRevision(), 3)
+  await service.clearSession()
+  assert.equal(service.getRevision(), 3)
+})
+
 test('FileNetEaseSessionStore removes a credential temp file when rename fails', async () => {
   const files = new Map()
   const removed = []

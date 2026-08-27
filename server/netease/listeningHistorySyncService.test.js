@@ -24,13 +24,15 @@ function history({ recent = [], week = {}, all = {} } = {}) {
   }
 }
 
-async function createContext({ stateStore = createMemoryNetEaseHistorySyncStateStore(), currentHistory = history(), accountId = '42' } = {}) {
+async function createContext({ stateStore = createMemoryNetEaseHistorySyncStateStore(), currentHistory = history(), accountId = '42', nowMs: initialNowMs = Date.parse('2026-08-27T00:00:00.000Z') } = {}) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'yun-netease-history-sync-'))
   const repository = createMusicMemoryRepository({ dataDir })
   let account = accountId
   let status = 'logged_in'
+  let revision = 0
   let failure = null
   let onFetch = null
+  let fetchHistorySequence = []
   const calls = []
   const sessionService = {
     async validateSession() {
@@ -38,12 +40,19 @@ async function createContext({ stateStore = createMemoryNetEaseHistorySyncStateS
         ? { loggedIn: true, status, user: { userId: account } }
         : { loggedIn: false, status }
     },
+    getRevision() { return revision },
   }
   const capabilityService = {
-    async recent() { calls.push('recent'); if (failure) throw failure; await onFetch?.(); return currentHistory.recent },
+    async recent() {
+      calls.push('recent')
+      if (fetchHistorySequence.length) currentHistory = fetchHistorySequence.shift()
+      if (failure) throw failure
+      await onFetch?.()
+      return currentHistory.recent
+    },
     async userRecord({ type }) { calls.push(`userRecord:${type}`); if (failure) throw failure; return type === 'all' ? currentHistory.all : currentHistory.week },
   }
-  let nowMs = Date.parse('2026-08-27T00:00:00.000Z')
+  let nowMs = initialNowMs
   const service = createNetEaseListeningHistorySyncService({
     sessionService,
     capabilityService,
@@ -54,10 +63,12 @@ async function createContext({ stateStore = createMemoryNetEaseHistorySyncStateS
   return {
     dataDir, repository, stateStore, service, calls,
     setHistory(next) { currentHistory = next },
-    setAccount(next) { account = String(next) },
+    setAccount(next) { account = String(next); revision += 1 },
     setStatus(next) { status = next },
+    setRevision(next) { revision = Number(next) },
     setFailure(next) { failure = next },
     setOnFetch(next) { onFetch = next },
+    setFetchHistorySequence(next) { fetchHistorySequence = [...next] },
     advanceTime() { nowMs += 1000 },
   }
 }
@@ -137,6 +148,19 @@ test('an account change during fetch aborts before observations or a snapshot ar
   } finally { await rm(context.dataDir, { recursive: true, force: true }) }
 })
 
+test('a session revision change during fetch aborts before observation or snapshot persistence', async () => {
+  const context = await createContext({ currentHistory: history({ all: { A: 12 } }) })
+  try {
+    await context.service.sync()
+    const baseline = await context.stateStore.get()
+    context.setHistory(history({ all: { A: 15 } }))
+    context.setOnFetch(async () => context.setRevision(1))
+    assert.deepEqual(await context.service.sync(), { synced: false, reason: 'account_changed' })
+    assert.deepEqual(await context.stateStore.get(), baseline)
+    assert.deepEqual(await context.repository.listMusicObservations(), [])
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})
+
 test('network, not_logged_in, expired and invalid outcomes do not overwrite a successful snapshot', async () => {
   const context = await createContext({ currentHistory: history({ all: { A: 12 } }) })
   try {
@@ -178,8 +202,77 @@ test('a newly observed top-list song is conservative and history serialization c
     assert.equal(newlyObserved.playCount, 4)
     assert.equal(newlyObserved.playCountDelta, null)
     assert.equal(newlyObserved.confidence, 'medium')
-    assert.equal(observations.some((item) => item.metadata.scope === 'recent' && item.firstObservedAt), true)
+    assert.equal(observations.some((item) => item.metadata.scope === 'recent' && item.metadata.providerPlayedAt), true)
     assert.doesNotMatch(JSON.stringify({ snapshot: await context.stateStore.get(), observations }), /MUSIC_U|cookie|token/i)
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})
+
+test('providerPlayedAt stays provider evidence and never becomes an observation timestamp', async () => {
+  const syncTime = Date.parse('2026-08-28T18:00:00.000Z')
+  const providerPlayedAt = Date.parse('2026-08-27T01:00:00.000Z')
+  const context = await createContext({ currentHistory: history({ all: { A: 12 } }), nowMs: syncTime })
+  try {
+    await context.service.sync()
+    context.setHistory(history({ all: { A: 12 }, recent: [{ id: 'A', playedAt: providerPlayedAt }] }))
+    await context.service.sync()
+    const observation = (await context.repository.listMusicObservations()).find((item) => item.metadata.scope === 'recent')
+    assert.equal(observation.observedAt, '2026-08-28T18:00:00.000Z')
+    assert.equal(observation.metadata.providerPlayedAt, '2026-08-27T01:00:00.000Z')
+    assert.notEqual(observation.observedAt, observation.metadata.providerPlayedAt)
+    assert.equal(observation.firstObservedAt, null)
+    assert.equal(observation.lastObservedAt, null)
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})
+
+test('observations retain non-sensitive account provenance across account changes', async () => {
+  const context = await createContext({ currentHistory: history({ all: { A: 12 } }) })
+  try {
+    await context.service.sync()
+    context.setHistory(history({ all: { A: 15 } }))
+    await context.service.sync()
+    assert.equal((await context.repository.listMusicObservations())[0].metadata.accountId, '42')
+    context.setAccount('99')
+    context.setHistory(history({ all: { B: 4 } }))
+    await context.service.sync()
+    context.setHistory(history({ all: { B: 5 } }))
+    await context.service.sync()
+    const observations = await context.repository.listMusicObservations()
+    assert.equal(observations.find((item) => item.providerId === 'B').metadata.accountId, '99')
+    assert.doesNotMatch(JSON.stringify(observations), /MUSIC_U|cookie|token/i)
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})
+
+test('concurrent sync calls serialize complete transitions without snapshot rollback or overlapping deltas', async () => {
+  const context = await createContext({ currentHistory: history({ all: { A: 12 } }) })
+  try {
+    await context.service.sync()
+    context.setFetchHistorySequence([
+      history({ all: { A: 15 } }),
+      history({ all: { A: 16 } }),
+    ])
+    const [first, second] = await Promise.all([context.service.sync(), context.service.sync()])
+    assert.equal(first.observationsWritten, 1)
+    assert.equal(second.observationsWritten, 1)
+    assert.equal((await context.stateStore.get()).history.all.A.playCount, 16)
+    const deltas = (await context.repository.listMusicObservations()).map((item) => ({ playCount: item.playCount, playCountDelta: item.playCountDelta, previous: item.metadata.previousPlayCount }))
+    assert.deepEqual(deltas, [
+      { playCount: 15, playCountDelta: 3, previous: 12 },
+      { playCount: 16, playCountDelta: 1, previous: 15 },
+    ])
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})
+
+test('a failed sync does not poison the serialized sync queue', async () => {
+  const context = await createContext({ currentHistory: history({ all: { A: 12 } }) })
+  try {
+    await context.service.sync()
+    const networkError = new Error('socket timeout'); networkError.code = 'network_error'
+    context.setFailure(networkError)
+    assert.deepEqual(await context.service.sync(), { synced: false, reason: 'network_error' })
+    context.setFailure(null)
+    context.setHistory(history({ all: { A: 15 } }))
+    assert.equal((await context.service.sync()).observationsWritten, 1)
+    assert.equal((await context.stateStore.get()).history.all.A.playCount, 15)
   } finally { await rm(context.dataDir, { recursive: true, force: true }) }
 })
 

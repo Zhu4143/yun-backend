@@ -65,6 +65,7 @@ export function createNetEaseAccountSessionService({ store, validate = async () 
   let status = 'not_logged_in'
   let user = null
   let initialized = false
+  let revision = 0
 
   async function initialize() {
     if (initialized) return
@@ -84,6 +85,7 @@ export function createNetEaseAccountSessionService({ store, validate = async () 
     const cookie = normalizeNeteaseSessionCookie(nextSession?.cookie)
     if (!cookie) throw new Error('netease_session_cookie_required')
     await store.set({ cookie })
+    if (session?.cookie !== cookie) revision += 1
     session = { cookie }
     status = 'logging_in'
     user = null
@@ -93,6 +95,7 @@ export function createNetEaseAccountSessionService({ store, validate = async () 
   async function clearSession() {
     await initialize()
     await store.clear()
+    if (session) revision += 1
     session = null
     status = 'not_logged_in'
     user = null
@@ -121,5 +124,9 @@ export function createNetEaseAccountSessionService({ store, validate = async () 
     return publicStatus(status, user)
   }
 
-  return { initialize, getStatus, getSession, setSession, clearSession, validateSession }
+  function getRevision() {
+    return revision
+  }
+
+  return { initialize, getStatus, getSession, getRevision, setSession, clearSession, validateSession }
 }
