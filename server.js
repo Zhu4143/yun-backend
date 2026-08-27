@@ -33,6 +33,10 @@ import { createCowAgentCommandQueue, extractCowAgentCommand } from "./server/cow
 import { createNetEaseAccountSessionService, createNetEaseAccountSessionValidator } from "./server/netease/accountSessionService.js";
 import { toNeteaseLoginInfo } from "./server/netease/accountSessionCompatibility.js";
 import { createFileNetEaseSessionStore, normalizeNeteaseSessionCookie } from "./server/netease/sessionStore.js";
+import { createFileNetEaseHistorySyncStateStore } from "./server/netease/historySyncStateStore.js";
+import { createNetEaseListeningHistorySyncService } from "./server/netease/listeningHistorySyncService.js";
+import { createMusicMemoryRepository } from "./server/music-memory/repository.js";
+import { createMusicMemoryService } from "./server/music-memory/service.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -82,6 +86,7 @@ const manualMusicTagsPath = path.join(dataDir, "manualMusicTags.json");
 const yunMemoryPath = path.join(dataDir, "yunMemory.json");
 const yunSettingsPath = path.join(dataDir, "yunSettings.json");
 const listeningProfilePath = path.join(dataDir, "yunListeningProfile.json");
+const musicMemoryService = createMusicMemoryService({ repository: createMusicMemoryRepository({ dataDir }) });
 const defaultCoverPath = "/covers/default-cover.jpg";
 const execFileAsync = promisify(execFile);
 const audioExtensions = new Set([".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"]);
@@ -753,6 +758,22 @@ const neteaseCapabilityService = createNeteaseCapabilityService({
   getCookie: getNeteaseCookie,
   getLoginInfo: getNeteaseLoginInfo,
 });
+
+const neteaseListeningHistorySyncService = createNetEaseListeningHistorySyncService({
+  sessionService: neteaseSessionService,
+  capabilityService: neteaseCapabilityService,
+  musicMemoryService,
+  stateStore: createFileNetEaseHistorySyncStateStore({ filePath: path.join(dataDir, "netease-history-sync-state.json") }),
+});
+
+async function handleNeteaseHistorySync(req, res) {
+  try {
+    const result = await neteaseListeningHistorySyncService.sync();
+    return sendJson(res, 200, { ok: true, ...result });
+  } catch {
+    return sendJson(res, 500, { ok: false, error: "网易云历史同步失败" });
+  }
+}
 
 const neteaseCapabilityReadRoutes = Object.freeze({
   "/api/netease/recommend/daily-songs": "dailySongs",
@@ -7023,6 +7044,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && req.url === "/api/netease/logout") {
     return handleNeteaseLogout(req, res);
+  }
+  if (req.method === "POST" && req.url === "/api/netease/history/sync") {
+    return handleNeteaseHistorySync(req, res);
   }
   if (req.method === "POST" && req.url === "/api/chat") {
     return handleApiChat(req, res);

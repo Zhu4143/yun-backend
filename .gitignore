@@ -16,6 +16,8 @@ tools/moss-tts-service/outputs/
 *.wav
 server/data/netease-cookie.txt
 server/data/netease-cookie.txt.*.tmp
+server/data/netease-history-sync-state.json
+server/data/netease-history-sync-state.json.*.tmp
 server/data/music-memory/
 
 # Yun Telemetry runtime data (append-only event log + aggregator snapshot).
