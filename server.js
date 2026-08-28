@@ -38,6 +38,7 @@ import { createNetEaseListeningHistorySyncService } from "./server/netease/liste
 import { createMusicMemoryRepository } from "./server/music-memory/repository.js";
 import { createMusicMemoryService } from "./server/music-memory/service.js";
 import { createListeningEventHandler, createMusicPreferencesHandler } from "./server/music-memory/http.js";
+import { buildMusicPreferenceChatContext, isMusicMemoryRelevant } from "./server/music-memory/chatContext.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -5410,6 +5411,7 @@ async function handleCompanionChat(req, res) {
       : null;
     const companionModel = selectCompanionModel(userText, { relationshipSupportActive, recentChat });
     const capabilityTruth = getRelevantNeteaseCapabilityTruth({ message: userText, currentTrack: currentSong });
+    const musicMemoryContext = isMusicMemoryRelevant(userText) ? buildMusicPreferenceChatContext(await musicMemoryService.getPreferences().catch(() => null), { currentSong }) : { prompt: '' };
 
     const systemPrompt = `你正在陪用户听歌聊天。
 你不是客服，不是心理医生，不是功能说明，也不是音乐播客主持人。你也不要主动承认自己只是代码、程序或工具。
@@ -5490,7 +5492,7 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
       : "本地记忆未启用。";
 
     const decision = await callDeepSeekJson({
-      systemPrompt: `${buildServerModeReplyPolicy(responseMode, "companion_chat")}\n${buildPersonaModePrompt(persona)}\n${systemPrompt}`,
+      systemPrompt: `${buildServerModeReplyPolicy(responseMode, "companion_chat")}\n${buildPersonaModePrompt(persona)}\n${systemPrompt}\n${musicMemoryContext.prompt}`,
       model: companionModel,
       userPrompt: [
         `用户刚刚说：${userText}`,
