@@ -39,6 +39,7 @@ import { createMusicMemoryRepository } from "./server/music-memory/repository.js
 import { createMusicMemoryService } from "./server/music-memory/service.js";
 import { createListeningEventHandler, createMusicPreferencesHandler } from "./server/music-memory/http.js";
 import { buildMusicPreferenceChatContext, isMusicMemoryRelevant } from "./server/music-memory/chatContext.js";
+import { applyOrdinaryCompanionMemoryWrites, prepareCompanionMemoryWrites } from "./server/music-memory/writeIsolation.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -4729,15 +4730,6 @@ async function updateYunMemoryIfNeeded(userMessage, aiReply) {
   return updateYunMemory(userMessage, aiReply);
 }
 
-export function explicitMusicPreferenceStatement(text = '') {
-  return /(?:我|以后).{0,8}(?:喜欢|不喜欢|讨厌|最喜欢)|记住.{0,12}(?:喜欢|讨厌)|以后别放/.test(String(text));
-}
-
-export function isolateInferredMusicUpdates(updates, { musicMemoryAvailable, userText }) {
-  if (!musicMemoryAvailable || explicitMusicPreferenceStatement(userText)) return updates;
-  return (Array.isArray(updates) ? updates : []).filter((update) => String(update?.category || '') !== 'music_taste');
-}
-
 async function applyYunMemoryUpdates(updates = []) {
   const list = Array.isArray(updates) ? updates : [];
   if (!list.length) return [];
@@ -5558,13 +5550,13 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
       const finalReply = persona === "zhudongyu"
         ? rawToolReply
         : shapeYunIdentityReply(userText, rawToolReply);
-      const isolatedUpdates = isolateInferredMusicUpdates(toolReplyDecision.memoryUpdates || decision.memoryUpdates || [], { musicMemoryAvailable: musicMemoryContext.available, userText });
+      const memoryWritePlan = prepareCompanionMemoryWrites(toolReplyDecision.memoryUpdates || decision.memoryUpdates || [], { musicMemoryAvailable: musicMemoryContext.available, userText });
       const memoryUpdates = effectiveMemoryMode !== "off"
-        ? await applyYunMemoryUpdates(isolatedUpdates)
+        ? await applyYunMemoryUpdates(memoryWritePlan.updates)
         : [];
 
       if (effectiveMemoryMode !== "off" && userText && finalReply) {
-        if (!(musicMemoryContext.available && !explicitMusicPreferenceStatement(userText))) updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
+        if (memoryWritePlan.allowBackgroundUpdate) updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
           console.error("[yun-memory] companion background update failed:", error);
         });
         await recordWechatConversationMemory({
@@ -5639,9 +5631,14 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
     const animation = animationForYunEmotion(emotion, decision.animation);
     decision.emotion = emotion;
     decision.animation = animation;
-    const memoryUpdates = effectiveMemoryMode !== "off"
-      ? await applyYunMemoryUpdates(decision.memoryUpdates || [])
-      : [];
+    const memoryWritePlan = effectiveMemoryMode !== "off"
+      ? await applyOrdinaryCompanionMemoryWrites(
+        decision.memoryUpdates || [],
+        { musicMemoryAvailable: musicMemoryContext.available, userText },
+        applyYunMemoryUpdates,
+      )
+      : prepareCompanionMemoryWrites(decision.memoryUpdates || [], { musicMemoryAvailable: musicMemoryContext.available, userText });
+    const memoryUpdates = memoryWritePlan.appliedUpdates || [];
 
     let recommendations = [];
     if ((decision.shouldSuggestSong || ["suggest_song", "next_song"].includes(musicAction)) && songs.length) {
@@ -5676,7 +5673,7 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
     });
     if (refreshedReply) finalReply = refreshedReply;
     if (effectiveMemoryMode !== "off" && userText && finalReply) {
-      updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
+      if (memoryWritePlan.allowBackgroundUpdate) updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
         console.error("[yun-memory] companion background update failed:", error);
       });
       await recordWechatConversationMemory({
