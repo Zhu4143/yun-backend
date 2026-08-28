@@ -109,3 +109,26 @@ test('does not serialize credentials from metadata', async () => {
     assert.doesNotMatch(raw, /MUSIC_U|secret-token|apiToken/)
   } finally { await rm(context.dataDir, { recursive: true, force: true }) }
 })
+
+test('corrupt or obsolete derived snapshots rebuild from intact raw evidence', async () => {
+  const context = await makeService(); context.service = createMusicMemoryService({ repository: context.repository, now: () => new Date('2026-09-15T00:00:00.000Z') })
+  try {
+    await context.service.persistListeningEvent({ id: 'raw-a', type: 'play', trackId: 'A', timestamp: '2026-08-01T00:00:00.000Z' })
+    const raw = await readFile(context.repository.paths.listeningEvents, 'utf8')
+    await writeFile(context.repository.paths.preferenceSnapshot, '{broken', 'utf8')
+    assert.equal((await context.service.getPreferences()).tracks.A.directListening.playCount, 1)
+    assert.equal(await readFile(context.repository.paths.listeningEvents, 'utf8'), raw)
+    await context.repository.writePreferenceSnapshot({ version: 'music-preferences/old-version' })
+    assert.equal((await context.service.getPreferences()).version, 'music-preferences/v1')
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})
+
+test('raw corruption is never recovered as a derived snapshot issue and concurrent persists leave a complete snapshot', async () => {
+  const context = await makeService(); context.service = createMusicMemoryService({ repository: context.repository })
+  try {
+    await Promise.all(['A', 'B'].map((trackId) => context.service.persistListeningEvent({ id: `event-${trackId}`, type: 'play', trackId, timestamp: '2026-08-01T00:00:00.000Z' })))
+    assert.deepEqual(Object.keys((await context.service.getPreferences()).tracks), ['A', 'B'])
+    await writeFile(context.repository.paths.listeningEvents, '{broken\n', 'utf8')
+    await assert.rejects(context.service.rebuildPreferences(), { code: 'music_memory_corruption' })
+  } finally { await rm(context.dataDir, { recursive: true, force: true }) }
+})

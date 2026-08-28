@@ -44,7 +44,7 @@ function numeric(value) { return Math.round(value * 1000000) / 1000000 }
 export function buildMusicPreferenceSnapshot({ listeningEvents = [], musicObservations = [], generatedAt, asOfAt } = {}) {
   const safeGeneratedAt = new Date(generatedAt).toISOString()
   const evidenceTimes = [...listeningEvents.map((event) => event.timestamp), ...musicObservations.map((event) => event.metadata?.providerPlayedAt || event.observedAt)].filter((value) => time(value) !== null).sort()
-  const safeAsOfAt = new Date(asOfAt || evidenceTimes.at(-1) || safeGeneratedAt).toISOString()
+  const safeAsOfAt = asOfAt || evidenceTimes.at(-1) || null
   const tracks = new Map()
   const get = (evidence) => {
     const key = trackKey(evidence)

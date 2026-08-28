@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildMusicPreferenceSnapshot } from './preferenceAggregator.js'
+import { ListeningSessionTracker } from '../../src/player/listening/ListeningSessionTracker.js'
 
 const now = '2026-08-28T00:00:00.000Z'
 const track = (id, artist = 'Artist') => ({ trackId: id, providerId: id, source: 'netease', title: id, artist })
@@ -48,3 +49,15 @@ test('recent affinity decays while long-term affinity retains older behavior', (
   const old = '2025-08-28T00:00:00.000Z'; const snapshot = aggregate([event('old', 'play', 'A', old), event('new', 'play', 'B', now)], [])
   assert.ok(snapshot.tracks.B.derived.recentAffinity > snapshot.tracks.A.derived.recentAffinity); assert.equal(snapshot.tracks.A.derived.longTermAffinity, snapshot.tracks.B.derived.longTermAffinity)
 })
+test('real ListeningSessionTracker next plus terminal skip is one navigation and one skip tendency', () => {
+  const events = []; const tracker = new ListeningSessionTracker({ reporter: { report: (value) => events.push(value) }, now: () => new Date(now), idFactory: () => 'session' })
+  tracker.actualPlay({ id: 'A', source: 'netease', title: 'A', artist: 'Artist' }); tracker.prepareTransition({ type: 'next', reason: 'user_next' }); tracker.actualPlay({ id: 'B', source: 'netease', title: 'B', artist: 'Artist' })
+  const snapshot = aggregate(events, []); const a = snapshot.tracks.A
+  assert.deepEqual(events.map((value) => value.type), ['play', 'next', 'skip', 'play']); assert.equal(a.directListening.nextCount, 1); assert.equal(a.directListening.skipCount, 1); assert.equal(a.derived.skipRate, 1); assert.equal(a.derived.recentAffinity, -1.4)
+})
+test('real ListeningSessionTracker previous plus terminal skip is not double counted', () => {
+  const events = []; const tracker = new ListeningSessionTracker({ reporter: { report: (value) => events.push(value) }, now: () => new Date(now), idFactory: () => 'session' })
+  tracker.actualPlay({ id: 'A', source: 'netease', title: 'A', artist: 'Artist' }); tracker.prepareTransition({ type: 'previous', reason: 'user_previous' }); tracker.actualPlay({ id: 'B', source: 'netease', title: 'B', artist: 'Artist' })
+  const a = aggregate(events, []).tracks.A; assert.equal(a.directListening.previousCount, 1); assert.equal(a.directListening.skipCount, 1); assert.equal(a.derived.skipRate, 1)
+})
+test('empty evidence has no invented asOfAt frontier', () => { assert.equal(aggregate([], []).asOfAt, null) })
