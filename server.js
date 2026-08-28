@@ -40,6 +40,7 @@ import { createMusicMemoryService } from "./server/music-memory/service.js";
 import { createListeningEventHandler, createMusicPreferencesHandler } from "./server/music-memory/http.js";
 import { buildMusicPreferenceChatContext, isMusicMemoryRelevant } from "./server/music-memory/chatContext.js";
 import { applyOrdinaryCompanionMemoryWrites, prepareCompanionMemoryWrites } from "./server/music-memory/writeIsolation.js";
+import { buildMusicRecommendationMemoryContext } from "./server/music-memory/recommendationContext.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -3953,6 +3954,13 @@ async function handleSmartMusicCommand(req, res) {
 
     const catalog = buildSmartMusicCatalog(songs, message);
     const recentChat = (Array.isArray(chatHistory) ? chatHistory : []).slice(-6);
+    const smartMemoryMode = (await loadYunSettings()).memoryMode;
+    const smartYunMemory = smartMemoryMode !== "off" ? await readYunMemory() : null;
+    const recommendationMemoryContext = buildMusicRecommendationMemoryContext({
+      userText: message,
+      musicPreferences: smartYunMemory?.userProfile?.musicPreferences || [],
+      recentChat,
+    });
     const systemPrompt = `你是音乐陪伴助手的意图理解与决策层。你负责理解用户是否想控制、搜索或推荐音乐；最终执行器会先查本地曲库，找不到合适候选时再使用网易云搜索。
 你必须只输出严格 JSON，不要 Markdown。
 每条消息都要先判断是否应执行命令。这是概率判断，不依赖某个固定触发词：结合语义、上下文、当前歌曲和用户习惯估计 intent 与 confidence。只有当“用户希望播放器现在行动”的概率足够高（通常 >=0.82）时才 should_execute=true；只是聊情绪、提到歌词、评价歌曲或表达感受时应为 false。
@@ -3990,6 +3998,7 @@ async function handleSmartMusicCommand(req, res) {
         `当前人格：${persona}`,
         `当前播放歌曲：${currentSong ? JSON.stringify(currentSong).slice(0, 800) : "无"}`,
         `最近聊天：${JSON.stringify(recentChat).slice(0, 1600)}`,
+        recommendationMemoryContext.prompt,
         `本地曲库摘要（优先候选；无合适匹配时会自动转网易云搜索，不要因此拒绝请求）：${JSON.stringify(catalog).slice(0, 9000)}`,
       ].join("\n"),
       maxTokens: 700,
@@ -4252,6 +4261,12 @@ async function handleMoodRecommend(req, res) {
       .slice(-5)
       .map(item => item.content);
     const memoryContext = await resolveYunMemoryForPrompt(userText);
+    const moodYunMemory = memoryContext.memoryMode !== "off" ? await readYunMemory() : null;
+    const recommendationMemoryContext = buildMusicRecommendationMemoryContext({
+      userText,
+      musicPreferences: moodYunMemory?.userProfile?.musicPreferences || [],
+      recentChat,
+    });
 
     const systemPrompt = `你是昀的情绪分析模块，只分析用户当前状态，不推荐具体歌名。
 必须只输出严格 JSON，不要 Markdown。
@@ -4287,6 +4302,7 @@ companionReply 要像昀本人说话，短、自然，不要像 AI 助手。不�
         memoryContext.relevantMemory
           ? `以下是你关于用户东宇的长期记忆，请自然使用，不要生硬复述：\n${memoryContext.relevantMemory}`
           : "",
+        recommendationMemoryContext.prompt,
         `如果用户明确说“放一首”“你来选”“帮我推荐”“换一首适合现在的”“我不知道听什么”等，shouldAutoPlay=true。`,
       ].filter(Boolean).join("\n"),
       maxTokens: 900,
@@ -5403,6 +5419,11 @@ async function handleCompanionChat(req, res) {
     const yunMemoryContext = effectiveMemoryMode !== "off"
       ? summarizeYunMemoryForPrompt(yunMemory, userText, currentSong, responseMode)
       : "长期记忆未启用。";
+    const recommendationMemoryContext = buildMusicRecommendationMemoryContext({
+      userText,
+      musicPreferences: effectiveMemoryMode !== "off" ? yunMemory.userProfile?.musicPreferences || [] : [],
+      recentChat,
+    });
     const relevantYunMemory = memoryContextInfo.relevantMemory;
     const currentLyricsUnderstanding = currentSong
       ? await ensureLyricsUnderstandingForSong(currentSong).catch(error => {
@@ -5508,6 +5529,7 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
         `最近 5 条 AI 回复，避免重复：${JSON.stringify(recentAiReplies).slice(0, 1200)}`,
         `本地长期记忆与近期记忆：${memoryContext}`,
         `昀的长期记忆检索结果：${yunMemoryContext}`,
+        recommendationMemoryContext.prompt,
         relevantYunMemory
           ? `以下是你关于用户东宇的长期记忆，请自然使用，不要生硬复述：\n${relevantYunMemory}`
           : "",
