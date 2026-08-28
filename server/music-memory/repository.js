@@ -29,6 +29,7 @@ export function createMusicMemoryRepository({ dataDir }) {
     listeningEvents: path.join(directory, 'listening-events.jsonl'),
     musicObservations: path.join(directory, 'music-observations.jsonl'),
     preferenceSnapshot: path.join(directory, 'music-preference-snapshot.json'),
+    longTermSummary: path.join(directory, 'music-long-term-summary.json'),
   }
   const ids = { listeningEvents: null, musicObservations: null }
   const queues = { listeningEvents: Promise.resolve(), musicObservations: Promise.resolve() }
@@ -72,6 +73,19 @@ export function createMusicMemoryRepository({ dataDir }) {
       await writeFile(temporary, JSON.stringify(snapshot, null, 2), 'utf8')
       await rename(temporary, files.preferenceSnapshot)
       return snapshot
+    },
+    async readLongTermSummary() {
+      try { return JSON.parse(await readFile(files.longTermSummary, 'utf8')) } catch (error) {
+        if (error?.code === 'ENOENT') return null
+        const corruption = new Error('music_long_term_summary_corruption', { cause: error }); corruption.code = 'music_long_term_summary_corruption'; throw corruption
+      }
+    },
+    async writeLongTermSummary(summary) {
+      await mkdir(directory, { recursive: true })
+      const temporary = `${files.longTermSummary}.${randomUUID()}.tmp`
+      await writeFile(temporary, JSON.stringify(summary, null, 2), 'utf8')
+      await rename(temporary, files.longTermSummary)
+      return summary
     },
     paths: Object.freeze({ ...files }),
   }
