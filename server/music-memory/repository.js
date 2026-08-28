@@ -1,4 +1,5 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 function parseJsonLines(raw) {
@@ -67,7 +68,7 @@ export function createMusicMemoryRepository({ dataDir }) {
     },
     async writePreferenceSnapshot(snapshot) {
       await mkdir(directory, { recursive: true })
-      const temporary = `${files.preferenceSnapshot}.${process.pid}.${Date.now()}.tmp`
+      const temporary = `${files.preferenceSnapshot}.${randomUUID()}.tmp`
       await writeFile(temporary, JSON.stringify(snapshot, null, 2), 'utf8')
       await rename(temporary, files.preferenceSnapshot)
       return snapshot

@@ -25,13 +25,13 @@ function newTrack(evidence) {
   return {
     trackId: trackKey(evidence), providerId: evidence.providerId || null, source: evidence.source || null,
     title: evidence.title || null, artist: evidence.artist || null, album: evidence.album || null,
-    directListening: { playCount: 0, skipCount: 0, completeCount: 0, repeatCount: 0, pauseCount: 0, seekCount: 0, totalListenDurationMs: 0, lastDirectPlayedAt: null },
+    directListening: { playCount: 0, skipCount: 0, nextCount: 0, previousCount: 0, completeCount: 0, repeatCount: 0, pauseCount: 0, seekCount: 0, totalListenDurationMs: 0, lastDirectPlayedAt: null },
     providerObservation: { observedCount: 0, providerReportedCount: null, lastProviderPlayedAt: null, lastObservedAt: null, provenance: [] },
   }
 }
 
 function directWeight(type) {
-  return ({ play: 1, resume: 0.6, complete: 1.8, repeat: 1.6, skip: -2.4, next: -1.2, previous: -1.2, pause: 0, seek: 0 })[type] || 0
+  return ({ play: 1, resume: 0.6, complete: 1.8, repeat: 1.6, skip: -2.4, next: 0, previous: 0, pause: 0, seek: 0 })[type] || 0
 }
 
 function decay(at, generatedAt) {
@@ -41,8 +41,10 @@ function decay(at, generatedAt) {
 
 function numeric(value) { return Math.round(value * 1000000) / 1000000 }
 
-export function buildMusicPreferenceSnapshot({ listeningEvents = [], musicObservations = [], generatedAt }) {
+export function buildMusicPreferenceSnapshot({ listeningEvents = [], musicObservations = [], generatedAt, asOfAt } = {}) {
   const safeGeneratedAt = new Date(generatedAt).toISOString()
+  const evidenceTimes = [...listeningEvents.map((event) => event.timestamp), ...musicObservations.map((event) => event.metadata?.providerPlayedAt || event.observedAt)].filter((value) => time(value) !== null).sort()
+  const safeAsOfAt = new Date(asOfAt || evidenceTimes.at(-1) || safeGeneratedAt).toISOString()
   const tracks = new Map()
   const get = (evidence) => {
     const key = trackKey(evidence)
@@ -58,7 +60,11 @@ export function buildMusicPreferenceSnapshot({ listeningEvents = [], musicObserv
     if (!aggregate) continue
     const listening = aggregate.directListening
     if (event.type === 'play') { listening.playCount += 1; listening.lastDirectPlayedAt = later(listening.lastDirectPlayedAt, event.timestamp) }
-    if (event.type === 'skip' || event.type === 'next' || event.type === 'previous') listening.skipCount += 1
+    // `next`/`previous` are intent records emitted before the terminal skip.
+    // Only the terminal outcome counts as one skip tendency.
+    if (event.type === 'skip') listening.skipCount += 1
+    if (event.type === 'next') listening.nextCount += 1
+    if (event.type === 'previous') listening.previousCount += 1
     if (event.type === 'complete') listening.completeCount += 1
     if (event.type === 'repeat') listening.repeatCount += 1
     if (event.type === 'pause') listening.pauseCount += 1
@@ -84,8 +90,8 @@ export function buildMusicPreferenceSnapshot({ listeningEvents = [], musicObserv
     const p = aggregate.providerObservation
     const directScore = d.playCount + d.completeCount * 1.8 + d.repeatCount * 1.6 - d.skipCount * 2.4
     const providerScore = p.observedCount * 0.35 + Math.log1p(p.providerReportedCount || 0) * 0.18
-    const recentDirect = direct.reduce((score, event) => trackKey(event) === key ? score + directWeight(event.type) * decay(event.timestamp, safeGeneratedAt) : score, 0)
-    const recentProvider = provider.reduce((score, event) => trackKey(event) === key ? score + 0.35 * decay(event.metadata?.providerPlayedAt || event.observedAt, safeGeneratedAt) : score, 0)
+    const recentDirect = direct.reduce((score, event) => trackKey(event) === key ? score + directWeight(event.type) * decay(event.timestamp, safeAsOfAt) : score, 0)
+    const recentProvider = provider.reduce((score, event) => trackKey(event) === key ? score + 0.35 * decay(event.metadata?.providerPlayedAt || event.observedAt, safeAsOfAt) : score, 0)
     const derived = {
       completionRate: d.playCount ? numeric(d.completeCount / d.playCount) : null,
       skipRate: d.playCount ? numeric(d.skipCount / d.playCount) : null,
@@ -104,7 +110,7 @@ export function buildMusicPreferenceSnapshot({ listeningEvents = [], musicObserv
   }))
   const artists = Object.fromEntries([...artistMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, { ...value, recentAffinity: numeric(value.recentAffinity), longTermAffinity: numeric(value.longTermAffinity) }]))
   return {
-    version: MUSIC_PREFERENCE_SNAPSHOT_VERSION, generatedAt: safeGeneratedAt, tracks: orderedTracks, artists,
+    version: MUSIC_PREFERENCE_SNAPSHOT_VERSION, generatedAt: safeGeneratedAt, asOfAt: safeAsOfAt, tracks: orderedTracks, artists,
     recent: { windowDays: 30, directWeight: 1, providerWeight: 0.35 },
     longTerm: { directBehaviorWeight: 1, providerExposureWeight: 0.35 },
     evidenceSummary: { directEvidenceCount: direct.length, providerEvidenceCount: provider.length, confidenceBreakdown: { high: direct.length, medium: provider.length }, direct: { count: direct.length, lastAt: direct.reduce((value, event) => later(value, event.timestamp), null) }, provider: { count: provider.length, lastAt: provider.reduce((value, event) => later(value, event.observedAt), null), provenance: [...new Set(provider.map((event) => event.provenance))].sort() } },
