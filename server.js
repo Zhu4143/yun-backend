@@ -4729,6 +4729,15 @@ async function updateYunMemoryIfNeeded(userMessage, aiReply) {
   return updateYunMemory(userMessage, aiReply);
 }
 
+export function explicitMusicPreferenceStatement(text = '') {
+  return /(?:我|以后).{0,8}(?:喜欢|不喜欢|讨厌|最喜欢)|记住.{0,12}(?:喜欢|讨厌)|以后别放/.test(String(text));
+}
+
+export function isolateInferredMusicUpdates(updates, { musicMemoryAvailable, userText }) {
+  if (!musicMemoryAvailable || explicitMusicPreferenceStatement(userText)) return updates;
+  return (Array.isArray(updates) ? updates : []).filter((update) => String(update?.category || '') !== 'music_taste');
+}
+
 async function applyYunMemoryUpdates(updates = []) {
   const list = Array.isArray(updates) ? updates : [];
   if (!list.length) return [];
@@ -5549,12 +5558,13 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
       const finalReply = persona === "zhudongyu"
         ? rawToolReply
         : shapeYunIdentityReply(userText, rawToolReply);
+      const isolatedUpdates = isolateInferredMusicUpdates(toolReplyDecision.memoryUpdates || decision.memoryUpdates || [], { musicMemoryAvailable: musicMemoryContext.available, userText });
       const memoryUpdates = effectiveMemoryMode !== "off"
-        ? await applyYunMemoryUpdates(toolReplyDecision.memoryUpdates || decision.memoryUpdates || [])
+        ? await applyYunMemoryUpdates(isolatedUpdates)
         : [];
 
       if (effectiveMemoryMode !== "off" && userText && finalReply) {
-        updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
+        if (!(musicMemoryContext.available && !explicitMusicPreferenceStatement(userText))) updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
           console.error("[yun-memory] companion background update failed:", error);
         });
         await recordWechatConversationMemory({
