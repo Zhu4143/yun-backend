@@ -19,4 +19,13 @@ export function createListeningEventHandler({ musicMemoryService, readJson, send
   }
 }
 
+export function createMusicPreferencesHandler({ musicMemoryService, sendJson } = {}) {
+  if (!musicMemoryService?.getPreferences) throw new Error('music_memory_preferences_service_required')
+  if (typeof sendJson !== 'function') throw new Error('music_memory_send_json_required')
+  return async function handleMusicPreferences(_req, res) {
+    try { return sendJson(res, 200, { ok: true, snapshot: await musicMemoryService.getPreferences() }) }
+    catch { return sendJson(res, 500, { ok: false, snapshot: null }) }
+  }
+}
+
 export { MAX_LISTENING_EVENT_BYTES }

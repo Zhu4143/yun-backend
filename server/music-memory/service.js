@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { normalizeListeningEvent, normalizeMusicObservation } from './schema.js'
+import { buildMusicPreferenceSnapshot } from './preferenceAggregator.js'
 
 export function createMusicMemoryService({ repository, now = () => new Date(), idFactory = randomUUID } = {}) {
   if (!repository) throw new Error('music_memory_repository_required')
@@ -11,7 +12,9 @@ export function createMusicMemoryService({ repository, now = () => new Date(), i
       timestamp: input.timestamp || now().toISOString(),
     })
     if (!event) return { written: false, invalid: true }
-    return repository.appendListeningEvent(event)
+    const result = await repository.appendListeningEvent(event)
+    if (result.written) await rebuildPreferences()
+    return result
   }
 
   async function persistMusicObservation(input = {}) {
@@ -21,8 +24,16 @@ export function createMusicMemoryService({ repository, now = () => new Date(), i
       observedAt: input.observedAt || now().toISOString(),
     })
     if (!observation) return { written: false, invalid: true }
-    return repository.appendMusicObservation(observation)
+    const result = await repository.appendMusicObservation(observation)
+    if (result.written) await rebuildPreferences()
+    return result
   }
 
-  return { persistListeningEvent, persistMusicObservation }
+  async function rebuildPreferences() {
+    const snapshot = buildMusicPreferenceSnapshot({ listeningEvents: await repository.listListeningEvents(), musicObservations: await repository.listMusicObservations(), generatedAt: now().toISOString() })
+    return repository.writePreferenceSnapshot(snapshot)
+  }
+  async function getPreferences() { return (await repository.readPreferenceSnapshot()) || rebuildPreferences() }
+
+  return { persistListeningEvent, persistMusicObservation, rebuildPreferences, getPreferences }
 }

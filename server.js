@@ -37,7 +37,7 @@ import { createFileNetEaseHistorySyncStateStore } from "./server/netease/history
 import { createNetEaseListeningHistorySyncService } from "./server/netease/listeningHistorySyncService.js";
 import { createMusicMemoryRepository } from "./server/music-memory/repository.js";
 import { createMusicMemoryService } from "./server/music-memory/service.js";
-import { createListeningEventHandler } from "./server/music-memory/http.js";
+import { createListeningEventHandler, createMusicPreferencesHandler } from "./server/music-memory/http.js";
 import {
   createNeteaseCapabilityService,
   NETEASE_STREAM_LEVELS,
@@ -89,6 +89,7 @@ const yunSettingsPath = path.join(dataDir, "yunSettings.json");
 const listeningProfilePath = path.join(dataDir, "yunListeningProfile.json");
 const musicMemoryService = createMusicMemoryService({ repository: createMusicMemoryRepository({ dataDir }) });
 const handleMusicMemoryListeningEvent = createListeningEventHandler({ musicMemoryService, readJson, sendJson });
+const handleMusicMemoryPreferences = createMusicPreferencesHandler({ musicMemoryService, sendJson });
 const defaultCoverPath = "/covers/default-cover.jpg";
 const execFileAsync = promisify(execFile);
 const audioExtensions = new Set([".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"]);
@@ -7061,6 +7062,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && req.url === "/api/music-memory/listening-event") {
     return handleMusicMemoryListeningEvent(req, res);
+  }
+  if (req.method === "GET" && req.url === "/api/music-memory/preferences") {
+    return handleMusicMemoryPreferences(req, res);
   }
   if (req.method === "POST" && req.url === "/api/chat") {
     return handleApiChat(req, res);

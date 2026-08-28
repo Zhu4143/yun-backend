@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 function parseJsonLines(raw) {
@@ -27,6 +27,7 @@ export function createMusicMemoryRepository({ dataDir }) {
   const files = {
     listeningEvents: path.join(directory, 'listening-events.jsonl'),
     musicObservations: path.join(directory, 'music-observations.jsonl'),
+    preferenceSnapshot: path.join(directory, 'music-preference-snapshot.json'),
   }
   const ids = { listeningEvents: null, musicObservations: null }
   const queues = { listeningEvents: Promise.resolve(), musicObservations: Promise.resolve() }
@@ -58,6 +59,19 @@ export function createMusicMemoryRepository({ dataDir }) {
     appendMusicObservation: (event) => append('musicObservations', event),
     listListeningEvents: () => readEvents(files.listeningEvents),
     listMusicObservations: () => readEvents(files.musicObservations),
+    async readPreferenceSnapshot() {
+      try { return JSON.parse(await readFile(files.preferenceSnapshot, 'utf8')) } catch (error) {
+        if (error?.code === 'ENOENT') return null
+        const corruption = new Error('music_preference_snapshot_corruption', { cause: error }); corruption.code = 'music_preference_snapshot_corruption'; throw corruption
+      }
+    },
+    async writePreferenceSnapshot(snapshot) {
+      await mkdir(directory, { recursive: true })
+      const temporary = `${files.preferenceSnapshot}.${process.pid}.${Date.now()}.tmp`
+      await writeFile(temporary, JSON.stringify(snapshot, null, 2), 'utf8')
+      await rename(temporary, files.preferenceSnapshot)
+      return snapshot
+    },
     paths: Object.freeze({ ...files }),
   }
 }
