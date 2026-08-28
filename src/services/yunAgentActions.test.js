@@ -59,3 +59,30 @@ test('ordinary music actions use canonical PlayerCore commands', async () => {
   assert.equal(responseMode, 'silent')
   assert.equal(results.at(-1).diagnostics, diagnostics)
 })
+
+test('music.recommend fetches preferences once, reranks production candidates, falls back safely, and never writes memory', async () => {
+  const originalFetch = globalThis.fetch
+  const candidates = [
+    { id: 'A', name: 'A', ar: [{ name: 'Artist' }] },
+    { id: 'B', name: 'B', ar: [{ name: 'Artist' }] },
+  ]
+  const played = []
+  const player = { getState: () => ({ currentTrack: null }), playTrackFromQueue: async (track, queue) => { played.push({ track, queue }); return { ok: true } }, setAutoUpNext: () => {} }
+  let recommendationCalls = 0
+  globalThis.fetch = async (url) => {
+    if (url === '/api/netease/recommendations') { recommendationCalls += 1; return { ok: true, json: async () => ({ songs: candidates }) } }
+    throw new Error(`unexpected fetch ${url}`)
+  }
+  const preferenceSnapshot = { tracks: { B: { directListening: { playCount: 4, skipCount: 0 }, derived: { recentAffinity: 3, longTermAffinity: 5, skipRate: 0, confidence: 'high' } } }, artists: {} }
+  let preferenceCalls = 0
+  try {
+    await executeYunAgentActions([{ type: 'music.recommend', payload: {} }], { player, preferenceLoader: async () => { preferenceCalls += 1; return { snapshot: preferenceSnapshot } } })
+    assert.equal(preferenceCalls, 1); assert.equal(recommendationCalls, 1); assert.equal(played[0].track.providerId, 'B')
+    played.length = 0
+    await executeYunAgentActions([{ type: 'music.recommend', payload: {} }], { player, preferenceLoader: async () => { throw new Error('offline') } })
+    assert.equal(played[0].track.providerId, 'A')
+    played.length = 0
+    await executeYunAgentActions([{ type: 'music.recommend', payload: {} }], { player: { ...player, getState: () => ({ currentTrack: { id: 'A', providerId: 'A' } }) }, context: { currentSong: { id: 'A', providerId: 'A' } }, preferenceLoader: async () => ({ snapshot: { tracks: { A: preferenceSnapshot.tracks.B }, artists: {} } }) })
+    assert.equal(played[0].track.providerId, 'B')
+  } finally { globalThis.fetch = originalFetch }
+})
