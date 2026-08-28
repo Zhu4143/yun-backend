@@ -2,12 +2,13 @@ import { resolveMusicStructureSeek } from '../api/musicIntelligenceApi.js'
 import { NeteaseApiAdapter } from './netease/apiAdapter.js'
 import { NeteaseCapabilityExecutor } from './netease/capabilityExecutor.js'
 import { YunPlayerAdapter } from './netease/playerAdapter.js'
+import { rankWithMusicPreferences } from './musicPreferenceRanker.js'
 
 function compactText(value) {
   return String(value || '').toLowerCase().replace(/[\s，。！？、,.!?~…《》「」“”"']/g, '')
 }
 
-export async function executeYunAgentActions(actions, { player, setResponseMode, voice, context = {}, isCurrentRequest = () => true } = {}) {
+export async function executeYunAgentActions(actions, { player, setResponseMode, voice, context = {}, isCurrentRequest = () => true, preferenceLoader = async () => (await fetch('/api/music-memory/preferences')).json() } = {}) {
   const results = []
   // Migration boundary: server/yun-agent still emits its established
   // `music.*` action protocol so current behavior remains stable. This module
@@ -90,7 +91,8 @@ export async function executeYunAgentActions(actions, { player, setResponseMode,
         }
         case 'music.play_track': results.push(await execute('yun.player.queue', 'play_track', { track: payload.track, options: { crossfade: Boolean(player.getState().currentTrack) } })); break
         case 'music.recommend': {
-          const tracks = valueOf(await execute('netease.recommend.contextual', 'list', { context: { currentSong: context.currentSong, playHistory: context.playHistory || [], recentRecommendations: context.recentRecommendations || [] }, limit: payload.limit || 4 }))
+          let tracks = valueOf(await execute('netease.recommend.contextual', 'list', { context: { currentSong: context.currentSong, playHistory: context.playHistory || [], recentRecommendations: context.recentRecommendations || [] }, limit: payload.limit || 4 }))
+          try { const result = await preferenceLoader(); tracks = rankWithMusicPreferences({ candidates: tracks, currentSong: context.currentSong, preferenceSnapshot: result?.snapshot || result }) } catch { /* cold-start/fetch failure preserves provider ordering */ }
           if (!isCurrentRequest()) {
             results.push({ ok: false, cancelled: true })
             break

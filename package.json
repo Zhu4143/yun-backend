@@ -24,7 +24,7 @@
     "test:netease-session": "node --test server/netease/accountSessionService.test.js",
     "test:netease-history-sync": "node --test server/netease/listeningHistorySyncService.test.js",
     "test:voice": "node --test src/voice/VoiceSessionController.test.mjs src/voice/audio/EchoCanceller.test.mjs server/asr/asrService.test.mjs",
-    "test:services": "node --test server/agent/modelProvider.test.js server/cowagentBridge.test.js server/music-intelligence/transitionPlanner.test.js server/netease/capabilityService.test.js src/api/neteaseApi.test.js src/api/smartMusicApi.test.js src/services/netease/capabilityArchitecture.test.js src/services/netease/capabilityTruth.test.js src/services/chatIntentRouter.test.js src/services/radioEngine.test.js src/services/yunAgentActions.test.js src/services/yunAgentReply.test.js",
+    "test:services": "node --test server/agent/modelProvider.test.js server/cowagentBridge.test.js server/music-intelligence/transitionPlanner.test.js server/netease/capabilityService.test.js src/api/neteaseApi.test.js src/api/smartMusicApi.test.js src/services/netease/capabilityArchitecture.test.js src/services/netease/capabilityTruth.test.js src/services/chatIntentRouter.test.js src/services/radioEngine.test.js src/services/musicPreferenceRanker.test.js src/services/yunAgentActions.test.js src/services/yunAgentReply.test.js",
     "test:e2e:conversation": "node scripts/yun-conversation-e2e.mjs",
     "test:e2e:netease": "node scripts/yun-conversation-e2e.mjs --real",
     "lint": "eslint .",
