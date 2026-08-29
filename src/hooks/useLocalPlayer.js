@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AudioEngine } from '../player/audio/AudioEngine.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
@@ -117,12 +117,25 @@ function getInitialTailSilenceCache() {
   }
 }
 
-export function useLocalPlayer(playlist) {
+export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   const [audioEngine] = useState(() => new AudioEngine())
-  const playlistRef = useRef([])
-  const externalQueueRef = useRef(null)
-  const currentSongRef = useRef(null)
-  const requestedSongRef = useRef(null)
+  const [restoreSnapshot] = useState(() => {
+    const queue = Array.isArray(restoreState?.queue) ? restoreState.queue.filter((song) => song?.fileUrl) : []
+    const currentTrackId = String(restoreState?.currentTrackId || '')
+    const song = playlist.find((item) => getSongId(item) === currentTrackId)
+      || queue.find((item) => getSongId(item) === currentTrackId)
+      || (restoreState?.currentTrack?.fileUrl ? restoreState.currentTrack : null)
+    return {
+      queue,
+      song,
+      position: Math.max(0, Number(restoreState?.position) || 0),
+      duration: Math.max(0, Number(restoreState?.duration) || 0),
+    }
+  })
+  const playlistRef = useRef(playlist)
+  const externalQueueRef = useRef(restoreSnapshot.queue.length ? restoreSnapshot.queue : null)
+  const currentSongRef = useRef(restoreSnapshot.song)
+  const requestedSongRef = useRef(restoreSnapshot.song)
   const queuedNextSongRef = useRef(null)
   const upNextTracksRef = useRef([])
   const autoUpNextTracksRef = useRef([])
@@ -139,10 +152,10 @@ export function useLocalPlayer(playlist) {
   const initialPlaybackMode = getInitialPlaybackMode()
   const playbackModeRef = useRef(initialPlaybackMode)
 
-  const [currentSong, setCurrentSong] = useState(null)
+  const [currentSong, setCurrentSong] = useState(restoreSnapshot.song)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(0)
+  const [currentTime, setCurrentTime] = useState(restoreSnapshot.position)
+  const [duration, setDuration] = useState(restoreSnapshot.duration)
   const [volume, setVolumeState] = useState(1)
   const [playbackMode, setPlaybackModeState] = useState(initialPlaybackMode)
   const [lastAutoNextSong, setLastAutoNextSong] = useState(null)
@@ -154,6 +167,27 @@ export function useLocalPlayer(playlist) {
   useEffect(() => {
     playlistRef.current = playlist
   }, [playlist])
+
+  useLayoutEffect(() => {
+    const song = restoreSnapshot.song
+    if (!song?.fileUrl) return undefined
+
+    const audio = audioEngine.ensureActiveDeck()
+    const restorePosition = () => {
+      const safeDuration = getSafeDuration(audio)
+      audio.currentTime = safeDuration
+        ? Math.min(restoreSnapshot.position, safeDuration)
+        : restoreSnapshot.position
+      setDuration(safeDuration || restoreSnapshot.duration)
+      setCurrentTime(audio.currentTime || restoreSnapshot.position)
+    }
+    audio.preload = 'metadata'
+    audio.src = song.fileUrl
+    audio.addEventListener('loadedmetadata', restorePosition, { once: true })
+    audio.load()
+
+    return () => audio.removeEventListener('loadedmetadata', restorePosition)
+  }, [audioEngine, restoreSnapshot])
 
   const getActiveQueue = useCallback(() => (
     externalQueueRef.current?.length ? externalQueueRef.current : playlistRef.current

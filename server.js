@@ -615,8 +615,13 @@ async function handleNeteaseArtistSongs(req, res) {
 async function handleNeteaseMe(req, res) {
   try {
     const info = await getNeteaseLoginInfo();
-    if (!info.loggedIn) return sendJson(res, 200, { loggedIn: false, playlists: [] });
-    const response = await neteaseUserPlaylist({ uid: info.userId, limit: 80, cookie: neteaseUserCookie, timestamp: Date.now() });
+    if (!info.loggedIn) return sendJson(res, 200, { loggedIn: false, playlists: [], total: 0, hasMore: false });
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const requestedLimit = Number(url.searchParams.get("limit") || 80);
+    const requestedOffset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 100)) : 80;
+    const offset = Number.isFinite(requestedOffset) ? Math.max(0, requestedOffset) : 0;
+    const response = await neteaseUserPlaylist({ uid: info.userId, limit, offset, cookie: neteaseUserCookie, timestamp: Date.now() });
     const playlists = (response?.body?.playlist || []).map((playlist) => ({
       id: String(playlist.id),
       name: playlist.name || "未命名歌单",
@@ -624,7 +629,10 @@ async function handleNeteaseMe(req, res) {
       trackCount: Number(playlist.trackCount || 0),
       liked: Number(playlist.specialType || 0) === 5 || /喜欢的音乐/.test(playlist.name || ""),
     }));
-    sendJson(res, 200, { ...info, playlists });
+    const hasMore = Boolean(response?.body?.more);
+    const reportedTotal = Number(response?.body?.total || response?.body?.playlistCount || 0);
+    const total = reportedTotal > 0 ? reportedTotal : hasMore ? null : offset + playlists.length;
+    sendJson(res, 200, { ...info, playlists, total, hasMore, offset, limit });
   } catch (error) {
     sendJson(res, 502, { error: error.message });
   }
@@ -634,11 +642,19 @@ async function handleNeteasePlaylistTracks(req, res) {
   try {
     const info = await getNeteaseLoginInfo();
     if (!info.loggedIn) return sendJson(res, 401, { error: "请先登录网易云" });
-    const id = new URL(req.url, "http://localhost").searchParams.get("id");
+    const url = new URL(req.url, "http://localhost");
+    const id = url.searchParams.get("id");
     if (!id) return sendJson(res, 400, { error: "缺少歌单 id" });
-    const response = await neteasePlaylistTrackAll({ id, limit: 500, offset: 0, cookie: neteaseUserCookie, timestamp: Date.now() });
+    const requestedLimit = Number(url.searchParams.get("limit") || 500);
+    const requestedOffset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 500)) : 500;
+    const offset = Number.isFinite(requestedOffset) ? Math.max(0, requestedOffset) : 0;
+    const response = await neteasePlaylistTrackAll({ id, limit, offset, cookie: neteaseUserCookie, timestamp: Date.now() });
     const songs = (response?.body?.songs || []).map(normalizeNeteaseApiSong).filter((song) => song.id);
-    sendJson(res, 200, { ok: true, songs });
+    const hasMore = Boolean(response?.body?.more);
+    const reportedTotal = Number(response?.body?.total || response?.body?.count || response?.body?.playlist?.trackCount || 0);
+    const total = reportedTotal > 0 ? reportedTotal : hasMore ? null : offset + songs.length;
+    sendJson(res, 200, { ok: true, songs, total, hasMore, offset, limit });
   } catch (error) {
     sendJson(res, 502, { error: error.message });
   }
@@ -6924,6 +6940,9 @@ const server = http.createServer(async (req, res) => {
   const requestPath = new URL(req.url, "http://127.0.0.1").pathname;
   const cowAgentOutcomeMatch = requestPath.match(/^\/api\/yun\/cowagent\/jobs\/([^/]+)\/outcome$/);
   const cowAgentJobMatch = requestPath.match(/^\/api\/yun\/cowagent\/jobs\/([^/]+)$/);
+  if (req.method === "GET" && requestPath === "/api/health") {
+    return sendJson(res, 200, { ok: true, service: "yun-backend", timestamp: Date.now() });
+  }
   if (req.method === "GET" && req.url === "/api/asr/status") {
     return handleAsrStatus(req, res);
   }

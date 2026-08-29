@@ -1,0 +1,62 @@
+.yun-boot-shell {
+  align-items: center;
+  background: radial-gradient(circle at 50% 42%, rgba(75, 91, 116, 0.16), transparent 36%), #08090c;
+  color: rgba(246, 247, 250, 0.92);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  min-height: 100vh;
+  overflow: hidden;
+  position: fixed;
+}
+
+.yun-boot-ambient {
+  animation: yun-boot-breathe 5.5s ease-in-out infinite;
+  background: rgba(154, 171, 198, 0.08);
+  border-radius: 50%;
+  filter: blur(64px);
+  height: min(46vw, 520px);
+  position: absolute;
+  width: min(46vw, 520px);
+}
+
+.yun-boot-card {
+  backdrop-filter: blur(24px);
+  background: rgba(17, 19, 24, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 30px;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.34);
+  box-sizing: border-box;
+  min-height: 430px;
+  padding: 52px 48px 42px;
+  position: relative;
+  width: min(88vw, 480px);
+}
+
+.yun-boot-mark { text-align: center; }
+.yun-boot-mark strong { display: block; font-family: serif; font-size: 58px; font-weight: 400; line-height: 1; }
+.yun-boot-mark span { color: rgba(255, 255, 255, 0.48); font-size: 10px; letter-spacing: 0.46em; margin-left: 0.46em; }
+.yun-boot-message { font-size: 15px; letter-spacing: 0.08em; margin: 30px 0 38px; text-align: center; }
+.yun-boot-progress-row { color: rgba(255, 255, 255, 0.44); display: flex; font-size: 11px; justify-content: space-between; }
+.yun-boot-progress-row strong { color: rgba(255, 255, 255, 0.78); font-size: 12px; font-weight: 500; }
+.yun-boot-progress-track { background: rgba(255, 255, 255, 0.08); border-radius: 99px; height: 3px; margin-top: 10px; overflow: hidden; }
+.yun-boot-progress-track span { background: linear-gradient(90deg, rgba(165, 180, 202, 0.5), rgba(232, 237, 246, 0.9)); border-radius: inherit; display: block; height: 100%; transition: width 280ms ease; }
+.yun-boot-current { align-items: flex-start; display: flex; gap: 11px; margin-top: 28px; min-height: 44px; }
+.yun-boot-current strong { display: block; font-size: 13px; font-weight: 500; }
+.yun-boot-current small { color: rgba(255, 255, 255, 0.4); display: block; font-size: 11px; margin-top: 5px; }
+.yun-boot-pulse { animation: yun-boot-pulse 1.8s ease-in-out infinite; background: rgba(220, 229, 243, 0.86); border-radius: 50%; height: 6px; margin-top: 6px; width: 6px; }
+.yun-boot-complete-list { color: rgba(255, 255, 255, 0.35); font-size: 10px; line-height: 1.8; list-style: none; margin: 20px 0 0 17px; padding: 0; }
+.yun-boot-error ul { list-style: none; margin: 0; padding: 0; }
+.yun-boot-error li { background: rgba(118, 54, 54, 0.12); border-radius: 12px; margin-bottom: 8px; padding: 10px 12px; }
+.yun-boot-error li strong, .yun-boot-error li span { display: block; }
+.yun-boot-error li strong { font-size: 12px; }
+.yun-boot-error li span { color: rgba(255, 255, 255, 0.44); font-size: 10px; margin-top: 4px; }
+.yun-boot-error button { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 999px; color: inherit; cursor: pointer; display: block; margin: 24px auto 0; padding: 10px 22px; }
+
+@keyframes yun-boot-breathe { 50% { opacity: 0.65; transform: scale(1.08); } }
+@keyframes yun-boot-pulse { 50% { opacity: 0.35; transform: scale(0.75); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .yun-boot-ambient, .yun-boot-pulse { animation: none; }
+  .yun-boot-progress-track span { transition: none; }
+}

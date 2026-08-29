@@ -1,3 +1,5 @@
+import { isValidTrack, loadPaginatedCollection } from '../boot/playlistLoader.js'
+
 export function normalizeNeteaseSong(song) {
   const providerId = String(song.providerId || song.id || '').replace(/^netease-/, '').trim()
   const title = song.title || song.name || 'Unknown track'
@@ -143,18 +145,58 @@ export async function fetchNeteaseLyrics(songId) {
   }
 }
 
-export async function fetchNeteaseMe() {
-  const response = await fetch('/api/netease/me', { cache: 'no-store' })
+export async function fetchNeteaseMePage({ offset, limit, signal } = {}) {
+  const params = new URLSearchParams()
+  if (offset !== undefined) params.set('offset', String(offset))
+  if (limit !== undefined) params.set('limit', String(limit))
+  const suffix = params.size ? `?${params}` : ''
+  const response = await fetch(`/api/netease/me${suffix}`, { cache: 'no-store', signal })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(data.error || '网易云账户信息读取失败')
-  return data
+  const playlists = Array.isArray(data.playlists) ? data.playlists : []
+  return {
+    ...data,
+    items: playlists,
+    total: data.total !== null && data.total !== undefined && Number.isFinite(Number(data.total))
+      ? Number(data.total)
+      : null,
+    hasMore: data.hasMore ?? data.more ?? false,
+  }
 }
 
-export async function fetchNeteasePlaylistTracks(playlistId) {
-  const response = await fetch(`/api/netease/playlist/tracks?id=${encodeURIComponent(playlistId)}`, { cache: 'no-store' })
+export async function fetchNeteaseMe() {
+  const page = await fetchNeteaseMePage()
+  return { ...page, playlists: page.items }
+}
+
+export async function fetchNeteasePlaylistTracksPage(playlistId, { offset, limit, signal } = {}) {
+  const params = new URLSearchParams({ id: String(playlistId) })
+  if (offset !== undefined) params.set('offset', String(offset))
+  if (limit !== undefined) params.set('limit', String(limit))
+  const response = await fetch(`/api/netease/playlist/tracks?${params}`, { cache: 'no-store', signal })
   const data = await response.json().catch(() => ({}))
   if (!response.ok || data.ok === false) throw new Error(data.error || '网易云歌单读取失败')
-  return normalizeNeteaseSongs(data.songs)
+  const songs = normalizeNeteaseSongs(data.songs)
+  return {
+    items: songs,
+    total: data.total !== null && data.total !== undefined && Number.isFinite(Number(data.total))
+      ? Number(data.total)
+      : null,
+    hasMore: data.hasMore ?? data.more ?? false,
+  }
+}
+
+export async function fetchNeteasePlaylistTracks(playlistId, { onProgress, signal } = {}) {
+  const result = await loadPaginatedCollection({
+    pageSize: 200,
+    signal,
+    onProgress,
+    validateItem: isValidTrack,
+    fetchPage: ({ offset, limit, signal: pageSignal }) => (
+      fetchNeteasePlaylistTracksPage(playlistId, { offset, limit, signal: pageSignal })
+    ),
+  })
+  return result.items
 }
 
 export async function addSongToNeteaseCollection({ song, target = 'liked', playlistId = '', playlistName = '' } = {}) {

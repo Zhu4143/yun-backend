@@ -7,6 +7,7 @@ import {
   fetchNeteaseDailySongs,
   fetchNeteaseLikedStatus,
   fetchNeteaseMembership,
+  fetchNeteasePlaylistTracks,
   fetchNeteasePersonalFm,
   fetchNeteasePodcastPrograms,
   fetchNeteasePodcasts,
@@ -62,6 +63,31 @@ test('canonical frontend normalization stabilizes every PlayerCore field', () =>
     energy: 50,
     memoryWeight: 40,
   })
+})
+
+test('playlist tracks stay loading through every production API page', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url) => {
+    requests.push(String(url))
+    const offset = new URL(String(url), 'http://localhost').searchParams.get('offset')
+    const songs = offset === '2'
+      ? [{ ...rawSong, id: '3', title: '第三首' }]
+      : [rawSong, { ...rawSong, id: '2', title: '第二首' }]
+    return {
+      ok: true,
+      json: async () => ({ ok: true, songs, total: 3, hasMore: offset !== '2' }),
+    }
+  }
+
+  try {
+    const songs = await fetchNeteasePlaylistTracks('91')
+    assert.deepEqual(songs.map((song) => song.providerId), ['123', '2', '3'])
+    assert.equal(requests.length, 2)
+    assert.match(requests[1], /offset=2/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('P1 read methods use explicit non-mutating endpoints', async (t) => {

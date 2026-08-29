@@ -1,5 +1,5 @@
-export async function fetchYunMemory() {
-  const response = await fetch('/api/yun-memory')
+export async function fetchYunMemory({ signal } = {}) {
+  const response = await fetch('/api/yun-memory', { signal })
   const data = await response.json().catch(() => ({}))
 
   if (!response.ok || data.error) {
@@ -22,8 +22,8 @@ export async function resetYunMemory() {
   return data.memory || {}
 }
 
-export async function fetchYunSettings() {
-  const response = await fetch('/api/yun-settings')
+export async function fetchYunSettings({ signal } = {}) {
+  const response = await fetch('/api/yun-settings', { signal })
   const data = await response.json().catch(() => ({}))
 
   if (!response.ok || data.error) {
@@ -48,8 +48,8 @@ export async function saveYunSettings({ memoryMode }) {
   return data
 }
 
-export async function fetchDefaultUserMemory() {
-  const response = await fetch('/user_memory.json', { cache: 'no-store' })
+export async function fetchDefaultUserMemory({ signal } = {}) {
+  const response = await fetch('/user_memory.json', { cache: 'no-store', signal })
 
   if (!response.ok) {
     throw new Error('默认记忆加载失败')

@@ -9,9 +9,10 @@ function normalizeSong(song) {
   }
 }
 
-export async function fetchMusicLibrary() {
+export async function fetchMusicLibrary({ signal } = {}) {
   const response = await fetch('/api/music/library', {
     method: 'GET',
+    signal,
     headers: {
       Accept: 'application/json',
     },
@@ -32,9 +33,10 @@ export async function fetchMusicLibrary() {
   }
 }
 
-export async function scanMusicLibrary() {
+export async function scanMusicLibrary({ signal } = {}) {
   const response = await fetch('/api/music/scan', {
     method: 'GET',
+    signal,
     headers: {
       Accept: 'application/json',
     },

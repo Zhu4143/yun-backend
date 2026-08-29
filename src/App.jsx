@@ -520,7 +520,9 @@ function shouldIgnorePlaybackShortcut(target) {
   return Boolean(target.closest('input, textarea, select, button, [contenteditable="true"]'))
 }
 
-function App({ onVisualReady }) {
+function App({ onVisualReady, bootData = {} }) {
+  const bootLibrary = bootData.LOAD_LIBRARY || null
+  const bootPlaylists = bootData.LOAD_PLAYLISTS || null
   const [{ wallpaperMode, quality: initialVisualQuality }] = useState(getWallpaperRuntime)
   const [visualQuality, setVisualQuality] = useState(initialVisualQuality)
   // Let React paint the controls before the two WebGL renderers begin shader
@@ -543,9 +545,9 @@ function App({ onVisualReady }) {
   const [isApplyingProModel, setIsApplyingProModel] = useState(false)
   const [libraryQuery, setLibraryQuery] = useState('')
   const [librarySource, setLibrarySource] = useState('local')
-  const [libraryTracks, setLibraryTracks] = useState([])
-  const [libraryCount, setLibraryCount] = useState(0)
-  const [libraryStatus, setLibraryStatus] = useState('idle')
+  const [libraryTracks, setLibraryTracks] = useState(() => bootLibrary?.songs || [])
+  const [libraryCount, setLibraryCount] = useState(() => bootLibrary?.count ?? bootLibrary?.songs?.length ?? 0)
+  const [libraryStatus, setLibraryStatus] = useState(() => bootLibrary ? 'ready' : 'idle')
   const [libraryError, setLibraryError] = useState('')
   const [libraryListReady, setLibraryListReady] = useState(false)
   const [libraryEdgeOpen, setLibraryEdgeOpen] = useState(false)
@@ -555,8 +557,8 @@ function App({ onVisualReady }) {
   const [neteaseResults, setNeteaseResults] = useState([])
   const [neteaseStatus, setNeteaseStatus] = useState('idle')
   const [neteaseError, setNeteaseError] = useState('')
-  const [neteaseMe, setNeteaseMe] = useState(null)
-  const [neteaseAccountStatus, setNeteaseAccountStatus] = useState('idle')
+  const [neteaseMe, setNeteaseMe] = useState(() => bootPlaylists?.account || null)
+  const [neteaseAccountStatus, setNeteaseAccountStatus] = useState(() => bootPlaylists ? 'ready' : 'idle')
   const [neteaseLibraryView, setNeteaseLibraryView] = useState('songs')
   const [activeNeteasePlaylist, setActiveNeteasePlaylist] = useState(null)
   const [libraryScrollTop, setLibraryScrollTop] = useState(0)
@@ -718,14 +720,14 @@ function App({ onVisualReady }) {
     setVoiceInputActive(listenImmediately)
   }, [])
 
-  const legacyPlayer = usePlayerObserver(useLocalPlayer(libraryTracks))
+  const legacyPlayer = usePlayerObserver(useLocalPlayer(libraryTracks, { restoreState: bootData.RESTORE_PLAYER }))
   const {
     audioRef,
     lastAutoNextSong,
     musicDuckingController,
     readAudioFrequencyData,
   } = legacyPlayer
-  const [playerCore] = useState(() => createYunLegacyPlayerAdapter())
+  const [playerCore] = useState(() => bootData.INIT_PLAYER_CORE || createYunLegacyPlayerAdapter())
   // Keep render pure; bind controls and publish the projection only after commit.
   const playerState = playerCore.projectLegacy(legacyPlayer)
   useLayoutEffect(() => {
@@ -740,6 +742,25 @@ function App({ onVisualReady }) {
     upNext: upNextTracks,
     autoUpNext: autoUpNextTracks,
   } = playerState
+  const playerSessionSaveRef = useRef({ trackId: '', savedAt: 0 })
+  useEffect(() => {
+    if (!currentSong?.fileUrl) return
+    const trackId = currentSong.id || currentSong.fileUrl
+    const savedAt = Date.now()
+    const lastSave = playerSessionSaveRef.current
+    if (lastSave.trackId === trackId && savedAt - lastSave.savedAt < 2000) return
+
+    playerSessionSaveRef.current = { trackId, savedAt }
+    window.localStorage.setItem('yun_player_session_v1', JSON.stringify({
+      version: 1,
+      updatedAt: savedAt,
+      currentTrack: currentSong,
+      currentTrackId: trackId,
+      position: playerState.currentTime,
+      duration: playerState.duration,
+      queue: (playerState.queue || []).filter((song) => song?.fileUrl).slice(0, 200),
+    }))
+  }, [currentSong, playerState.currentTime, playerState.duration, playerState.queue])
   // Headless voice lifecycle authority. It deliberately does not own UI,
   // microphone hardware, or the existing conversation/MCP routes.
   const voiceSession = useVoiceSessionController()
@@ -982,7 +1003,10 @@ function App({ onVisualReady }) {
     return () => { delete window.yunVoiceDiagnostics }
   }, [audioCapture.metrics])
   const [asrSettingsOpen, setAsrSettingsOpen] = useState(false)
-  const yunMemory = useYunMemory()
+  const yunMemory = useYunMemory({
+    settings: bootData.LOAD_SETTINGS,
+    memory: bootData.LOAD_MEMORY,
+  })
   const yunAgent = useYunAgent({
     player: playerCore,
     playerState,
@@ -1673,6 +1697,7 @@ function App({ onVisualReady }) {
   }), [])
 
   useEffect(() => {
+    if (bootLibrary) return undefined
     // The library is only rendered after the drawer is opened. Reading and
     // normalizing its JSON on the first event-loop turn competes with initial
     // layout and WebGL setup, so leave the first screen responsive first.
@@ -1681,7 +1706,7 @@ function App({ onVisualReady }) {
     return () => {
       window.clearTimeout(timer)
     }
-  }, [loadMusicLibrary])
+  }, [bootLibrary, loadMusicLibrary])
 
   useEffect(() => {
     const messagesElement = chatMessagesRef.current

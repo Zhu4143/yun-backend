@@ -80,15 +80,19 @@ function buildSummary({ userMemory, companionMemory, memoryEnabled, memoryMode, 
   return `默认记忆：${name} · 模式：${memoryModeLabels[memoryMode] || '自然记得'} · 近期话题：${topics} · 情绪：${emotions} · 陪伴：${preference}`
 }
 
-export function useYunMemory() {
+export function useYunMemory(initial = {}) {
+  const bootMemory = initial.memory || null
+  const hasBootMemory = Boolean(bootMemory)
   const [memoryEnabled, setMemoryEnabledState] = useState(() => localStorage.getItem(MEMORY_ENABLED_KEY) !== 'false')
-  const [memoryMode, setMemoryModeState] = useState('smart')
-  const [userMemory, setUserMemory] = useState(() => readJsonStorage(USER_MEMORY_KEY, null))
+  const [memoryMode, setMemoryModeState] = useState(() => (
+    ['off', 'smart', 'deep'].includes(initial.settings?.memoryMode) ? initial.settings.memoryMode : 'smart'
+  ))
+  const [userMemory, setUserMemory] = useState(() => bootMemory?.defaultUserMemory || readJsonStorage(USER_MEMORY_KEY, null))
   const [companionMemory, setCompanionMemoryState] = useState(() =>
     normalizeRecentMemory(readJsonStorage(COMPANION_MEMORY_KEY, createEmptyRecentMemory())),
   )
-  const [longTermMemory, setLongTermMemory] = useState(null)
-  const [status, setStatus] = useState('loading')
+  const [longTermMemory, setLongTermMemory] = useState(() => bootMemory?.longTermMemory || null)
+  const [status, setStatus] = useState(() => hasBootMemory ? 'ready' : 'loading')
 
   const saveCompanionMemory = useCallback((memory) => {
     const normalized = normalizeRecentMemory(memory)
@@ -108,6 +112,7 @@ export function useYunMemory() {
   }, [saveCompanionMemory])
 
   useEffect(() => {
+    if (hasBootMemory) return undefined
     let cancelled = false
 
     async function loadMemory() {
@@ -139,7 +144,7 @@ export function useYunMemory() {
     return () => {
       cancelled = true
     }
-  }, [reloadDefaultMemory, userMemory])
+  }, [hasBootMemory, reloadDefaultMemory, userMemory])
 
   const setMemoryEnabled = useCallback((enabled) => {
     setMemoryEnabledState(Boolean(enabled))
