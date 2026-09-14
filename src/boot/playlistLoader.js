@@ -33,6 +33,7 @@ export async function loadPaginatedCollection({
   fetchPage,
   pageSize = 100,
   initialPage = null,
+  expectedCount: configuredExpectedCount = null,
   onProgress = () => {},
   validateItem,
   signal,
@@ -42,7 +43,7 @@ export async function loadPaginatedCollection({
 
   const items = []
   const seen = new Set()
-  let expectedCount = null
+  let expectedCount = normalizeCount(configuredExpectedCount)
   let offset = 0
   let pageNumber = 0
   let page = initialPage
@@ -96,21 +97,99 @@ export async function loadPaginatedCollection({
   }
 }
 
-export function loadCompletePlaylistCache({ storage, key, version } = {}) {
+export async function loadCompletePlaylistTracks({
+  playlists,
+  fetchPage,
+  pageSize = 200,
+  concurrency = 3,
+  onProgress = () => {},
+  signal,
+} = {}) {
+  if (!Array.isArray(playlists)) throw new Error('Invalid playlist collection')
+  if (typeof fetchPage !== 'function') throw new Error('fetchPage is required')
+  validateCollectionIntegrity(playlists, { expectedCount: playlists.length, validateItem: isValidPlaylist })
+
+  const expectedTrackCount = playlists.reduce((total, playlist) => total + Number(playlist.trackCount), 0)
+  const loadedByPlaylist = new Array(playlists.length).fill(0)
+  const completedPlaylists = new Array(playlists.length)
+  let nextIndex = 0
+  let loadedPlaylistCount = 0
+
+  const report = () => {
+    const loadedTrackCount = loadedByPlaylist.reduce((total, count) => total + count, 0)
+    const progress = expectedTrackCount > 0
+      ? loadedTrackCount / expectedTrackCount * 100
+      : playlists.length > 0 ? loadedPlaylistCount / playlists.length * 100 : 100
+    onProgress({
+      loadedPlaylistCount,
+      expectedPlaylistCount: playlists.length,
+      loadedTrackCount,
+      expectedTrackCount,
+      progress: Math.min(100, progress),
+    })
+  }
+
+  const worker = async () => {
+    while (nextIndex < playlists.length) {
+      if (signal?.aborted) throw signal.reason || new Error('Playlist loading aborted')
+      const index = nextIndex
+      nextIndex += 1
+      const playlist = playlists[index]
+      const result = await loadPaginatedCollection({
+        pageSize,
+        expectedCount: playlist.trackCount,
+        signal,
+        validateItem: isValidTrack,
+        fetchPage: ({ offset, limit, signal: pageSignal }) => (
+          fetchPage({ playlistId: playlist.id, offset, limit, signal: pageSignal })
+        ),
+        onProgress: ({ loadedCount }) => {
+          loadedByPlaylist[index] = loadedCount
+          report()
+        },
+      })
+      loadedByPlaylist[index] = result.loadedCount
+      loadedPlaylistCount += 1
+      completedPlaylists[index] = {
+        ...playlist,
+        tracks: result.items,
+        expectedTrackCount: Number(playlist.trackCount),
+        loadedTrackCount: result.loadedCount,
+        complete: true,
+      }
+      report()
+    }
+  }
+
+  const workerCount = Math.min(playlists.length, Math.max(1, Math.floor(Number(concurrency) || 1)))
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  report()
+
+  return {
+    playlists: completedPlaylists,
+    loadedPlaylistCount,
+    expectedPlaylistCount: playlists.length,
+    loadedTrackCount: loadedByPlaylist.reduce((total, count) => total + count, 0),
+    expectedTrackCount,
+    complete: true,
+  }
+}
+
+export function loadCompletePlaylistCache({ storage, key, version, validateItem } = {}) {
   try {
     const cache = JSON.parse(storage?.getItem(key) || 'null')
     if (!cache || cache.complete !== true || cache.version !== version) return null
     if (!Number.isFinite(Number(cache.updatedAt)) || Number(cache.updatedAt) <= 0) return null
     if (normalizeCount(cache.totalItems) !== cache.items?.length) return null
-    validateCollectionIntegrity(cache.items, { expectedCount: cache.totalItems })
+    validateCollectionIntegrity(cache.items, { expectedCount: cache.totalItems, validateItem })
     return cache
   } catch {
     return null
   }
 }
 
-export function saveCompletePlaylistCache({ storage, key, version, items, updatedAt = Date.now() } = {}) {
-  validateCollectionIntegrity(items, { expectedCount: items?.length })
+export function saveCompletePlaylistCache({ storage, key, version, items, updatedAt = Date.now(), validateItem } = {}) {
+  validateCollectionIntegrity(items, { expectedCount: items?.length, validateItem })
   const cache = {
     version,
     complete: true,
@@ -128,4 +207,17 @@ export function isValidPlaylist(item) {
 
 export function isValidTrack(item) {
   return Boolean(itemId(item)) && typeof item.title === 'string' && item.title.trim().length > 0
+}
+
+export function isValidCompletePlaylist(item) {
+  if (!isValidPlaylist(item) || item.complete !== true || !Array.isArray(item.tracks)) return false
+  try {
+    validateCollectionIntegrity(item.tracks, {
+      expectedCount: item.trackCount,
+      validateItem: isValidTrack,
+    })
+    return true
+  } catch {
+    return false
+  }
 }

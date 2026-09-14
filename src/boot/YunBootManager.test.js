@@ -46,6 +46,59 @@ test('an optional task failure enters degraded without blocking the application'
   assert.equal(manager.getState().tasks.find((task) => task.id === 'TTS').status, 'warning')
 })
 
+test('optional tasks retry in the background without delaying application readiness', async () => {
+  const optionalAttempt = deferred()
+  let attempts = 0
+  const manager = new YunBootManager({
+    tasks: [
+      { id: 'CONFIG', blocking: true, run: async () => true },
+      {
+        id: 'TTS',
+        blocking: false,
+        dependencies: ['CONFIG'],
+        retries: 1,
+        run: async () => {
+          attempts += 1
+          if (attempts === 1) throw new Error('temporarily offline')
+          return optionalAttempt.promise
+        },
+      },
+    ],
+  })
+
+  const starting = manager.start()
+  let readinessTimer = 0
+
+  try {
+    const readiness = await Promise.race([
+      starting.then(() => 'ready'),
+      new Promise((resolve) => {
+        readinessTimer = setTimeout(() => resolve('blocked'), 50)
+      }),
+    ])
+    assert.equal(readiness, 'ready')
+    assert.equal(manager.getState().status, 'ready')
+    assert.equal(manager.getState().tasks.find((task) => task.id === 'TTS').status, 'running')
+    assert.equal(manager.getState().tasks.find((task) => task.id === 'TTS').retries, 1)
+  } finally {
+    clearTimeout(readinessTimer)
+    optionalAttempt.resolve({ available: true })
+    await starting
+  }
+
+  await new Promise((resolve) => {
+    if (manager.getState().tasks.find((task) => task.id === 'TTS').status === 'success') return resolve()
+    const unsubscribe = manager.subscribe((state) => {
+      if (state.tasks.find((task) => task.id === 'TTS').status !== 'success') return
+      unsubscribe()
+      resolve()
+    })
+  })
+
+  assert.equal(manager.getState().status, 'ready')
+  assert.equal(attempts, 2)
+})
+
 test('a timed out task retries and can complete boot', async () => {
   let attempts = 0
   const manager = new YunBootManager({

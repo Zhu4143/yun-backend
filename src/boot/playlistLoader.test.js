@@ -1,11 +1,36 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { describePlaylistTrackPage } from '../../server/netease/playlistPagination.js'
 import {
+  isValidCompletePlaylist,
+  loadCompletePlaylistTracks,
   loadCompletePlaylistCache,
   loadPaginatedCollection,
   saveCompletePlaylistCache,
 } from './playlistLoader.js'
+
+test('playlist_track_all page count is not misreported as the collection total', () => {
+  assert.deepEqual(describePlaylistTrackPage({
+    body: { count: 200 },
+    songCount: 200,
+    offset: 0,
+    limit: 200,
+  }), {
+    hasMore: true,
+    total: null,
+  })
+
+  assert.deepEqual(describePlaylistTrackPage({
+    body: { count: 411 },
+    songCount: 11,
+    offset: 400,
+    limit: 200,
+  }), {
+    hasMore: false,
+    total: 411,
+  })
+})
 
 function deferred() {
   let resolve
@@ -55,6 +80,56 @@ test('all playlist pages complete with truthful loaded and expected counts', asy
   assert.deepEqual(progress.at(-1), { loadedCount: 3, expectedCount: 3, progress: 100 })
 })
 
+test('every playlist waits for its complete paginated track collection', async () => {
+  const finalPage = deferred()
+  let settled = false
+  const loading = loadCompletePlaylistTracks({
+    playlists: [
+      { id: 'liked', name: '我喜欢的音乐', trackCount: 3 },
+      { id: 'empty', name: '空歌单', trackCount: 0 },
+    ],
+    concurrency: 1,
+    pageSize: 2,
+    fetchPage: async ({ playlistId, offset }) => {
+      if (playlistId === 'empty') return { items: [], total: 0, hasMore: false }
+      if (offset === 0) {
+        return {
+          items: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }],
+          total: 3,
+          hasMore: true,
+        }
+      }
+      return finalPage.promise
+    },
+  }).then((result) => {
+    settled = true
+    return result
+  })
+
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(settled, false)
+
+  finalPage.resolve({ items: [{ id: 'c', title: 'C' }], total: 3, hasMore: false })
+  const result = await loading
+
+  assert.equal(result.complete, true)
+  assert.equal(result.loadedPlaylistCount, 2)
+  assert.equal(result.expectedPlaylistCount, 2)
+  assert.equal(result.loadedTrackCount, 3)
+  assert.equal(result.expectedTrackCount, 3)
+  assert.deepEqual(result.playlists[0].tracks.map((track) => track.id), ['a', 'b', 'c'])
+  assert.equal(result.playlists[0].complete, true)
+  assert.deepEqual(result.playlists[1].tracks, [])
+})
+
+test('playlist metadata track count mismatch cannot be marked complete', async () => {
+  await assert.rejects(() => loadCompletePlaylistTracks({
+    playlists: [{ id: 'liked', name: '我喜欢的音乐', trackCount: 2 }],
+    fetchPage: async () => ({ items: [{ id: 'a', title: 'A' }], total: 1, hasMore: false }),
+  }), /total changed.*2 to 1|expected 2.*reported 1|expected 2.*loaded 1/i)
+})
+
 test('duplicate playlist ids fail integrity validation', async () => {
   await assert.rejects(() => loadPaginatedCollection({
     fetchPage: async () => ({ items: [{ id: '1' }, { id: '1' }], total: 2, hasMore: false }),
@@ -101,4 +176,28 @@ test('a versioned complete playlist cache restores only when its count is intact
     updatedAt: 123,
     items,
   })
+})
+
+test('a playlist cache with missing tracks is never restored as complete', () => {
+  const storage = createStorage()
+  storage.setItem('playlists', JSON.stringify({
+    version: 3,
+    complete: true,
+    totalItems: 1,
+    updatedAt: 123,
+    items: [{
+      id: 'liked',
+      name: '我喜欢的音乐',
+      trackCount: 2,
+      complete: true,
+      tracks: [{ id: 'a', title: 'A' }],
+    }],
+  }))
+
+  assert.equal(loadCompletePlaylistCache({
+    storage,
+    key: 'playlists',
+    version: 3,
+    validateItem: isValidCompletePlaylist,
+  }), null)
 })

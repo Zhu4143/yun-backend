@@ -38,6 +38,7 @@ import {
   normalizeNeteaseCoverUrl,
   normalizeNeteaseSongRecord,
 } from "./server/netease/capabilityService.js";
+import { describePlaylistTrackPage } from "./server/netease/playlistPagination.js";
 import { getRelevantNeteaseCapabilityTruth } from "./src/services/netease/capabilityTruth.js";
 
 const {
@@ -640,8 +641,11 @@ async function handleNeteaseMe(req, res) {
 
 async function handleNeteasePlaylistTracks(req, res) {
   try {
-    const info = await getNeteaseLoginInfo();
-    if (!info.loggedIn) return sendJson(res, 401, { error: "请先登录网易云" });
+    // LOAD_PLAYLISTS already verifies the account once through /api/netease/me.
+    // Repeating login_status for every paginated track request is both wasteful
+    // and flaky under concurrent boot loading; the provider call below remains
+    // authoritative if the locally stored session has actually expired.
+    if (!neteaseUserCookie) return sendJson(res, 401, { error: "请先登录网易云" });
     const url = new URL(req.url, "http://localhost");
     const id = url.searchParams.get("id");
     if (!id) return sendJson(res, 400, { error: "缺少歌单 id" });
@@ -651,9 +655,12 @@ async function handleNeteasePlaylistTracks(req, res) {
     const offset = Number.isFinite(requestedOffset) ? Math.max(0, requestedOffset) : 0;
     const response = await neteasePlaylistTrackAll({ id, limit, offset, cookie: neteaseUserCookie, timestamp: Date.now() });
     const songs = (response?.body?.songs || []).map(normalizeNeteaseApiSong).filter((song) => song.id);
-    const hasMore = Boolean(response?.body?.more);
-    const reportedTotal = Number(response?.body?.total || response?.body?.count || response?.body?.playlist?.trackCount || 0);
-    const total = reportedTotal > 0 ? reportedTotal : hasMore ? null : offset + songs.length;
+    const { hasMore, total } = describePlaylistTrackPage({
+      body: response?.body,
+      songCount: songs.length,
+      offset,
+      limit,
+    });
     sendJson(res, 200, { ok: true, songs, total, hasMore, offset, limit });
   } catch (error) {
     sendJson(res, 502, { error: error.message });

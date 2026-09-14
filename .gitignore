@@ -27,8 +27,36 @@ server/data/yun-agent/
 dist
 dist-ssr
 release
+release-login/
 .electron-dist-cache
 *.local
+
+# Rebuildable local caches and generated diagnostics.
+temp/
+TDImportCache/
+**/__pycache__/
+.workbuddy/
+@AutomationLog.txt
+/pixel-*.png
+build/verified-exe-icon.png
+speech-check.tmp.*
+asr-e2e-out.txt
+wechat-listener-focus-test.*
+wechat-send-verify*.png
+yun-desktop-agent/wechat-listener/debug/
+
+# Runtime-derived companion/music state stays local.
+server/data/moss_memory.json
+server/data/moss_runtime_state.json
+server/data/moss_scene_memory.json
+server/data/yunListeningProfile.json
+
+# OmniVoice runtime, model weights, and personal voice samples stay local.
+yun-desktop-agent/omni-voice-service/.venv/
+yun-desktop-agent/omni-voice-service/models/
+yun-desktop-agent/omni-voice-service/reference_audio/
+yun-desktop-agent/omni-voice-service/voice_clones/
+yun-desktop-agent/screenshots/
 
 # Local SpeechBrain model cache and the enrolled voiceprint are device-private.
 yun-desktop-agent/voiceprint-service/.venv/

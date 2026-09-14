@@ -1,4 +1,4 @@
-import { fetchNeteaseMePage } from '../api/neteaseApi.js'
+import { fetchNeteaseMePage, fetchNeteasePlaylistTracksPage } from '../api/neteaseApi.js'
 import { REVISION as THREE_REVISION } from 'three'
 import { fetchMusicLibrary, scanMusicLibrary } from '../api/yunApi.js'
 import { fetchDefaultUserMemory, fetchYunMemory, fetchYunSettings } from '../api/memoryApi.js'
@@ -6,13 +6,15 @@ import { createYunLegacyPlayerAdapter } from '../player/adapters/yunLegacyPlayer
 import { YunBootManager } from './YunBootManager.js'
 import {
   isValidPlaylist,
+  isValidCompletePlaylist,
+  loadCompletePlaylistTracks,
   loadCompletePlaylistCache,
   loadPaginatedCollection,
   saveCompletePlaylistCache,
 } from './playlistLoader.js'
 
 const PLAYLIST_CACHE_KEY = 'yun_boot_netease_playlists_v1'
-const PLAYLIST_CACHE_VERSION = 1
+const PLAYLIST_CACHE_VERSION = 2
 
 async function requestJson(path, { signal } = {}) {
   const response = await fetch(path, { cache: 'no-store', signal })
@@ -133,10 +135,11 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
             storage,
             key: PLAYLIST_CACHE_KEY,
             version: PLAYLIST_CACHE_VERSION,
+            validateItem: isValidCompletePlaylist,
           })
           if (cached) {
             const expected = Number(firstPage.total) || cached.totalItems
-            reportProgress(Math.min(95, cached.totalItems / Math.max(1, expected) * 100), `${cached.totalItems} / ${expected}`)
+            reportProgress(Math.min(8, cached.totalItems / Math.max(1, expected) * 8), `发现 ${cached.totalItems} 个完整缓存歌单`)
           }
 
           const result = await loadPaginatedCollection({
@@ -146,21 +149,34 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
             validateItem: isValidPlaylist,
             fetchPage: ({ offset, limit, signal: pageSignal }) => fetchNeteaseMePage({ offset, limit, signal: pageSignal }),
             onProgress: ({ loadedCount, expectedCount, progress }) => {
-              reportProgress(progress, `${loadedCount} / ${expectedCount}`)
+              reportProgress(progress * 0.1, `${loadedCount} / ${expectedCount} 个歌单`)
+            },
+          })
+          const completePlaylists = await loadCompletePlaylistTracks({
+            playlists: result.items,
+            signal,
+            fetchPage: ({ playlistId, offset, limit, signal: pageSignal }) => (
+              fetchNeteasePlaylistTracksPage(playlistId, { offset, limit, signal: pageSignal })
+            ),
+            onProgress: ({ loadedTrackCount, expectedTrackCount, progress }) => {
+              reportProgress(10 + progress * 0.9, `${loadedTrackCount} / ${expectedTrackCount} 首`)
             },
           })
           saveCompletePlaylistCache({
             storage,
             key: PLAYLIST_CACHE_KEY,
             version: PLAYLIST_CACHE_VERSION,
-            items: result.items,
+            items: completePlaylists.playlists,
+            validateItem: isValidCompletePlaylist,
           })
           return {
-            account: { ...firstPage, playlists: result.items },
-            playlists: result.items,
+            account: { ...firstPage, playlists: completePlaylists.playlists },
+            playlists: completePlaylists.playlists,
             complete: true,
             expectedCount: result.expectedCount,
             loadedCount: result.loadedCount,
+            expectedTrackCount: completePlaylists.expectedTrackCount,
+            loadedTrackCount: completePlaylists.loadedTrackCount,
           }
         },
       },

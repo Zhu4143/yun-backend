@@ -73,6 +73,7 @@ export class YunBootManager {
     }]))
     this.retryDelayMs = retryDelayMs
     this.listeners = new Set()
+    this.backgroundTasks = new Map()
     this.data = {}
     this.startPromise = null
     this.state = {
@@ -128,8 +129,10 @@ export class YunBootManager {
 
   async runPipeline() {
     while (true) {
+      this.launchReadyOptionalTasks()
+
       const ready = this.state.tasks.filter((task) => {
-        if (task.status !== 'pending') return false
+        if (task.status !== 'pending' || !task.blocking) return false
         const definition = this.definitions.get(task.id)
         return definition.dependencies.every((id) => {
           const dependency = this.findTask(id)
@@ -141,20 +144,25 @@ export class YunBootManager {
       await Promise.all(ready.map((task) => this.runTask(task.id)))
     }
 
-    const blockingFailure = this.state.tasks.some((task) => task.blocking && task.status !== 'success')
-    const pendingTasks = this.state.tasks.filter((task) => task.status === 'pending')
-    if (pendingTasks.length) {
-      pendingTasks.forEach((task) => {
+    const pendingBlockingTasks = this.state.tasks.filter((task) => task.blocking && task.status === 'pending')
+    if (pendingBlockingTasks.length) {
+      pendingBlockingTasks.forEach((task) => {
         this.updateTask(task.id, {
-          status: task.blocking ? 'failed' : 'warning',
+          status: 'failed',
           error: 'A required boot dependency did not complete',
           endTime: now(),
         })
       })
     }
 
+    this.launchReadyOptionalTasks()
+    // Give immediately fulfilled/rejected optional work a chance to publish
+    // its terminal status without ever waiting for genuinely pending work.
+    await Promise.resolve()
+    await Promise.resolve()
+
     const completedAt = now()
-    const failed = blockingFailure || this.state.tasks.some((task) => task.blocking && task.status === 'failed')
+    const failed = this.state.tasks.some((task) => task.blocking && task.status !== 'success')
     const degraded = !failed && this.state.tasks.some((task) => task.status === 'warning')
     this.updateState({
       status: failed ? 'failed' : degraded ? 'degraded' : 'ready',
@@ -162,7 +170,35 @@ export class YunBootManager {
       completedAt,
       durationMs: Math.max(0, completedAt - this.state.startedAt),
     })
+    this.launchReadyOptionalTasks()
     return this.state
+  }
+
+  launchReadyOptionalTasks() {
+    const ready = this.state.tasks.filter((task) => {
+      if (task.blocking || task.status !== 'pending' || this.backgroundTasks.has(task.id)) return false
+      const definition = this.definitions.get(task.id)
+      return definition.dependencies.every((id) => {
+        const dependency = this.findTask(id)
+        return dependency?.status === 'success' || dependency?.status === 'warning'
+      })
+    })
+
+    ready.forEach((task) => {
+      const running = this.runTask(task.id).finally(() => {
+        this.backgroundTasks.delete(task.id)
+        this.refreshReadyStatus()
+        this.launchReadyOptionalTasks()
+      })
+      this.backgroundTasks.set(task.id, running)
+    })
+  }
+
+  refreshReadyStatus() {
+    if (this.state.status !== 'ready' && this.state.status !== 'degraded') return
+    const degraded = this.state.tasks.some((task) => task.status === 'warning')
+    const status = degraded ? 'degraded' : 'ready'
+    if (status !== this.state.status) this.updateState({ status })
   }
 
   async runTask(id) {
