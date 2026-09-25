@@ -1,51 +1,34 @@
-# Yun Companion Project Progress
+# Yun Music Project Progress — 2026-09-25
 
-Last updated: 2026-09-14
+This is the public, repository-safe entry point for reviewing the current React/Vite and Electron music app.
 
-This file is the repository-safe progress entry point for ChatGPT and other
-review tools. It must never contain credentials, cookies, account identifiers,
-raw listening events, private memory contents, or machine-specific paths.
+## Read the correct branch
 
-## Repository state
+- Current app branch: [`feature/netease-capability-p2`](https://github.com/Zhu4143/yun-backend/tree/feature/netease-capability-p2)
+- Latest app source commit at this checkpoint: [`f955332`](https://github.com/Zhu4143/yun-backend/commit/f95533244e63fa267605e8441bd9b61a3a9474f7)
+- The repository's default `main` branch contains an older backend deployment with unrelated Git history. Reading `main` or requesting this document without its branch name will not show the current app.
 
-- Active branch: `feature/netease-capability-p2`
-- Unified Boot base commit: `f34417d3632f6c8b364dd56f0eef9256666b698e`
-- Sync state: local Boot fixes are verified but must still be reviewed and pushed.
+Open this file with the branch in the URL: [`docs/PROJECT_PROGRESS.md` on the current app branch](https://github.com/Zhu4143/yun-backend/blob/feature/netease-capability-p2/docs/PROJECT_PROGRESS.md).
 
-## Current focus
+## Current implementation
 
-The unified Boot / Self Check system now releases the main UI as soon as every
-blocking task succeeds. Optional tasks continue and retry in the background,
-then move diagnostics to `degraded` only when their retries are exhausted.
+- React/Vite UI, Node local backend, and Electron desktop shell.
+- Local and NetEase playback with a canonical player queue. Sequence mode advances through the selected playlist; AI recommendations enter the next-track queue only in AI recommendation and companion continuation modes.
+- Cover-reactive lyrics and metal visuals, smooth lyric transitions, adjustable Three.js lyric appearance, and beat-responsive highlights.
+- Companion transitions use varied-length spoken remarks with music ducking and speech fade. Audio stalls and media errors have bounded recovery logic.
+- Desktop startup checks both backend API health and a usable app page before reusing a running service.
 
-NetEase startup now loads every playlist track page, validates each playlist's
-declared `trackCount`, rejects missing/duplicate/invalid tracks, and stores only
-versioned caches whose nested track collections are complete. The backend no
-longer mistakes `playlist_track_all` page counts for collection totals or repeats
-remote login-status checks for every track page.
+## Verification at this checkpoint
 
-The two-hand convergence gesture improvement is verified locally but remains
-uncommitted together with other isolated working-tree changes.
+- Boot tests: 26/26 passed.
+- Desktop tests: 6/6 passed.
+- Player tests: 53/53 passed, including sequence playback with a populated AI queue.
+- Service tests: 131/131 passed.
+- Visual and gesture tests: 8/8 each passed.
+- Additional lyric, metal, companion, and crossfade tests: 24/24 passed.
+- Vite production build passed. Full ESLint still reports four `react-hooks/set-state-in-effect` errors in `src/App.jsx`; they have not been fixed or waived.
+- Browser smoke test: in sequence mode, Next advanced from local-library track 35 to adjacent track 36. This does not establish live NetEase playback for every track.
 
-## Latest verification
+## Scope and privacy
 
-- Current 1.0.6 worktree `npm run verify`: PASS
-- Windows NSIS installer 1.0.6: built and package contents verified locally
-- Boot tests: 24/24 PASS
-- Deterministic conversation flow: 27/27 PASS
-- Real browser Boot: `ready`, 100%, 4.14 seconds
-- Real NetEase Boot load: 914 tracks fully checked before the main UI mounted
-- Slowest Boot tasks: playlists 3.95s, cover preload 0.63s, local library 0.41s
-
-## Privacy boundary
-
-Only committed source code, tests, and sanitized documentation belong in
-GitHub. Local model weights, virtual environments, generated installers,
-screenshots, NetEase login material, personal voice samples, runtime memory,
-and raw listening data must remain local and Git-ignored.
-
-## Reading instructions
-
-Treat the latest pushed version of this file and the referenced commit as the
-source of truth. A local-only change cannot be observed from ChatGPT's GitHub
-connection until it is reviewed, committed, and pushed.
+This branch contains the committed app source and tests. Local song metadata changes, personal memory, login material, model weights, voice samples, generated installers, historical drafts, and experiment files were not uploaded as part of this checkpoint. The previously built installer predates the latest playback fix; no new installer or GitHub release was published here.
