@@ -119,7 +119,10 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
       {
         id: 'LOAD_PLAYLISTS',
         label: '同步网易云歌单',
-        blocking: true,
+        // Full pagination can involve hundreds of remote tracks. The first
+        // provider page is already available from INIT_MUSIC_PROVIDER, so this
+        // refresh must never hold the entire application behind the boot gate.
+        blocking: false,
         weight: 25,
         dependencies: ['INIT_MUSIC_PROVIDER'],
         retries: 2,
@@ -185,7 +188,7 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
         label: '初始化播放器核心',
         blocking: true,
         weight: 10,
-        dependencies: ['LOAD_LIBRARY', 'LOAD_PLAYLISTS'],
+        dependencies: ['LOAD_LIBRARY'],
         run: async () => createYunLegacyPlayerAdapter(),
       },
       {

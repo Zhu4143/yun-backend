@@ -115,27 +115,13 @@ body {
 }
 
 .app.immersive-mode .floating-lyrics {
-  top: 5%;
+  top: calc(5% + var(--lyric-user-shift-y, 0%));
   height: 40%;
   z-index: 4;
   --lyric-left: 2.5%;
-  --lyric-width: min(700px, 34vw);
-  --lyric-row-height: 58px;
-  --lyric-perspective: 760px;
-  --lyric-plane-rotate-y: -5deg;
-  --lyric-plane-rotate-z: 1deg;
-  --lyric-plane-skew-y: -2deg;
 }
 
-.app.immersive-mode .floating-lyrics__shade {
-  opacity: 0.34;
-}
-
-.app.immersive-mode .floating-lyrics__line {
-  font-size: clamp(16px, 1.35vw, 25px);
-}
-
-.app.immersive-mode .floating-lyrics__line.is-active {
+.app.immersive-mode .floating-lyrics__flow-anchor {
   font-size: clamp(25px, 2.15vw, 40px);
 }
 
@@ -5074,30 +5060,37 @@ button {
 /* Right-edge playlist drawer */
 .library-edge-trigger {
   position: fixed;
-  top: 8%;
+  top: 50%;
   right: 0;
   z-index: 18;
   display: grid;
-  place-items: center end;
-  /* Closed drawer must not form an invisible click wall over the page. The
-     global edge detector opens it; this handle only accepts input once open. */
-  width: 14px;
-  height: 84%;
-  padding-right: 8px;
-  pointer-events: none;
+  place-items: center;
+  width: 18px;
+  height: 132px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-right: 0;
+  border-radius: 999px 0 0 999px;
+  background: transparent;
+  opacity: 1;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity 120ms ease;
 }
 
 .library-edge-trigger.is-active {
-  pointer-events: auto;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .library-edge-trigger span {
-  width: 5px;
+  width: 7px;
   height: 112px;
   border-radius: 999px;
   background: linear-gradient(180deg, transparent, var(--song-secondary), var(--song-primary), transparent);
   box-shadow: 0 0 12px color-mix(in srgb, var(--song-secondary) 52%, transparent);
-  opacity: 0.48;
+  opacity: 0.24;
   transform: scaleY(0.72);
   transition: opacity 220ms ease, transform 360ms ease, filter 300ms ease;
 }
@@ -5119,6 +5112,25 @@ button {
   transform: translateX(-50%);
   height: 18px;
   pointer-events: auto;
+}
+
+.top-controls-edge-trigger span {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 112px;
+  height: 8px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-top: 0;
+  border-radius: 0 0 999px 999px;
+  background: transparent;
+  opacity: 0.72;
+  transition: opacity 160ms ease;
+}
+
+.top-controls-edge-trigger.is-active span {
+  opacity: 0;
 }
 
 .app .top-controls-card {
@@ -5439,12 +5451,11 @@ button {
   backdrop-filter: none !important;
 }
 
-/* The voice panel is an extension of the top-controls glass volume, not a
-   second floating card. The WebGL glass pass sees both shells at the same
-   strength; these DOM rules only provide the connected geometry and edge. */
+/* The three settings panels are independent WebGL morph targets below the
+   top controls. They must not overlap the 164px shell that ends at y=216. */
 @media (min-width: 600px) {
   .app:has(.voice-popover.is-open, .memory-settings-panel.is-open, .mountain-tuning-panel.is-open) .top-controls-card {
-    border-radius: var(--top-controls-radius) var(--top-controls-radius) 0 0;
+    border-radius: var(--top-controls-radius);
   }
 
   .app:has(.voice-popover.is-open, .memory-settings-panel.is-open, .mountain-tuning-panel.is-open) .top-controls-card > .glass-specular-highlight--opposite {
@@ -5458,14 +5469,14 @@ button {
   .app .mountain-tuning-panel,
   .app .mountain-tuning-panel.is-open {
     position: fixed !important;
-    top: 198px !important;
+    top: 228px !important;
     right: auto !important;
     left: 50% !important;
     width: min(540px, calc(100vw - 48px)) !important;
     margin: 0 !important;
     padding: 18px 20px 20px !important;
     border: 1px solid rgba(255, 255, 255, 0.16) !important;
-    border-top: 0 !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.16) !important;
     border-radius: 22px !important;
     background:
       linear-gradient(180deg, rgba(12, 18, 28, 0.12), rgba(12, 18, 28, 0.22)),
@@ -5478,6 +5489,7 @@ button {
       0 18px 44px rgba(2, 6, 12, 0.2) !important;
     backdrop-filter: blur(8px) saturate(110%) brightness(0.92) !important;
     -webkit-backdrop-filter: blur(8px) saturate(110%) brightness(0.92) !important;
+    max-height: calc(100dvh - 246px) !important;
     overflow: hidden auto !important;
     transform: translateX(-50%) !important;
     clip-path: inset(0 0 calc(100% - 2px) 0 round 22px);
@@ -5601,19 +5613,17 @@ button {
     color: rgba(255, 255, 255, 0.42);
   }
 
-  /* Mountain tuning is content inside the top glass body. Expanding the
-     parent shell, rather than showing another card, makes it read like a
-     desktop panel being pulled longer from its lower edge. */
+  /* Mountain uses the same standalone target geometry as voice and memory. */
   .app:has(.mountain-tuning-panel.is-open) .top-controls-card {
-    height: min(596px, calc(100dvh - 72px));
+    height: 164px;
     border-radius: var(--top-controls-radius);
   }
 
   .app .mountain-tuning-panel,
   .app .mountain-tuning-panel.is-open {
-    top: 216px !important;
+    top: 228px !important;
     height: auto !important;
-    max-height: min(356px, calc(100dvh - 288px)) !important;
+    max-height: min(356px, calc(100dvh - 246px)) !important;
     padding: 16px 20px 20px !important;
     border: 0 !important;
     border-radius: 0 !important;
@@ -6034,9 +6044,211 @@ button {
   color: rgba(255, 255, 255, 0.96);
 }
 
+.library-nav-button-account {
+  font-size: 12px;
+}
+
+.netease-login-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(1, 5, 7, 0.68);
+  backdrop-filter: blur(18px) saturate(112%);
+  -webkit-backdrop-filter: blur(18px) saturate(112%);
+}
+
+.netease-login-dialog {
+  width: min(390px, calc(100vw - 48px));
+  animation: netease-login-dialog-in 260ms cubic-bezier(0.2, 0.72, 0.18, 1) both;
+}
+
+.netease-login-dialog .yun-login-shell,
+.netease-login-dialog .yun-login-shell.is-open {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  transform: none;
+  opacity: 1;
+  filter: none;
+  visibility: visible;
+  pointer-events: auto;
+  transition: none;
+}
+
+.netease-login-dialog .yun-login-glass-wrap {
+  height: min(480px, calc(100dvh - 48px));
+}
+
+@keyframes netease-login-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .library-nav-button:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+/* Liquid Ore WebGL material -------------------------------------------------
+   Layout still belongs to the existing DOM. Paint, refraction, chromatic
+   edges, hover light and morph sweep are produced by LiquidGlassOrbPass. */
+.app {
+  --liquid-ore-edge: rgba(255, 255, 255, 0.18);
+  --liquid-ore-edge-strong: rgba(255, 248, 237, 0.34);
+  --liquid-ore-inset: rgba(255, 255, 255, 0.13);
+}
+
+.app button:not(.settings-panel-backdrop) {
+  border-color: var(--liquid-ore-edge) !important;
+  background: transparent !important;
+  box-shadow:
+    inset 0 1px 0 var(--liquid-ore-inset),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.10) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app button:not(.settings-panel-backdrop):hover:not(:disabled),
+.app button:not(.settings-panel-backdrop)[aria-expanded='true'],
+.app button:not(.settings-panel-backdrop)[aria-pressed='true'],
+.app button:not(.settings-panel-backdrop).active,
+.app button:not(.settings-panel-backdrop).is-active,
+.app button:not(.settings-panel-backdrop).is-on {
+  border-color: var(--liquid-ore-edge-strong) !important;
+  background: transparent !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 0 12px color-mix(in srgb, var(--song-secondary) 10%, transparent) !important;
+}
+
+.app :is(
+  .status-card,
+  .top-controls-card,
+  .player-card,
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded,
+  .chat-panel,
+  .memory-strip,
+  .local-library-drawer,
+  .ai-popover,
+  .moss-command-panel,
+  .yun-login-panel,
+  .voice-pickup-glass
+) {
+  border-color: var(--liquid-ore-edge) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* liquid-glass-react remains as a layout/content wrapper only. Its SVG/CSS
+   backdrop would otherwise refract the same pixels a second time. */
+.app :is(
+  .status-card,
+  .player-card,
+  .chat-panel,
+  .memory-strip,
+  .ai-mode-expanded,
+  .yun-login-panel,
+  .voice-pickup-glass
+) > .glass {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.app :is(
+  .status-card,
+  .player-card,
+  .chat-panel,
+  .memory-strip,
+  .ai-mode-expanded,
+  .yun-login-panel,
+  .voice-pickup-glass
+) .glass__warp {
+  display: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Nested controls are surface details of one outer optical body. Keeping them
+   transparent prevents aligned children from becoming duplicate lenses. */
+.app :is(
+  .memory-card,
+  .chat-bubble,
+  .chat-input,
+  .voice-option,
+  .voice-custom input,
+  .library-account-strip,
+  .library-source-tab,
+  .library-search,
+  .library-scroll-track,
+  .library-playlist-row,
+  .library-up-next,
+  .library-ai-candidates,
+  .ai-reason-card,
+  .ai-queue-item,
+  .ai-preference-chips span
+) {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: transparent !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.liquid-morph-layer {
+  opacity: 1 !important;
+  border: 1px solid rgba(255, 255, 255, calc(0.08 + var(--liquid-morph-energy, 0) * 0.18)) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  transition: none !important;
+  contain: layout paint style;
+  will-change: left, top, width, height, border-radius;
+}
+
+.liquid-morph-layer::before,
+.liquid-morph-layer::after {
+  display: none !important;
+}
+
+.app .top-controls-card.is-surface-morph-hidden,
+.app.immersive-mode .player-card.is-surface-morph-hidden {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.panel-content-hidden :is(
+  .local-library-drawer,
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded
+).is-open {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-morph-layer {
+    display: none !important;
+  }
 }
 
 .library-import-button {
@@ -6419,4 +6631,305 @@ button {
   }
 
   .app .library-header-actions { max-width: 190px; }
+}
+
+/* Final paint-ownership lock. This intentionally sits after every legacy
+   component rule so the WebGL optical field remains the only glass material;
+   DOM styles retain geometry, typography and thin interaction outlines. */
+.app.app.app.app button:not(.settings-panel-backdrop) {
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app.app.app.app.app.app :is(
+  .status-card,
+  .top-controls-card,
+  .player-card,
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded,
+  .chat-panel,
+  .memory-strip,
+  .local-library-drawer,
+  .ai-popover,
+  .moss-command-panel,
+  .yun-login-panel,
+  .voice-pickup-glass
+) {
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app.app.app.app.app.app :is(
+  .status-card,
+  .top-controls-card,
+  .player-card,
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded,
+  .chat-panel,
+  .memory-strip,
+  .local-library-drawer,
+  .ai-popover,
+  .moss-command-panel,
+  .yun-login-panel,
+  .voice-pickup-glass
+) > :is(.glass-edge-highlight, .glass-specular-highlight) {
+  display: none !important;
+}
+
+.app.app.app.app.app.app :is(
+  .status-card,
+  .player-card,
+  .chat-panel,
+  .memory-strip,
+  .ai-mode-expanded,
+  .yun-login-panel,
+  .voice-pickup-glass
+) :is(.glass, .glass__warp) {
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app.app.app.app.app.app :is(
+  .status-card,
+  .player-card,
+  .chat-panel,
+  .memory-strip,
+  .ai-mode-expanded,
+  .yun-login-panel,
+  .voice-pickup-glass
+) .glass__warp {
+  display: none !important;
+  filter: none !important;
+}
+
+.app.app.app.app.app.app :is(
+  .memory-card,
+  .chat-bubble,
+  .chat-input,
+  .voice-option,
+  .voice-custom input,
+  .library-account-strip,
+  .library-source-tab,
+  .library-search,
+  .library-scroll-track,
+  .library-playlist-row,
+  .library-up-next,
+  .library-ai-candidates,
+  .ai-reason-card,
+  .ai-queue-item,
+  .ai-preference-chips span
+) {
+  background: transparent !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app.app.app.app.app.app :is(
+  .status-card,
+  .top-controls-card,
+  .player-card,
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded,
+  .chat-panel,
+  .memory-strip,
+  .local-library-drawer,
+  .ai-popover,
+  .moss-command-panel,
+  .yun-login-panel,
+  .voice-pickup-glass
+)::before,
+.app.app.app.app.app.app :is(
+  .status-card,
+  .top-controls-card,
+  .player-card,
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded,
+  .chat-panel,
+  .memory-strip,
+  .local-library-drawer,
+  .ai-popover,
+  .moss-command-panel,
+  .yun-login-panel,
+  .voice-pickup-glass
+)::after {
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 0 !important;
+}
+
+/* The source spring/morph owns panel geometry changes. */
+.app.app.app.app.app.app :is(
+  .voice-popover,
+  .memory-settings-panel,
+  .mountain-tuning-panel,
+  .ai-mode-expanded,
+  .local-library-drawer
+) {
+  clip-path: none !important;
+  transition: none !important;
+}
+
+.app .liquid-ore-settings {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 18px;
+  padding: 14px 0 16px;
+  border-top: 1px solid rgba(255, 244, 217, 0.12);
+  border-bottom: 1px solid rgba(255, 244, 217, 0.12);
+}
+
+.app .liquid-ore-settings-heading {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.app .liquid-ore-settings-group {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  margin: 0;
+  padding: 9px 0 1px;
+  border: 0;
+}
+
+.app .liquid-ore-settings-group legend {
+  padding: 0;
+  color: rgba(255, 244, 224, 0.48);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.app .liquid-ore-settings-control {
+  display: grid;
+  gap: 5px;
+}
+
+.app .liquid-ore-settings-control > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(255, 247, 233, 0.72);
+  font-size: 11px;
+}
+
+.app .liquid-ore-settings-control code {
+  color: rgba(255, 231, 198, 0.56);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10px;
+}
+
+.app .liquid-ore-settings-control input[type='range'] {
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  accent-color: #c98f6a;
+  cursor: pointer;
+}
+
+.app .liquid-ore-settings-control input[type='color'] {
+  width: 100%;
+  height: 30px;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid rgba(255, 236, 204, 0.2);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+}
+
+.app .liquid-ore-settings-control input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.app .liquid-ore-settings-control input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: 6px;
+}
+
+.app .liquid-ore-settings-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.app .liquid-ore-settings-actions button {
+  min-height: 34px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.app .liquid-ore-settings-actions .liquid-ore-settings-save {
+  border-color: rgba(255, 223, 178, 0.46) !important;
+  color: rgba(255, 242, 220, 0.96);
+}
+
+.app .liquid-ore-settings-status {
+  min-height: 16px;
+  color: rgba(255, 232, 199, 0.54);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+/* The outer WebGL glass body must stay clipped, but its DOM content is the
+   actual settings scroller. The generic glass-child clipping rule above used
+   to force this node back to overflow:hidden, leaving ~3,000px of controls
+   unreachable by wheel or touch. */
+.app .memory-settings-panel.is-open > .memory-settings-content {
+  min-height: 0;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 226, 190, 0.52) rgba(255, 255, 255, 0.055);
+  touch-action: pan-y;
+}
+
+.app .memory-settings-panel.is-open > .memory-settings-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.app .memory-settings-panel.is-open > .memory-settings-content::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.app .memory-settings-panel.is-open > .memory-settings-content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 226, 190, 0.52);
+  background-clip: padding-box;
+}
+
+@media (max-width: 560px) {
+  .app .liquid-ore-settings-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .app .liquid-ore-settings-actions .liquid-ore-settings-save {
+    grid-column: 1 / -1;
+  }
 }

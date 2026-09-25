@@ -6,6 +6,8 @@ export async function requestSongReaction({
   personaMode = 'warm',
   recentChat = [],
   recentAiReplies = [],
+  previousSong = null,
+  announcementLength = 'medium',
 }) {
   const response = await fetch('/api/song-reaction', {
     method: 'POST',
@@ -27,6 +29,13 @@ export async function requestSongReaction({
       responseMode,
       recentChat: recentChat.slice(-6),
       recentAiReplies: recentAiReplies.slice(-5),
+      previousSong: previousSong ? {
+        title: previousSong.title || '',
+        artist: previousSong.artist || '',
+        moodTags: previousSong.moodTags || [],
+        energy: previousSong.energy ?? 50,
+      } : null,
+      announcementLength,
     }),
   })
 

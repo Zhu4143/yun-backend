@@ -23,6 +23,7 @@ class FakeAudioParam {
   constructor() {
     this.value = 1
     this.cancelCalls = []
+    this.curveCalls = []
     this.valueCalls = []
     this.targetCalls = []
   }
@@ -39,6 +40,11 @@ class FakeAudioParam {
   setTargetAtTime(value, time, timeConstant) {
     this.value = value
     this.targetCalls.push({ value, time, timeConstant })
+  }
+
+  setValueCurveAtTime(values, time, duration) {
+    this.value = values.at(-1)
+    this.curveCalls.push({ values: [...values], time, duration })
   }
 }
 
@@ -183,7 +189,7 @@ test('one graph is shared and a deck is bound to MediaElementSource only once', 
   const context = contexts[0]
 
   assert.equal(contexts.length, 1)
-  assert.equal(context.gains.length, 2)
+  assert.equal(context.gains.length, 4)
   assert.equal(context.sources.length, 2)
   assert.equal(context.analysers.length, 2)
   assert.equal(firstActive.entry.source, secondActive.entry.source)
@@ -230,6 +236,37 @@ test('user volume stays on deck volume while ducking stays on musicGain', async 
     timeConstant: 0.1,
   })
   assert.equal(engine.getDuckingFactor(), 0.25)
+})
+
+test('crossfade envelopes are scheduled on per-deck Web Audio gains', () => {
+  const { engine } = makeHarness()
+  const active = engine.ensureActiveDeck()
+  const standby = engine.ensureStandbyDeck()
+  engine.setUserVolume(0.65)
+
+  const scheduled = engine.scheduleCrossfadeEnvelopes({
+    fromDeck: active,
+    toDeck: standby,
+    durationMs: 7000,
+    fadeOutCurve: new Float32Array([1, Math.SQRT1_2, 0]),
+    fadeInCurve: new Float32Array([0.03, 0.7, 1]),
+  })
+  const fromGain = engine.ensureGraphFor(active).entry.deckGain.gain
+  const toGain = engine.ensureGraphFor(standby).entry.deckGain.gain
+
+  assert.equal(scheduled, true)
+  assert.equal(active.volume, 0.65)
+  assert.equal(standby.volume, 0.65)
+  assert.equal(fromGain.curveCalls.at(-1).time, 12)
+  assert.equal(fromGain.curveCalls.at(-1).duration, 7)
+  assert.equal(fromGain.curveCalls.at(-1).values[0], 1)
+  assert.ok(Math.abs(fromGain.curveCalls.at(-1).values[1] - Math.SQRT1_2) < 1e-6)
+  assert.equal(fromGain.curveCalls.at(-1).values[2], 0)
+  assert.equal(toGain.curveCalls.at(-1).time, 12)
+  assert.equal(toGain.curveCalls.at(-1).duration, 7)
+  assert.ok(Math.abs(toGain.curveCalls.at(-1).values[0] - 0.03) < 1e-6)
+  assert.ok(Math.abs(toGain.curveCalls.at(-1).values[1] - 0.7) < 1e-6)
+  assert.equal(toGain.curveCalls.at(-1).values[2], 1)
 })
 
 test('resumeOutput resumes the one suspended main AudioContext and restores ducking gain', async () => {

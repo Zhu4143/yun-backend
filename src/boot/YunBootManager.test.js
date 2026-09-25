@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { YunBootManager } from './YunBootManager.js'
+import { createYunBootManager } from './createYunBootManager.js'
 
 function deferred() {
   let resolve
@@ -97,6 +98,15 @@ test('optional tasks retry in the background without delaying application readin
 
   assert.equal(manager.getState().status, 'ready')
   assert.equal(attempts, 2)
+})
+
+test('full NetEase playlist synchronization is outside the startup critical path', () => {
+  const manager = createYunBootManager({
+    storage: { getItem: () => null, setItem: () => {} },
+  })
+
+  assert.equal(manager.definitions.get('LOAD_PLAYLISTS').blocking, false)
+  assert.deepEqual(manager.definitions.get('INIT_PLAYER_CORE').dependencies, ['LOAD_LIBRARY'])
 })
 
 test('a timed out task retries and can complete boot', async () => {

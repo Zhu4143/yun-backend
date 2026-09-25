@@ -6,6 +6,7 @@ import { routeChatIntent } from '../services/chatIntentRouter'
 import { formatYunChatErrorReply } from '../services/yunChatReply.js'
 import { createCompanionPlaybackPlan, executePlaybackPlan } from '../services/radioEngine'
 import { createCommandObserver } from '../telemetry/commandObserver'
+import { chooseCompanionAnnouncementLength } from '../services/companionAnnouncement'
 
 const observedRouteChatIntent = createCommandObserver(routeChatIntent)
 
@@ -143,6 +144,7 @@ export function useYunChat({
   setResponseMode = null,
   voice = null,
   responseMode = 'companion',
+  playbackMode = 'sequence',
   personaMode = 'warm',
   musicSource = 'local',
   memory = null,
@@ -436,8 +438,10 @@ export function useYunChat({
     }
   }
 
-  const reactToSongChange = useCallback(async (song, trigger = 'play') => {
-    if (!song || responseMode !== 'podcast') {
+  const reactToSongChange = useCallback(async (song, trigger = 'play', previousSong = null) => {
+    const companionTransition = trigger === 'companion_transition' && playbackMode === 'companion_continue'
+    const reactionMode = companionTransition ? 'podcast' : responseMode
+    if (!song || reactionMode !== 'podcast') {
       return false
     }
 
@@ -450,13 +454,15 @@ export function useYunChat({
         .filter((message) => message.role === 'assistant')
         .slice(-5)
         .map((message) => message.content)
-      const cacheKey = String(song.id || `${song.title}-${song.artist}`)
+      const cacheKey = `${trigger}:${String(previousSong?.id || '')}:${String(song.id || `${song.title}-${song.artist}`)}`
       const cachedResponse = prefetchedSongReactionsRef.current.get(cacheKey)
       prefetchedSongReactionsRef.current.delete(cacheKey)
       const response = cachedResponse || await requestSongReaction({
         song,
         trigger,
-        responseMode,
+        responseMode: reactionMode,
+        previousSong,
+        announcementLength: companionTransition ? chooseCompanionAnnouncementLength() : 'medium',
         currentMood: '平静',
         personaMode,
         recentChat: chatHistory.slice(-6),
@@ -475,22 +481,30 @@ export function useYunChat({
         createMessage('assistant', reply),
       ])
 
-      if (response.shouldSpeak !== false && shouldSpeakReply(reply, responseMode)) {
+      if (response.shouldSpeak !== false && shouldSpeakReply(reply, reactionMode)) {
         // Radio transitions are one-way announcements. Do not arm the
         // microphone interruption detector here: it can hear the speakers and
         // mistakenly start a companion call on every automatic track change.
-        voice?.speakText?.(reply, { allowBargeIn: false })
+        voice?.speakText?.(reply, {
+          allowBargeIn: false,
+          force: companionTransition,
+          preDuck: companionTransition,
+          duckingVolume: companionTransition ? 0.16 : undefined,
+          voiceBoost: companionTransition,
+        })
       }
 
       return true
     } catch {
       return false
     }
-  }, [chatHistory, personaMode, responseMode, voice])
+  }, [chatHistory, personaMode, playbackMode, responseMode, voice])
 
-  const prefetchSongReaction = useCallback(async (song, trigger = 'auto_next') => {
-    if (!song || responseMode !== 'podcast') return false
-    const cacheKey = String(song.id || `${song.title}-${song.artist}`)
+  const prefetchSongReaction = useCallback(async (song, trigger = 'auto_next', previousSong = null) => {
+    const companionTransition = trigger === 'companion_transition' && playbackMode === 'companion_continue'
+    const reactionMode = companionTransition ? 'podcast' : responseMode
+    if (!song || reactionMode !== 'podcast') return false
+    const cacheKey = `${trigger}:${String(previousSong?.id || '')}:${String(song.id || `${song.title}-${song.artist}`)}`
     if (prefetchedSongReactionsRef.current.has(cacheKey)) return true
 
     try {
@@ -501,7 +515,9 @@ export function useYunChat({
       const response = await requestSongReaction({
         song,
         trigger,
-        responseMode,
+        responseMode: reactionMode,
+        previousSong,
+        announcementLength: companionTransition ? chooseCompanionAnnouncementLength() : 'medium',
         currentMood: '平静',
         personaMode,
         recentChat: chatHistory.slice(-6),
@@ -516,7 +532,7 @@ export function useYunChat({
     } catch {
       return false
     }
-  }, [chatHistory, personaMode, responseMode])
+  }, [chatHistory, personaMode, playbackMode, responseMode])
 
   const resolveSkillCandidate = useCallback(async (candidateId, decision) => {
     if (!agent?.decideSkillCandidate) return { ok: false }

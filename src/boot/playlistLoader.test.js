@@ -80,6 +80,19 @@ test('all playlist pages complete with truthful loaded and expected counts', asy
   assert.deepEqual(progress.at(-1), { loadedCount: 3, expectedCount: 3, progress: 100 })
 })
 
+test('a live collection may grow while pagination is in progress', async () => {
+  const result = await loadPaginatedCollection({
+    pageSize: 2,
+    fetchPage: async ({ offset }) => offset === 0
+      ? { items: [{ id: '1' }, { id: '2' }], total: 3, hasMore: true }
+      : { items: [{ id: '3' }, { id: '4' }], total: 4, hasMore: false },
+  })
+
+  assert.deepEqual(result.items.map((item) => item.id), ['1', '2', '3', '4'])
+  assert.equal(result.expectedCount, 4)
+  assert.equal(result.loadedCount, 4)
+})
+
 test('every playlist waits for its complete paginated track collection', async () => {
   const finalPage = deferred()
   let settled = false
@@ -123,11 +136,15 @@ test('every playlist waits for its complete paginated track collection', async (
   assert.deepEqual(result.playlists[1].tracks, [])
 })
 
-test('playlist metadata track count mismatch cannot be marked complete', async () => {
-  await assert.rejects(() => loadCompletePlaylistTracks({
+test('playlist track metadata follows the provider total when the collection changed', async () => {
+  const result = await loadCompletePlaylistTracks({
     playlists: [{ id: 'liked', name: '我喜欢的音乐', trackCount: 2 }],
     fetchPage: async () => ({ items: [{ id: 'a', title: 'A' }], total: 1, hasMore: false }),
-  }), /total changed.*2 to 1|expected 2.*reported 1|expected 2.*loaded 1/i)
+  })
+
+  assert.equal(result.loadedTrackCount, 1)
+  assert.equal(result.expectedTrackCount, 1)
+  assert.equal(result.playlists[0].trackCount, 1)
 })
 
 test('duplicate playlist ids fail integrity validation', async () => {

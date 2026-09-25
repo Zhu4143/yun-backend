@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { synthesizeSpeech } from '../api/ttsApi'
 import { cancelDucking, startDucking, stopDucking } from '../services/audioDucking'
 import { getSharedSpeakerReferenceBuffer } from '../voice/audio/EchoCanceller.js'
+import { fadePcm16WavTail } from '../services/speechFade'
 
 const TTS_ENABLED_KEY = 'yun_tts_enabled'
 const TTS_VOICE_KEY = 'yun_tts_voice'
@@ -191,15 +192,15 @@ export function useYunVoice({
     musicVolumeBeforeSpeechRef.current = null
   }, [musicAudioRef, musicDuckingController])
 
-  const acquireMusicDuck = useCallback(() => {
+  const acquireMusicDuck = useCallback((targetVolume = settings.duckingVolume) => {
     if (musicDuckingController?.acquire) {
       if (activeDuckTokenRef.current) musicDuckingController.release(activeDuckTokenRef.current, 0.03)
       const token = `tts-${++duckSequenceRef.current}`
       activeDuckTokenRef.current = token
-      return musicDuckingController.acquire(token, settings.duckingVolume, 0.08)
+      return musicDuckingController.acquire(token, targetVolume, 0.08)
     }
     rememberMusicVolume()
-    return startDucking(musicAudioRef?.current, { targetVolume: settings.duckingVolume })
+    return startDucking(musicAudioRef?.current, { targetVolume })
   }, [musicAudioRef, musicDuckingController, rememberMusicVolume, settings.duckingVolume])
 
   const releaseMusicDuck = useCallback(({ forceRestore = false } = {}) => {
@@ -281,12 +282,14 @@ export function useYunVoice({
     const cleanText = cleanTextForSpeech(text)
     const force = Boolean(options.force)
     const allowBargeIn = Boolean(options.allowBargeIn)
+    const spokenVolume = options.voiceBoost ? Math.max(settings.volume, 1.15) : settings.volume
 
     if (!cleanText || (!force && !settings.enabled)) {
       return false
     }
 
     stopSpeaking()
+    if (options.preDuck) acquireMusicDuck(options.duckingVolume || settings.duckingVolume)
     const token = tokenRef.current
     setIsPreparingSpeech(true)
     setIsSpeechInterruptible(allowBargeIn)
@@ -297,7 +300,7 @@ export function useYunVoice({
         text: cleanText,
         voice: settings.voice || DEFAULT_VOICE,
         speed: settings.speed,
-        volume: settings.volume,
+        volume: spokenVolume,
       })
 
       if (token !== tokenRef.current) {
@@ -313,6 +316,7 @@ export function useYunVoice({
         nativePlaybackTimerRef.current = 0
         nativePlaybackEndListenerRef.current?.()
         nativePlaybackEndListenerRef.current = null
+        if (speechAudioRef.current) speechAudioRef.current.ontimeupdate = null
         window.cancelAnimationFrame(referenceAnimationRef.current)
         referenceAnimationRef.current = 0
         referenceAudioBufferRef.current = null
@@ -321,7 +325,8 @@ export function useYunVoice({
         setIsPreparingSpeech(false)
         setIsSpeechInterruptible(false)
         setLastSpeechEndedAt(Date.now())
-        releaseMusicDuck({ forceRestore: true })
+        releaseMusicDuck()
+        void musicDuckingController?.recoverOutput?.()
         cleanupObjectUrl()
       }
 
@@ -330,9 +335,10 @@ export function useYunVoice({
       // than also playing it through Chromium.
       const nativeHealth = await fetch(`${NATIVE_VOICE_URL}/health`).then((response) => response.ok ? response.json() : null).catch(() => null)
       if (nativeHealth?.apm?.loaded && nativeHealth?.mic?.captureRunning) {
-        const playback = await fetch(`${NATIVE_VOICE_URL}/playback`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob })
+        const fadedSpeech = new Blob([fadePcm16WavTail(encoded)], { type: 'audio/wav' })
+        const playback = await fetch(`${NATIVE_VOICE_URL}/playback`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: fadedSpeech })
         if (playback.ok) {
-          acquireMusicDuck()
+          if (!activeDuckTokenRef.current) acquireMusicDuck(options.duckingVolume || settings.duckingVolume)
           setIsPreparingSpeech(false)
           setIsSpeaking(true)
           const duration = Math.max(250, getWavDurationMs(encoded))
@@ -361,7 +367,20 @@ export function useYunVoice({
 
       const speechAudio = speechAudioRef.current
       speechAudio.src = objectUrl
-      await setSpeechOutputVolume(speechAudio, settings.volume)
+      await setSpeechOutputVolume(speechAudio, spokenVolume)
+      let fadingTail = false
+      speechAudio.ontimeupdate = () => {
+        const remaining = speechAudio.duration - speechAudio.currentTime
+        if (!Number.isFinite(remaining) || remaining > 0.9) return
+        if (speechGainRef.current && speechAudioContextRef.current) {
+          if (fadingTail) return
+          fadingTail = true
+          const context = speechAudioContextRef.current
+          speechGainRef.current.gain.setTargetAtTime(0.02, context.currentTime, 0.25)
+        } else {
+          speechAudio.volume = Math.max(0, Math.min(1, spokenVolume * remaining / 0.9))
+        }
+      }
       const decodeContext = speechAudioContextRef.current || new (window.AudioContext || window.webkitAudioContext)()
       referenceAudioBufferRef.current = await decodeContext.decodeAudioData(encoded.slice(0)).catch(() => null)
 
@@ -382,7 +401,7 @@ export function useYunVoice({
         }
       })
 
-      acquireMusicDuck()
+      if (!activeDuckTokenRef.current) acquireMusicDuck(options.duckingVolume || settings.duckingVolume)
 
       await speechAudio.play()
       const referenceBuffer = getSharedSpeakerReferenceBuffer()
@@ -406,7 +425,7 @@ export function useYunVoice({
       cleanupObjectUrl()
       return false
     }
-  }, [acquireMusicDuck, cleanupObjectUrl, releaseMusicDuck, setSpeechOutputVolume, settings, stopSpeaking])
+  }, [acquireMusicDuck, cleanupObjectUrl, musicDuckingController, releaseMusicDuck, setSpeechOutputVolume, settings, stopSpeaking])
 
   const previewVoice = useCallback(async () => {
     if (isPreviewing) return false

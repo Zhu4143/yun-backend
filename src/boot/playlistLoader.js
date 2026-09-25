@@ -58,7 +58,11 @@ export async function loadPaginatedCollection({
     const pageTotal = normalizeCount(currentPage?.total)
     if (expectedCount === null && pageTotal !== null) expectedCount = pageTotal
     if (pageTotal !== null && expectedCount !== pageTotal) {
-      throw new Error(`Playlist total changed during pagination: ${expectedCount} to ${pageTotal}`)
+      // NetEase collections are live: liking or removing a song while the
+      // pages are loading legitimately changes this number. The page total is
+      // newer than the metadata snapshot that started the request, so keep
+      // following the provider's latest truth and validate the final page set.
+      expectedCount = pageTotal
     }
 
     pageItems.forEach((item, index) => {
@@ -109,7 +113,7 @@ export async function loadCompletePlaylistTracks({
   if (typeof fetchPage !== 'function') throw new Error('fetchPage is required')
   validateCollectionIntegrity(playlists, { expectedCount: playlists.length, validateItem: isValidPlaylist })
 
-  const expectedTrackCount = playlists.reduce((total, playlist) => total + Number(playlist.trackCount), 0)
+  const expectedByPlaylist = playlists.map((playlist) => Number(playlist.trackCount))
   const loadedByPlaylist = new Array(playlists.length).fill(0)
   const completedPlaylists = new Array(playlists.length)
   let nextIndex = 0
@@ -117,6 +121,7 @@ export async function loadCompletePlaylistTracks({
 
   const report = () => {
     const loadedTrackCount = loadedByPlaylist.reduce((total, count) => total + count, 0)
+    const expectedTrackCount = expectedByPlaylist.reduce((total, count) => total + count, 0)
     const progress = expectedTrackCount > 0
       ? loadedTrackCount / expectedTrackCount * 100
       : playlists.length > 0 ? loadedPlaylistCount / playlists.length * 100 : 100
@@ -143,17 +148,20 @@ export async function loadCompletePlaylistTracks({
         fetchPage: ({ offset, limit, signal: pageSignal }) => (
           fetchPage({ playlistId: playlist.id, offset, limit, signal: pageSignal })
         ),
-        onProgress: ({ loadedCount }) => {
+        onProgress: ({ loadedCount, expectedCount }) => {
           loadedByPlaylist[index] = loadedCount
+          expectedByPlaylist[index] = expectedCount
           report()
         },
       })
       loadedByPlaylist[index] = result.loadedCount
+      expectedByPlaylist[index] = result.expectedCount
       loadedPlaylistCount += 1
       completedPlaylists[index] = {
         ...playlist,
+        trackCount: result.loadedCount,
         tracks: result.items,
-        expectedTrackCount: Number(playlist.trackCount),
+        expectedTrackCount: result.expectedCount,
         loadedTrackCount: result.loadedCount,
         complete: true,
       }
@@ -170,7 +178,7 @@ export async function loadCompletePlaylistTracks({
     loadedPlaylistCount,
     expectedPlaylistCount: playlists.length,
     loadedTrackCount: loadedByPlaylist.reduce((total, count) => total + count, 0),
-    expectedTrackCount,
+    expectedTrackCount: expectedByPlaylist.reduce((total, count) => total + count, 0),
     complete: true,
   }
 }

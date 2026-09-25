@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import LiquidGlass from 'liquid-glass-react'
 import { checkNeteaseLoginQr, createNeteaseLoginQr, fetchNeteaseLoginStatus, logoutNetease } from '../api/neteaseAuthApi'
+import './YunIntro.css'
 
 const statusText = {
   loading: '正在连接网易云…',
@@ -10,7 +11,7 @@ const statusText = {
   error: '登录服务暂时不可用',
 }
 
-export default function YunLoginPanel({ open, onBack, onLoginSubmit }) {
+export default function YunLoginPanel({ open, onBack, onLoginSubmit, onLogout }) {
   const [status, setStatus] = useState('idle')
   const [qr, setQr] = useState(null)
   const [account, setAccount] = useState(null)
@@ -78,6 +79,7 @@ export default function YunLoginPanel({ open, onBack, onLoginSubmit }) {
   const logout = async () => {
     await logoutNetease().catch(() => {})
     setAccount(null)
+    onLogout?.()
     refreshQr()
   }
 

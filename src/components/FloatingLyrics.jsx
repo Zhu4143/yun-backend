@@ -1,240 +1,162 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchSongLyrics } from '../api/yunApi'
-import { fetchNeteaseLyrics } from '../api/neteaseApi'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { loadSongLyrics } from '../services/songLyrics'
 import { usePlayer } from '../player/react/usePlayer'
 import { lyricFlowController } from '../services/LyricFlowController'
+import ThreeLyricText from './ThreeLyricText'
+import { LYRIC_3D_DEFAULTS } from './lyric3DSettings'
 import './FloatingLyrics.css'
 
 function findActiveLyricIndex(lines, currentTime) {
-  if (!lines.length) return -1
-
   let activeIndex = -1
   for (let index = 0; index < lines.length; index += 1) {
-    if (Number(lines[index].time) <= currentTime + 0.18) {
-      activeIndex = index
-    } else {
-      break
-    }
+    if (Number(lines[index].time) <= currentTime + 0.18) activeIndex = index
+    else break
   }
-
   return activeIndex
 }
 
-function getLyricRowHeight() {
-  if (typeof window === 'undefined') return 58
-
-  return window.innerWidth <= 768 ? 40 : 58
-}
-
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
-
-function FloatingLyrics() {
-  const { currentTrack: currentSong, currentTime, isPlaying: active } = usePlayer()
-  const [lyricState, setLyricState] = useState({ songId: '', lines: [], status: 'idle' })
-  const [rowHeight, setRowHeight] = useState(getLyricRowHeight)
-  const requestIdRef = useRef(0)
-  const rootRef = useRef(null)
-  const lyricFlowFrameRef = useRef(0)
-  const lyricFlowMeasureFrameRef = useRef(0)
-  const lyricFlowSettleTimerRef = useRef(0)
-  const lyricProgressFrameRef = useRef(0)
-  const activeLineRef = useRef(null)
-  const playbackTimeAnchorRef = useRef({ time: 0, now: 0 })
+function FloatingLyrics({ settings = LYRIC_3D_DEFAULTS, theme }) {
+  const { currentTrack: currentSong, currentTime, isPlaying } = usePlayer()
   const songId = currentSong?.id || ''
+  const [lyricState, setLyricState] = useState({ songId: '', lines: [], outgoing: null, transitionId: 0 })
+  const requestIdRef = useRef(0)
+  const displayedSnapshotRef = useRef({ currentTime: 0, palette: { primary: '#648db5', secondary: '#a6d6ee' } })
+  const [displayedSnapshot, setDisplayedSnapshot] = useState({
+    songId: '', currentTime: 0, palette: { primary: '#648db5', secondary: '#a6d6ee' },
+  })
+  const rootRef = useRef(null)
+  const flowFrameRef = useRef(0)
+  const flowSettleRef = useRef(0)
+
+  const palette = {
+    primary: theme?.['--song-primary'] || '#648db5',
+    secondary: theme?.['--song-secondary'] || '#a6d6ee',
+  }
+
+  if (lyricState.songId === songId && (
+    displayedSnapshot.songId !== songId
+    || displayedSnapshot.currentTime !== currentTime
+    || displayedSnapshot.palette.primary !== palette.primary
+    || displayedSnapshot.palette.secondary !== palette.secondary
+  )) {
+    setDisplayedSnapshot({ songId, currentTime, palette })
+  }
+
+  useEffect(() => {
+    displayedSnapshotRef.current = displayedSnapshot
+  }, [displayedSnapshot])
 
   useEffect(() => {
     requestIdRef.current += 1
     const requestId = requestIdRef.current
-
-    if (!songId) {
-      return undefined
+    if (!songId) return undefined
+    const request = loadSongLyrics(currentSong)
+    const showLyrics = (lines) => {
+      if (requestId !== requestIdRef.current) return
+      setLyricState((previous) => {
+        const outgoing = previous.songId && previous.songId !== songId && previous.lines.length
+          ? {
+            songId: previous.songId,
+            lines: previous.lines,
+            currentTime: displayedSnapshotRef.current.currentTime,
+            activeIndex: Math.max(0, findActiveLyricIndex(previous.lines, displayedSnapshotRef.current.currentTime)),
+            palette: displayedSnapshotRef.current.palette,
+          }
+          : null
+        return { songId, lines, outgoing, transitionId: previous.transitionId + 1 }
+      })
     }
-
-    const lyricsRequest = currentSong?.source === 'netease'
-      ? fetchNeteaseLyrics(currentSong.providerId || songId)
-      : fetchSongLyrics(songId)
-
-    lyricsRequest
-      .then((lyrics) => {
-        if (requestId !== requestIdRef.current) return
-        const nextLines = lyrics.lines || []
-        setLyricState({
-          songId,
-          lines: nextLines,
-          status: nextLines.length ? 'ready' : 'empty',
-        })
-      })
-      .catch(() => {
-        if (requestId !== requestIdRef.current) return
-        setLyricState({ songId, lines: [], status: 'empty' })
-      })
-
+    request.then((lyrics) => {
+      showLyrics(lyrics.lines || [])
+    }).catch(() => {
+      showLyrics([])
+    })
     return undefined
-  }, [currentSong?.providerId, currentSong?.source, songId])
+  }, [currentSong, songId])
 
-  useEffect(() => {
-    const updateRowHeight = () => {
-      setRowHeight(getLyricRowHeight())
-    }
-
-    window.addEventListener('resize', updateRowHeight)
-
-    return () => {
-      window.removeEventListener('resize', updateRowHeight)
-    }
+  const finishTransition = useCallback((transitionId) => {
+    setLyricState((previous) => previous.transitionId === transitionId
+      ? { ...previous, outgoing: null }
+      : previous)
   }, [])
 
-  const lines = useMemo(
-    () => (lyricState.songId === songId ? lyricState.lines : []),
-    [lyricState.lines, lyricState.songId, songId],
-  )
-  const rawActiveIndex = useMemo(() => findActiveLyricIndex(lines, currentTime), [currentTime, lines])
-  const activeIndex = Math.max(0, rawActiveIndex)
-  const activeOffset = -(activeIndex * rowHeight + rowHeight / 2)
-  const activeLyricKey = lines[activeIndex]
-    ? `${lyricState.songId}-${lines[activeIndex].time}-${activeIndex}`
-    : ''
+  const lines = lyricState.lines
+  const waitingForLyrics = lyricState.songId !== songId
+  const displayTime = waitingForLyrics ? displayedSnapshot.currentTime : currentTime
+  const displayPalette = waitingForLyrics ? displayedSnapshot.palette : palette
+  const activeIndex = Math.max(0, findActiveLyricIndex(lines, displayTime))
+  const activeKey = lines[activeIndex] ? `${lyricState.songId}-${lines[activeIndex].time}-${activeIndex}` : ''
 
   useEffect(() => {
-    playbackTimeAnchorRef.current = {
-      time: Number(currentTime) || 0,
-      now: performance.now(),
-    }
-  }, [currentTime])
-
-  useEffect(() => {
-    window.cancelAnimationFrame(lyricProgressFrameRef.current)
-    if (!active || !activeLyricKey) return undefined
-
-    const line = lines[activeIndex]
-    const nextLine = lines[activeIndex + 1]
-    if (!line) return undefined
-    const lineStart = Number(line.time) || 0
-    const lineDuration = Math.max(0.8, (Number(nextLine?.time) || lineStart + 4) - lineStart)
-
-    const updateProgress = (now) => {
-      const anchor = playbackTimeAnchorRef.current
-      const interpolatedTime = anchor.time + Math.max(0, now - anchor.now) * 0.001
-      const progress = clamp((interpolatedTime - lineStart) / lineDuration, 0, 1)
-      activeLineRef.current?.style.setProperty('--lyric-line-progress', progress.toFixed(4))
-      lyricProgressFrameRef.current = window.requestAnimationFrame(updateProgress)
-    }
-    lyricProgressFrameRef.current = window.requestAnimationFrame(updateProgress)
-
-    return () => window.cancelAnimationFrame(lyricProgressFrameRef.current)
-  }, [active, activeIndex, activeLyricKey, lines])
-
-  useEffect(() => {
-    window.cancelAnimationFrame(lyricFlowFrameRef.current)
-    window.cancelAnimationFrame(lyricFlowMeasureFrameRef.current)
-    window.clearTimeout(lyricFlowSettleTimerRef.current)
-    if (!activeLyricKey) {
+    window.cancelAnimationFrame(flowFrameRef.current)
+    window.clearTimeout(flowSettleRef.current)
+    if (!activeKey) {
       lyricFlowController.deactivate()
       return undefined
     }
-    const startTime = performance.now()
-    lyricFlowController.beginReveal(startTime)
-    const measureActiveLyric = () => {
-      const activeLine = rootRef.current?.querySelector('.floating-lyrics__line.is-active')
-      if (activeLine) {
-        lyricFlowController.updateRect(
-          activeLine.getBoundingClientRect(),
-          window.innerWidth,
-          window.innerHeight,
-          performance.now(),
-        )
-      }
+    lyricFlowController.beginReveal(performance.now())
+    const measure = () => {
+      const anchor = rootRef.current?.querySelector('.floating-lyrics__flow-anchor')
+      if (!anchor) return
+      lyricFlowController.updateRect(
+        anchor.getBoundingClientRect(), window.innerWidth, window.innerHeight, performance.now(),
+      )
     }
-    const advanceReveal = (now) => {
-      lyricFlowController.updateEnvelope(now)
-      if (lyricFlowController.active) {
-        lyricFlowFrameRef.current = window.requestAnimationFrame(advanceReveal)
-      }
+    const advance = (frameTime) => {
+      lyricFlowController.updateEnvelope(frameTime)
+      if (lyricFlowController.active) flowFrameRef.current = window.requestAnimationFrame(advance)
     }
-    lyricFlowMeasureFrameRef.current = window.requestAnimationFrame(measureActiveLyric)
-    lyricFlowFrameRef.current = window.requestAnimationFrame(advanceReveal)
-    // The track needs one follow-up measurement after its CSS scroll settles.
-    // Measuring on every animation frame forced layout for over two seconds on
-    // every lyric change, competing directly with the WebGL record renderer.
-    lyricFlowSettleTimerRef.current = window.setTimeout(measureActiveLyric, 620)
-    const observer = typeof ResizeObserver === 'function'
-      ? new ResizeObserver(measureActiveLyric)
-      : null
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
     if (rootRef.current) observer?.observe(rootRef.current)
+    window.addEventListener('resize', measure)
+    const measureFrame = window.requestAnimationFrame(measure)
+    flowFrameRef.current = window.requestAnimationFrame(advance)
+    flowSettleRef.current = window.setTimeout(measure, 620)
     return () => {
-      window.cancelAnimationFrame(lyricFlowFrameRef.current)
-      window.cancelAnimationFrame(lyricFlowMeasureFrameRef.current)
-      window.clearTimeout(lyricFlowSettleTimerRef.current)
+      window.cancelAnimationFrame(measureFrame)
+      window.cancelAnimationFrame(flowFrameRef.current)
+      window.clearTimeout(flowSettleRef.current)
+      window.removeEventListener('resize', measure)
       observer?.disconnect()
     }
-  }, [activeIndex, activeLyricKey])
+  }, [activeKey])
 
   useEffect(() => () => {
-    window.cancelAnimationFrame(lyricFlowFrameRef.current)
-    window.cancelAnimationFrame(lyricFlowMeasureFrameRef.current)
-    window.clearTimeout(lyricFlowSettleTimerRef.current)
-    window.cancelAnimationFrame(lyricProgressFrameRef.current)
+    window.cancelAnimationFrame(flowFrameRef.current)
+    window.clearTimeout(flowSettleRef.current)
     lyricFlowController.deactivate()
   }, [])
-
-  if (lyricState.status !== 'ready' || !lines.length) {
-    return null
-  }
 
   return (
     <section
       ref={rootRef}
-      className={`floating-lyrics${active ? ' is-playing' : ' is-paused'}`}
-      style={{ '--active-lyric-offset': `${activeOffset}px` }}
+      className={`floating-lyrics${isPlaying ? ' is-playing' : ' is-paused'}`}
+      style={{
+        '--lyric-user-shift-x': `${settings.offsetX}%`,
+        '--lyric-user-shift-y': `${settings.offsetY}%`,
+        '--lyric-size': settings.size,
+        '--lyric-glow-strength': settings.glow,
+        '--lyric-glow-color': settings.followCover ? displayPalette.secondary : settings.glowColor,
+      }}
       aria-label="滚动歌词"
     >
-      <div className="floating-lyrics__shade" />
-      <div className="floating-lyrics__viewport">
-        <div className="floating-lyrics__track">
-          <div className="floating-lyrics__scroll">
-            {lines.map((line, index) => {
-              const signedDistance = index - activeIndex
-              const distance = Math.abs(signedDistance)
-              const depth = Math.min(distance, 4)
-              const opacity = 0.18 + (1 - Math.min(distance, 3) / 3) * 0.42
-              const depthScale = clamp(1 - depth * 0.06, 0.84, 1)
-              const blur = Math.min(depth * 0.46, 1.9)
-              const nextLineTime = lines[index + 1]?.time ?? line.time + 4
-              const lineDuration = Math.max(0.8, nextLineTime - line.time)
-              const lyricProgress = index === activeIndex
-                ? clamp((currentTime - line.time) / lineDuration, 0, 1)
-                : index < activeIndex
-                  ? 1
-                  : 0
-              const stateClass = index === activeIndex
-                ? ' is-active'
-                : signedDistance === -1
-                  ? ' is-previous'
-                  : signedDistance === 1
-                    ? ' is-next'
-                    : distance > 2
-                      ? ' is-distant'
-                      : ' is-near'
-              return (
-                <p
-                  ref={index === activeIndex ? activeLineRef : undefined}
-                  className={`floating-lyrics__line${stateClass}`}
-                  data-lyric-text={line.text}
-                  style={{
-                    '--lyric-distance': distance,
-                    '--lyric-opacity': opacity.toFixed(2),
-                    '--lyric-depth-scale': depthScale.toFixed(3),
-                    '--lyric-blur': `${blur.toFixed(2)}px`,
-                    '--lyric-line-progress': lyricProgress.toFixed(3),
-                  }}
-                  key={`${line.time}-${index}`}
-                >
-                  <span className="floating-lyrics__text" data-lyric-text={line.text}>{line.text}</span>
-                </p>
-              )
-            })}
-          </div>
-        </div>
+      <div className="floating-lyrics__viewport" aria-hidden="true">
+        <ThreeLyricText
+          lines={lines}
+          songId={lyricState.songId}
+          activeIndex={activeIndex}
+          currentTime={displayTime}
+          isPlaying={isPlaying && !waitingForLyrics}
+          settings={settings}
+          palette={displayPalette}
+          outgoing={lyricState.outgoing}
+          transitionId={lyricState.transitionId}
+          onTransitionComplete={finishTransition}
+        />
+        <span className="floating-lyrics__flow-anchor">{lines[activeIndex]?.text}</span>
+      </div>
+      <div className="floating-lyrics__accessible" aria-live="polite">
+        {lines[activeIndex]?.text}
       </div>
     </section>
   )

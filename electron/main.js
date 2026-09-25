@@ -2,6 +2,7 @@ import { app, BrowserWindow, session, shell } from 'electron'
 import { copyFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { acquireDesktopBackend } from './backendRuntime.js'
 
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
 app.commandLine.appendSwitch('enable-gpu-rasterization')
@@ -9,6 +10,30 @@ app.commandLine.appendSwitch('enable-zero-copy')
 
 let mainWindow = null
 let stopBackend = null
+
+async function isHealthyYunBackend(port) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
+      signal: AbortSignal.timeout(2000),
+    })
+    const payload = await response.json()
+    return response.ok && payload?.ok === true && payload?.service === 'yun-backend'
+  } catch {
+    return false
+  }
+}
+
+async function hasYunAppShell(port) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/?release=1`, {
+      signal: AbortSignal.timeout(2000),
+    })
+    const contentType = response.headers.get('content-type') || ''
+    return response.ok && contentType.toLowerCase().includes('text/html')
+  } catch {
+    return false
+  }
+}
 
 async function seedUserData(dataDir) {
   await mkdir(dataDir, { recursive: true })
@@ -31,9 +56,14 @@ async function startBackend() {
   process.env.YUN_DATA_DIR = dataDir
 
   const backend = await import('../server.js')
-  const address = await backend.startServer(0)
-  stopBackend = backend.stopServer
-  return typeof address === 'object' && address ? address.port : 3030
+  const runtime = await acquireDesktopBackend({
+    startServer: backend.startServer,
+    stopServer: backend.stopServer,
+    isHealthyYunBackend,
+    hasYunAppShell,
+  })
+  stopBackend = runtime.stop
+  return runtime.port
 }
 
 function configurePermissions() {

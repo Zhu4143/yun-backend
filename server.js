@@ -3227,6 +3227,8 @@ async function handleSongReaction(req, res) {
       responseMode = "normal",
       recentChat = [],
       recentAiReplies = [],
+      previousSong = null,
+      announcementLength = "medium",
     } = await readJson(req);
     const currentSongForLyrics = title || artist
       ? {
@@ -3266,6 +3268,8 @@ async function handleSongReaction(req, res) {
       });
     }
 
+    const companionTransition = trigger === "companion_transition" && responseMode === "podcast";
+    const lengthGuide = { short: "1 句，约 15 到 28 字", medium: "1 到 2 句，约 30 到 55 字", long: "2 到 3 句，约 60 到 95 字" }[announcementLength] || "1 到 2 句，约 30 到 55 字";
     const systemPrompt = `你正在回应本地曲库的播放/切歌事件。
 你不是乐评人，不写百科，不做功能说明。你要像一个熟悉用户的人，顺手接住这首歌和当前气氛。
 必须只输出合法 JSON，不要 Markdown，不要额外解释。
@@ -3282,10 +3286,12 @@ async function handleSongReaction(req, res) {
 模式规则：
 - normal：1 句短确认，轻、自然，不长篇介绍歌曲。
 - podcast：2 到 4 句，像真正会编排节目节奏的私人电台主持人。只有首播、用户点名询问、或确实需要辨认歌曲时才提歌名；自动续播绝不能每首都用“现在是《歌名》——歌手”开场。
+- companion_transition：陪伴续播的曲间播报，必须回应前后两首歌的听感衔接。这次长度为${lengthGuide}，只讲一个有依据的角度，不要每次使用相同句式。
 - silent：shouldSpeak=false，displayMessage=false，reply=""，intent="no_reply"。
 
 触发规则：
 - auto_next：自动下一首。normal/silent 默认不说话；podcast 用上一首与这一首之间的情绪、节奏或听感做自然承接，可以安静，也可以只说一两句，不要逐首讲解、报幕或复述歌名。
+- companion_transition：AI 歌单中的自动换歌。需要播报，用前后歌曲的真实标签和听感信息自然过渡，不编造歌词或背景。
 - ai_next：用户明确让你换歌。normal 短回应；podcast 可以多一点。
 - user_next/user_prev/user_play：用户手动操作。按当前模式回应。
 
@@ -3320,6 +3326,8 @@ async function handleSongReaction(req, res) {
               `当前用户心情：${currentMood}`,
               `歌名：${title || "未知歌名"}`,
               `歌手：${artist || "未知歌手"}`,
+              `上一首：${previousSong?.title || "未知"} / ${previousSong?.artist || "未知"}；标签：${Array.isArray(previousSong?.moodTags) ? previousSong.moodTags.slice(0, 4).join("、") : "无"}；能量：${Number(previousSong?.energy) || 50}`,
+              `曲间播报长度：${lengthGuide}`,
               `版本：${version || "普通版"}`,
               `心情标签：${Array.isArray(moodTags) && moodTags.length ? moodTags.join("、") : "无"}`,
               `场景标签：${Array.isArray(sceneTags) && sceneTags.length ? sceneTags.join("、") : "无"}`,
@@ -3336,7 +3344,7 @@ async function handleSongReaction(req, res) {
         temperature: responseMode === "podcast" ? 0.68 : 0.88,
         frequency_penalty: responseMode === "podcast" ? 0.2 : 0.45,
         presence_penalty: responseMode === "podcast" ? 0.05 : 0.2,
-        max_tokens: responseMode === "podcast" ? 140 : 180,
+        max_tokens: companionTransition ? 210 : responseMode === "podcast" ? 140 : 180,
         stream: false,
         response_format: { type: "json_object" },
       }),
@@ -3364,7 +3372,11 @@ async function handleSongReaction(req, res) {
     }
 
     let reply = String(parsed.reply || "").trim();
-    if (responseMode === "podcast") {
+    if (companionTransition) {
+      const limit = { short: 30, medium: 58, long: 100 }[announcementLength] || 58;
+      const sentenceLimit = announcementLength === "long" ? 3 : announcementLength === "short" ? 1 : 2;
+      reply = (reply.match(/[^。！？!?]+[。！？!?]?/g) || []).slice(0, sentenceLimit).join("").trim().slice(0, limit);
+    } else if (responseMode === "podcast") {
       // Podcast is an occasional aside, never a host monologue.
       const sentences = reply.match(/[^。！？!?]+[。！？!?]?/g) || [];
       reply = sentences.slice(0, 2).join("").trim().slice(0, 56);
@@ -3376,6 +3388,8 @@ async function handleSongReaction(req, res) {
       context: `trigger=${trigger}; title=${title}; artist=${artist}; angle=${parsed.angle || ""}; recentChat=${JSON.stringify(recentChat || []).slice(0, 500)}`,
     });
     if (trigger === "auto_next" && isReplyTooSimilar(reply, recentAiReplies, 0.46)) reply = "";
+    if (companionTransition && !reply && title) reply = `接下来听《${title}》，我们顺着这一段节奏走。`;
+    if (companionTransition) reply = reply.slice(0, { short: 30, medium: 58, long: 100 }[announcementLength] || 58);
     if (responseMode === "podcast" && trigger !== "auto_next" && !reply && title && artist) {
       reply = `这次先放《${title}${version ? `（${version}）` : ""}》，${artist}。`;
     }

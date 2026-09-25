@@ -3,7 +3,22 @@ import { useFBO } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { opticalFieldController } from '../services/OpticalFieldController'
-import FlowFieldBackground from './FlowFieldBackground'
+import {
+  LIQUID_ORE_BLUR_FRAGMENT_SHADER,
+  LIQUID_ORE_GLASS_DEFAULTS,
+  LIQUID_ORE_GLASS_FRAGMENT_SHADER,
+  LIQUID_ORE_MAX_CARDS,
+  liquidOreGlassState,
+  stepLiquidOreHover,
+} from './liquidOreSource'
+import { stepLiquidMorph } from './liquidMorphSpring'
+import { liquidMetalPaletteState } from './liquidMetalTransition'
+import {
+  LIQUID_METAL_BACKGROUND_DEFAULTS,
+  resolveLiquidMetalBackgroundSettings,
+} from './liquidMetalSettings'
+import FlowFieldBackground, { LiquidMetalFieldQuad } from './FlowFieldBackground'
+import { createLatestCoverTextureLifecycle } from './particleVinylCoverTextureLifecycle'
 import './ParticleVinylBackground.css'
 
 const FALLBACK_COVER = '/scene.png'
@@ -31,6 +46,20 @@ const DEFAULT_BACKGROUND_COLORS = {
 }
 const BACKGROUND_PALETTE_CACHE = new Map()
 const FIXED_VIEW_STORAGE_KEY = 'yun-particle-vinyl-fixed-view'
+const UI_INTERACTION_SELECTOR = [
+  '.local-library-drawer',
+  '.library-edge-trigger',
+  '.memory-settings-panel',
+  '.voice-popover',
+  '.mountain-tuning-panel',
+  '.ai-mode-expanded',
+  'button',
+  'input',
+  'textarea',
+  'select',
+  '[contenteditable="true"]',
+  'a',
+].join(', ')
 
 function getInitialPointerState() {
   const fallback = { dragX: 0, dragY: 0, zoom: 0 }
@@ -206,6 +235,18 @@ function scaleColor(color, amount) {
   return color.map((value) => Math.max(0, Math.min(255, value * amount)))
 }
 
+function writeSharedLiquidMetalPalette(uniforms) {
+  if (!liquidMetalPaletteState.initialized) return
+  for (let colorIndex = 0; colorIndex < 4; colorIndex += 1) {
+    const offset = colorIndex * 3
+    uniforms[`uLiquidMetalC${colorIndex}`]?.value.setRGB(
+      liquidMetalPaletteState.visible[offset],
+      liquidMetalPaletteState.visible[offset + 1],
+      liquidMetalPaletteState.visible[offset + 2],
+    )
+  }
+}
+
 function loadCoverBackgroundPalette(source) {
   if (BACKGROUND_PALETTE_CACHE.has(source)) return BACKGROUND_PALETTE_CACHE.get(source)
   const palettePromise = new Promise((resolve) => {
@@ -297,42 +338,41 @@ function useCoverBackgroundColors(coverUrl, preloadCoverUrls) {
 }
 
 function useCoverTexture(coverUrl) {
-  const textureRef = useRef(null)
-  const fallbackTexture = useMemo(() => createPlaceholderTexture(), [])
+  const [textureLifecycle] = useState(() => createLatestCoverTextureLifecycle({
+    loadTexture(source, onLoad, onError) {
+      const loader = new THREE.TextureLoader()
+      loader.setCrossOrigin('anonymous')
+      loader.load(source, onLoad, undefined, onError)
+    },
+    prepareTexture(texture) {
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.minFilter = THREE.LinearFilter
+      texture.magFilter = THREE.LinearFilter
+      texture.wrapS = THREE.ClampToEdgeWrapping
+      texture.wrapT = THREE.ClampToEdgeWrapping
+      texture.needsUpdate = true
+    },
+    // A failed candidate must not clear the last texture that the material can
+    // still render. A later coverUrl change starts a fresh generation.
+    onError() {},
+  }))
 
   useEffect(() => {
-    let cancelled = false
-    const loader = new THREE.TextureLoader()
-    loader.setCrossOrigin('anonymous')
-    loader.load(
-      coverUrl || FALLBACK_COVER,
-      (texture) => {
-        if (cancelled) {
-          texture.dispose()
-          return
-        }
-        texture.colorSpace = THREE.SRGBColorSpace
-        texture.minFilter = THREE.LinearFilter
-        texture.magFilter = THREE.LinearFilter
-        texture.wrapS = THREE.ClampToEdgeWrapping
-        texture.wrapT = THREE.ClampToEdgeWrapping
-        textureRef.current = texture
-      },
-      undefined,
-      () => {
-        textureRef.current = fallbackTexture
-      },
-    )
+    const token = textureLifecycle.request(coverUrl || FALLBACK_COVER)
 
     return () => {
-      cancelled = true
+      textureLifecycle.cancel(token)
     }
-  }, [coverUrl, fallbackTexture])
+  }, [coverUrl, textureLifecycle])
 
-  return textureRef
+  useEffect(() => () => {
+    textureLifecycle.dispose()
+  }, [textureLifecycle])
+
+  return textureLifecycle
 }
 
-function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition, quality }) {
+function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition, gestureControlRef, quality }) {
   const materialRef = useRef(null)
   const rimTrailMaterialRef = useRef(null)
   const pointsRef = useRef(null)
@@ -350,7 +390,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
   const entryTransitionUntilRef = useRef(0)
   const summonEffectRef = useRef(0)
   const songEffectRef = useRef(0)
-  const coverTextureRef = useCoverTexture(coverUrl)
+  const textureLifecycle = useCoverTexture(coverUrl)
 
   const rimTrailGeometry = useMemo(() => (
     new THREE.RingGeometry(RIM_TRAIL_INNER_RADIUS, RIM_TRAIL_OUTER_RADIUS, 112, 1)
@@ -367,6 +407,10 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uPlaying: { value: 0 },
       uEnergy: { value: 0 },
       uCoverTex: { value: createPlaceholderTexture() },
+      uLiquidMetalC0: { value: new THREE.Color(0.02, 0.01, 0.01) },
+      uLiquidMetalC1: { value: new THREE.Color(0.12, 0.08, 0.06) },
+      uLiquidMetalC2: { value: new THREE.Color(0.46, 0.28, 0.16) },
+      uLiquidMetalC3: { value: new THREE.Color(0.90, 0.70, 0.38) },
     },
     vertexShader: `
       varying vec2 vLocalPosition;
@@ -381,6 +425,10 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform float uTime;
       uniform float uPlaying;
       uniform float uEnergy;
+      uniform vec3 uLiquidMetalC0;
+      uniform vec3 uLiquidMetalC1;
+      uniform vec3 uLiquidMetalC2;
+      uniform vec3 uLiquidMetalC3;
       varying vec2 vLocalPosition;
 
       const float TAU = 6.28318530718;
@@ -394,6 +442,12 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       vec3 boostSaturation(vec3 color, float amount) {
         float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
         return max(vec3(0.0), mix(vec3(luminance), color, amount));
+      }
+
+      vec3 liquidMetalRamp(float x) {
+        vec3 color = mix(uLiquidMetalC0, uLiquidMetalC1, smoothstep(0.0, 0.42, x));
+        color = mix(color, uLiquidMetalC2, smoothstep(0.30, 0.74, x));
+        return mix(color, uLiquidMetalC3, smoothstep(0.56, 1.0, x));
       }
 
       void main() {
@@ -421,12 +475,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
 
         vec2 paletteUv = vec2(cos(angle), sin(angle)) * 0.31 + 0.5;
         vec3 coverTint = texture2D(uCoverTex, paletteUv).rgb;
-        float tintPeak = max(max(coverTint.r, coverTint.g), coverTint.b);
-        coverTint = mix(vec3(0.12, 0.62, 1.0), coverTint / max(tintPeak, 0.12), 0.84);
-        coverTint = boostSaturation(coverTint, 1.42);
-        vec3 distanceTint = mix(coverTint, vec3(0.02, 0.68, 1.0), smoothstep(0.08, 0.55, radialDistance));
-        distanceTint = mix(distanceTint, vec3(0.78, 0.12, 1.0), smoothstep(0.55, 1.0, radialDistance));
-        distanceTint = boostSaturation(distanceTint, 1.28);
+        vec3 sharedTint = liquidMetalRamp(clamp(0.16 + radialDistance * 0.72 + trail * 0.12, 0.0, 1.0));
+        vec3 distanceTint = mix(coverTint, sharedTint, 0.84);
+        distanceTint = boostSaturation(distanceTint, 1.08);
 
         float mist = innerGlow * (0.17 + trail * 0.31)
           + smokeBody * smokeNoise * (0.055 + trail * 0.25);
@@ -500,6 +551,11 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uSummonEffect: { value: 0 },
       uSongEffect: { value: 0 },
       uPortraitTransition: { value: 0 },
+      uGestureScatter: { value: 0 },
+      uLiquidMetalC0: { value: new THREE.Color(0.02, 0.01, 0.01) },
+      uLiquidMetalC1: { value: new THREE.Color(0.12, 0.08, 0.06) },
+      uLiquidMetalC2: { value: new THREE.Color(0.46, 0.28, 0.16) },
+      uLiquidMetalC3: { value: new THREE.Color(0.90, 0.70, 0.38) },
     },
     vertexShader: `
       attribute vec2 aUv;
@@ -521,6 +577,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform float uSummonEffect;
       uniform float uSongEffect;
       uniform float uPortraitTransition;
+      uniform float uGestureScatter;
       varying vec2 vUv;
       varying vec2 vTintUv;
       varying float vRadius;
@@ -710,6 +767,21 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         pos.z += outerRipple * uCoverPulse * 0.018;
         pos.xy += radialDir * outerRipple * uCoverPulse * 0.005;
 
+        // Hand openness continuously pulls the same record particles apart.
+        // Keeping this deterministic avoids allocation and lets closing the
+        // hand gather every point back into its exact vinyl position.
+        float gestureScatter = clamp(uGestureScatter, 0.0, 1.0);
+        float gestureSeed = fract(sin(dot(aUv, vec2(149.7, 283.1))) * 43741.319);
+        float gestureAngle = angle + (gestureSeed - 0.5) * gestureScatter * 1.35;
+        float gestureRadius = radius * 3.05 + gestureScatter * (0.36 + gestureSeed * 1.82);
+        vec2 gesturePosition = vec2(cos(gestureAngle), sin(gestureAngle)) * gestureRadius;
+        gesturePosition += vec2(
+          sin(gestureSeed * 31.0 + uTime * 0.34),
+          cos(gestureSeed * 27.0 + uTime * 0.28)
+        ) * gestureScatter * 0.16;
+        pos.xy = mix(pos.xy, gesturePosition, gestureScatter * 0.9);
+        pos.z += (gestureSeed - 0.5) * gestureScatter * 3.0;
+
         float summonProgress = clamp(uVoiceSummonAge, 0.0, 1.0);
         float summonScatter = smoothstep(0.0, 0.30, summonProgress)
           * (1.0 - smoothstep(0.50, 0.92, summonProgress));
@@ -840,6 +912,10 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform float uSongTransition;
       uniform float uTime;
       uniform float uPortraitTransition;
+      uniform vec3 uLiquidMetalC0;
+      uniform vec3 uLiquidMetalC1;
+      uniform vec3 uLiquidMetalC2;
+      uniform vec3 uLiquidMetalC3;
       varying vec2 vUv;
       varying vec2 vTintUv;
       varying float vRadius;
@@ -879,6 +955,12 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       vec3 boostSaturation(vec3 color, float amount) {
         float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
         return max(vec3(0.0), mix(vec3(luminance), color, amount));
+      }
+
+      vec3 liquidMetalRamp(float x) {
+        vec3 color = mix(uLiquidMetalC0, uLiquidMetalC1, smoothstep(0.0, 0.42, x));
+        color = mix(color, uLiquidMetalC2, smoothstep(0.30, 0.74, x));
+        return mix(color, uLiquidMetalC3, smoothstep(0.56, 1.0, x));
       }
 
       void main() {
@@ -955,7 +1037,16 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         float movingTintLum = max(dot(movingCoverTint, vec3(0.299, 0.587, 0.114)), 0.055);
         vec3 normalizedMovingTint = movingCoverTint / movingTintLum * 0.48;
         auroraTint = mix(auroraTint, normalizedMovingTint, 0.30 + liquidWave * 0.26);
-        auroraTint = boostSaturation(auroraTint, 1.72 + uPlaying * 0.12);
+        float sharedMetalPosition = clamp(
+          0.12 + vMountain * 0.52 + vTerrainSweep * 0.24 + vStudioLight.x * 0.18,
+          0.0,
+          1.0
+        );
+        vec3 sharedMetalTint = liquidMetalRamp(sharedMetalPosition);
+        float sharedMetalLum = max(dot(sharedMetalTint, vec3(0.299, 0.587, 0.114)), 0.055);
+        sharedMetalTint = mix(sharedMetalTint / sharedMetalLum * 0.44, sharedMetalTint, 0.52);
+        auroraTint = mix(auroraTint, sharedMetalTint, 0.78);
+        auroraTint = boostSaturation(auroraTint, 1.10 + uPlaying * 0.04);
         float auroraHigh = max(max(auroraTint.r, auroraTint.g), auroraTint.b);
         auroraTint *= min(1.0, 0.94 / max(auroraHigh, 0.001));
         vec3 vinyl = vec3(0.0025, 0.003, 0.0035);
@@ -1072,7 +1163,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         // Tone-map inside this custom shader so high-energy cores retain
         // cyan/blue/silver transitions instead of clipping to dead white.
         color = acesFilmic(color * 0.92);
-        color = boostSaturation(color, 1.24);
+        color = boostSaturation(color, mix(1.08, 1.24, vCoverMask));
         gl_FragColor = vec4(color, alpha);
       }
     `,
@@ -1130,7 +1221,25 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       audio.energy,
       0.1,
     )
+    writeSharedLiquidMetalPalette(materialRef.current.uniforms)
+    writeSharedLiquidMetalPalette(trailMaterial.uniforms)
     materialRef.current.uniforms.uPortraitTransition.value = portraitTransition
+    const gestureScatterTarget = THREE.MathUtils.clamp(
+      Number(gestureControlRef?.current?.scatter) || 0,
+      0,
+      1,
+    )
+    const gestureRotationTarget = THREE.MathUtils.clamp(
+      Number(gestureControlRef?.current?.rotation) || 0,
+      -Math.PI,
+      Math.PI,
+    )
+    materialRef.current.uniforms.uGestureScatter.value = THREE.MathUtils.damp(
+      materialRef.current.uniforms.uGestureScatter.value,
+      gestureScatterTarget,
+      gestureScatterTarget > materialRef.current.uniforms.uGestureScatter.value ? 8.5 : 6,
+      delta,
+    )
     materialRef.current.uniforms.uMountainEdge.value = mountainControls.edge
     materialRef.current.uniforms.uMountainHeight.value = mountainControls.height
     materialRef.current.uniforms.uMountainPeaks.value = mountainControls.peaks
@@ -1160,7 +1269,8 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       }
       spectrumTextureRef.current.needsUpdate = true
     }
-    if (coverTextureRef.current && materialRef.current.uniforms.uCoverTex.value !== coverTextureRef.current) {
+    const coverTexture = textureLifecycle.getCurrentTexture()
+    if (coverTexture && materialRef.current.uniforms.uCoverTex.value !== coverTexture) {
       if (hasLoadedCoverRef.current) {
         materialRef.current.uniforms.uPreviousCoverTex.value = materialRef.current.uniforms.uCoverTex.value
         songEffectRef.current = Math.floor(Math.random() * 3)
@@ -1168,11 +1278,27 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         songTransitionRef.current = 0
         materialRef.current.uniforms.uSongTransition.value = 0
       } else {
-        materialRef.current.uniforms.uPreviousCoverTex.value = coverTextureRef.current
+        materialRef.current.uniforms.uPreviousCoverTex.value = coverTexture
         hasLoadedCoverRef.current = true
       }
-      materialRef.current.uniforms.uCoverTex.value = coverTextureRef.current
-      trailMaterial.uniforms.uCoverTex.value = coverTextureRef.current
+      materialRef.current.uniforms.uCoverTex.value = coverTexture
+      trailMaterial.uniforms.uCoverTex.value = coverTexture
+      textureLifecycle.retainOnly([
+        materialRef.current.uniforms.uPreviousCoverTex.value,
+        materialRef.current.uniforms.uCoverTex.value,
+        trailMaterial.uniforms.uCoverTex.value,
+      ])
+    }
+    if (
+      hasLoadedCoverRef.current
+      && songTransitionRef.current >= 1
+      && materialRef.current.uniforms.uPreviousCoverTex.value !== materialRef.current.uniforms.uCoverTex.value
+    ) {
+      materialRef.current.uniforms.uPreviousCoverTex.value = materialRef.current.uniforms.uCoverTex.value
+      textureLifecycle.retainOnly([
+        materialRef.current.uniforms.uCoverTex.value,
+        trailMaterial.uniforms.uCoverTex.value,
+      ])
     }
     if (groupRef.current) {
       const pointer = pointerRef.current
@@ -1184,7 +1310,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       const entryLocked = performance.now() < entryTransitionUntilRef.current
       const targetX = voiceOrbVisible || entryLocked ? 0 : THREE.MathUtils.clamp(pointer.dragY * 1.22 + pointer.y * 0.045, -3.05, 3.05)
       const targetY = voiceOrbVisible || entryLocked ? 0 : THREE.MathUtils.clamp(pointer.dragX * 1.22 + pointer.x * 0.055, -3.05, 3.05)
-      const targetZ = spinRef.current + Math.sin(state.clock.elapsedTime * 0.23) * 0.018
+      const targetZ = spinRef.current
+        + gestureRotationTarget
+        + Math.sin(state.clock.elapsedTime * 0.23) * 0.018
       const shakePower = voiceOrbVisible ? 0 : recordShakeRef.current.power
       const shakePhase = recordShakeRef.current.phase
       const shakeTiltX = Math.sin(shakePhase) * shakePower * 0.026
@@ -1256,6 +1384,10 @@ const GLASS_ORB_FRAGMENT_SHADER = `
   uniform vec4 uUiGlassRects[24];
   uniform float uUiGlassRadii[24];
   uniform float uUiGlassStrengths[24];
+  uniform float uUiGlassHover[24];
+  uniform float uUiGlassMorphEnergy[24];
+  uniform vec2 uUiGlassMorphDir[24];
+  uniform vec2 uPointer;
   uniform vec4 uLibraryRect;
   uniform float uLibraryOpenProgress;
   uniform vec4 uTopControlsRect;
@@ -1291,6 +1423,17 @@ const GLASS_ORB_FRAGMENT_SHADER = `
     vec2 localPoint = abs(point) - halfSize + radius;
     return length(max(localPoint, 0.0))
       + min(max(localPoint.x, localPoint.y), 0.0) - radius;
+  }
+
+  vec2 sdRoundedBoxGrad(vec2 point, vec2 halfSize, float radius) {
+    vec2 signPoint = vec2(point.x >= 0.0 ? 1.0 : -1.0, point.y >= 0.0 ? 1.0 : -1.0);
+    vec2 localPoint = abs(point) - halfSize + radius;
+    if (max(localPoint.x, localPoint.y) > 0.0) {
+      return signPoint * normalize(max(localPoint, vec2(0.0)) + vec2(0.00001));
+    }
+    return localPoint.x > localPoint.y
+      ? vec2(signPoint.x, 0.0)
+      : vec2(0.0, signPoint.y);
   }
 
   float smoothUnion(float distanceA, float distanceB, float radius) {
@@ -1826,34 +1969,58 @@ const GLASS_ORB_FRAGMENT_SHADER = `
       vec4 glassRect = uUiGlassRects[glassIndex];
       vec2 glassHalf = max(glassRect.zw, vec2(1.0));
       float glassRadius = uUiGlassRadii[glassIndex];
-      vec2 glassPoint = abs(fragmentPixel - glassRect.xy) - glassHalf + glassRadius;
+      float glassHover = uUiGlassHover[glassIndex];
+      float glassScale = 1.0 + glassHover * 0.03;
+      vec2 glassLocalPixels = (fragmentPixel - glassRect.xy) / glassScale;
+      vec2 glassPoint = abs(glassLocalPixels) - glassHalf + glassRadius;
       float glassDistance = length(max(glassPoint, 0.0))
         + min(max(glassPoint.x, glassPoint.y), 0.0) - glassRadius;
+      glassDistance *= glassScale;
       float glassMask = 1.0 - smoothstep(-1.25, 1.25, glassDistance);
-      float glassEdge = smoothstep(-min(22.0, glassHalf.y * 0.62), -0.8, glassDistance);
-      vec2 glassLocal = (fragmentPixel - glassRect.xy) / glassHalf;
-      vec2 glassNormal = normalize(glassLocal * vec2(0.42, 1.0) + vec2(0.0001, 0.0));
+      float refractionHeight = min(58.0, max(12.0, glassHalf.y * 0.72));
+      float glassHeight = sqrt(clamp(-glassDistance / refractionHeight, 0.0, 1.0));
+      float glassEdge = 1.0 - glassHeight;
+      vec2 glassLocal = glassLocalPixels / glassHalf;
+      vec2 glassNormal = sdRoundedBoxGrad(glassLocalPixels, glassHalf, glassRadius);
       float glassFlow = fluidNoise(glassLocal * vec2(2.1, 1.55) + vec2(uTime * 0.032, -uTime * 0.021)) - 0.5;
       vec2 glassOffsetPixels = glassNormal
-        * (1.2 + glassEdge * glassEdge * (6.0 + uOpticalDistortion * 6.5));
-      glassOffsetPixels += vec2(glassFlow, -glassFlow * 0.38) * (0.8 + uOpticalFlow * 2.6);
+        * glassEdge * (8.0 + uOpticalDistortion * 9.0) * (1.0 + glassHover * 0.55);
+      glassOffsetPixels += vec2(glassFlow, -glassFlow * 0.38)
+        * glassEdge * (0.8 + uOpticalFlow * 2.6);
       vec2 glassOffset = glassOffsetPixels / uResolution;
       vec2 glassChroma = glassNormal
-        * (0.7 + glassEdge * 1.8 + uOpticalChromatic * 3.8) / uResolution;
+        * glassEdge * (1.0 + uOpticalChromatic * 4.6) / uResolution;
       vec3 glassRefraction;
       glassRefraction.r = texture2D(uScene, vUv - glassOffset - glassChroma).r;
       glassRefraction.g = texture2D(uScene, vUv - glassOffset).g;
       glassRefraction.b = texture2D(uScene, vUv - glassOffset + glassChroma).b;
       vec3 glassReflection = texture2D(uScene, vUv + glassOffset * 0.30).rgb;
-      glassRefraction = mix(glassRefraction, glassReflection, uOpticalBlur * 0.075);
+      glassRefraction = mix(glassRefraction, glassReflection, uOpticalBlur * 0.04);
+      float glassMorphEnergy = uUiGlassMorphEnergy[glassIndex];
+      vec2 glassMorphDir = normalize(uUiGlassMorphDir[glassIndex] + vec2(0.00001, 0.0));
+      float pointerDistance = length(fragmentPixel - uPointer) / max(max(glassHalf.x, glassHalf.y), 1.0);
+      float glassGlow = exp(-pointerDistance * pointerDistance * 5.5) * glassHover;
+      float pointerFacing = clamp(dot(glassNormal, normalize(uPointer - fragmentPixel + vec2(0.00001))), 0.0, 1.0);
+      float glassSpecular = pow(glassEdge, 2.4)
+        * (1.0 + 1.8 * glassHover * pointerFacing)
+        * (1.0 + glassMorphEnergy * 2.4);
+      float morphSweep = pow(glassEdge, 3.0)
+        * clamp(dot(glassNormal, glassMorphDir), 0.0, 1.0)
+        * glassMorphEnergy;
       glassRefraction += glassReflection * glassEdge * (0.038 + uOpticalIntensity * 0.036);
-      glassRefraction += vec3(0.74, 0.88, 1.0) * glassEdge * 0.020;
+      glassRefraction += vec3(0.74, 0.88, 1.0) * glassSpecular * 0.034;
+      glassRefraction += vec3(1.0, 0.94, 0.84) * glassGlow * 0.16;
+      glassRefraction += vec3(1.0, 0.97, 0.92) * morphSweep * 0.72;
       vec4 uiGlass = vec4(glassRefraction, sharedComposite.a);
       sharedComposite = mix(
         sharedComposite,
         uiGlass,
         glassMask * uUiGlassStrengths[glassIndex]
       );
+      if (glassDistance > 0.0 && glassDistance < 38.0) {
+        float outerShadow = 1.0 - smoothstep(0.0, 38.0, glassDistance);
+        sharedComposite.rgb *= 1.0 - outerShadow * 0.055 * uUiGlassStrengths[glassIndex];
+      }
     }
 
     // The library is one dynamic optical body. All primitives are merged into
@@ -2121,6 +2288,21 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     stencilBuffer: false,
     samples: 0,
   })
+  const compositeTarget = useFBO({
+    depthBuffer: false,
+    stencilBuffer: false,
+    samples: 0,
+  })
+  const blurHorizontalTarget = useFBO({
+    depthBuffer: false,
+    stencilBuffer: false,
+    samples: 0,
+  })
+  const blurVerticalTarget = useFBO({
+    depthBuffer: false,
+    stencilBuffer: false,
+    samples: 0,
+  })
   const postProcessing = useMemo(() => {
     const postScene = new THREE.Scene()
     const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
@@ -2146,6 +2328,10 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
         uUiGlassRects: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) },
         uUiGlassRadii: { value: new Float32Array(24) },
         uUiGlassStrengths: { value: new Float32Array(24) },
+        uUiGlassHover: { value: new Float32Array(24) },
+        uUiGlassMorphEnergy: { value: new Float32Array(24) },
+        uUiGlassMorphDir: { value: Array.from({ length: 24 }, () => new THREE.Vector2(0, 1)) },
+        uPointer: { value: new THREE.Vector2(-10000, -10000) },
         uLibraryRect: { value: new THREE.Vector4(1, 1, 1, 1) },
         uLibraryOpenProgress: { value: 0 },
         uTopControlsRect: { value: new THREE.Vector4(1, 1, 1, 1) },
@@ -2164,7 +2350,73 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     postScene.add(quad)
     return { postScene, postCamera, material, quad }
   }, [renderTarget.texture])
+  const liquidOreProcessing = useMemo(() => {
+    const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+    const makeQuad = (material) => {
+      const postScene = new THREE.Scene()
+      const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material)
+      quad.frustumCulled = false
+      postScene.add(quad)
+      return { postScene, quad }
+    }
+    const makeBlurMaterial = (texture, direction) => new THREE.ShaderMaterial({
+      uniforms: {
+        uTex: { value: texture },
+        uTexel: { value: new THREE.Vector2(1, 1) },
+        uDir: { value: direction },
+        uRadius: { value: LIQUID_ORE_GLASS_DEFAULTS.frost },
+      },
+      vertexShader: GLASS_ORB_VERTEX_SHADER,
+      fragmentShader: LIQUID_ORE_BLUR_FRAGMENT_SHADER,
+      depthTest: false,
+      depthWrite: false,
+    })
+    const horizontalMaterial = makeBlurMaterial(compositeTarget.texture, new THREE.Vector2(1, 0))
+    const verticalMaterial = makeBlurMaterial(blurHorizontalTarget.texture, new THREE.Vector2(0, 1))
+    const glassMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uScene: { value: compositeTarget.texture },
+        uBlurred: { value: blurVerticalTarget.texture },
+        uResolution: { value: new THREE.Vector2(1, 1) },
+        uCardCount: { value: 0 },
+        uCards: { value: Array.from({ length: LIQUID_ORE_MAX_CARDS }, () => new THREE.Vector4()) },
+        uCardRadius: { value: new Float32Array(LIQUID_ORE_MAX_CARDS) },
+        uRefractionHeight: { value: LIQUID_ORE_GLASS_DEFAULTS.refractionHeight },
+        uRefractionAmount: { value: LIQUID_ORE_GLASS_DEFAULTS.refractionAmount },
+        uChromatic: { value: LIQUID_ORE_GLASS_DEFAULTS.chromatic },
+        uSaturation: { value: LIQUID_ORE_GLASS_DEFAULTS.saturation },
+        uTint: { value: LIQUID_ORE_GLASS_DEFAULTS.tint },
+        uSpecular: { value: LIQUID_ORE_GLASS_DEFAULTS.specular },
+        uShadow: { value: LIQUID_ORE_GLASS_DEFAULTS.shadow },
+        uEdgeWidth: { value: LIQUID_ORE_GLASS_DEFAULTS.edgeWidth },
+        uPointer: { value: new THREE.Vector2(-100000, -100000) },
+        uHover: { value: new Float32Array(LIQUID_ORE_MAX_CARDS) },
+        uHoverGlow: { value: LIQUID_ORE_GLASS_DEFAULTS.hoverGlow },
+        uHoverScale: { value: LIQUID_ORE_GLASS_DEFAULTS.hoverScale },
+        uHoverRefract: { value: LIQUID_ORE_GLASS_DEFAULTS.hoverRefract },
+        uMorphEnergy: { value: new Float32Array(LIQUID_ORE_MAX_CARDS) },
+        uMorphDir: { value: Array.from({ length: LIQUID_ORE_MAX_CARDS }, () => new THREE.Vector2(0, 1)) },
+      },
+      vertexShader: GLASS_ORB_VERTEX_SHADER,
+      fragmentShader: LIQUID_ORE_GLASS_FRAGMENT_SHADER,
+      depthTest: false,
+      depthWrite: false,
+    })
+    const horizontal = makeQuad(horizontalMaterial)
+    const vertical = makeQuad(verticalMaterial)
+    const glass = makeQuad(glassMaterial)
+    return {
+      postCamera,
+      horizontalMaterial,
+      verticalMaterial,
+      glassMaterial,
+      horizontal,
+      vertical,
+      glass,
+    }
+  }, [blurHorizontalTarget.texture, blurVerticalTarget.texture, compositeTarget.texture])
   const postProcessingRef = useRef(postProcessing)
+  const liquidOreProcessingRef = useRef(liquidOreProcessing)
   const revealProgressRef = useRef(0)
   const playerRectFrameRef = useRef(0)
   const playerGlassTargetRef = useRef(0)
@@ -2174,18 +2426,37 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
   const canvasMetricsRef = useRef({ frame: 0, rect: null, scaleX: 1, scaleY: 1, radiusScale: 1 })
   const libraryOpenProgressRef = useRef(0)
   const topControlsOpenProgressRef = useRef(0)
+  const librarySpringRef = useRef({ progress: 0, velocity: 0 })
+  const topControlsSpringRef = useRef({ progress: 0, velocity: 0 })
+  const playerSpringRef = useRef({ progress: 1, velocity: 0 })
+  const uiGlassElementsRef = useRef([])
+  const uiGlassHoverRef = useRef(new WeakMap())
 
   useEffect(() => {
     postProcessingRef.current = postProcessing
   }, [postProcessing])
+
+  useEffect(() => {
+    liquidOreProcessingRef.current = liquidOreProcessing
+  }, [liquidOreProcessing])
 
   useEffect(() => () => {
     postProcessing.quad.geometry.dispose()
     postProcessing.material.dispose()
   }, [postProcessing])
 
+  useEffect(() => () => {
+    liquidOreProcessing.horizontal.quad.geometry.dispose()
+    liquidOreProcessing.vertical.quad.geometry.dispose()
+    liquidOreProcessing.glass.quad.geometry.dispose()
+    liquidOreProcessing.horizontalMaterial.dispose()
+    liquidOreProcessing.verticalMaterial.dispose()
+    liquidOreProcessing.glassMaterial.dispose()
+  }, [liquidOreProcessing])
+
   useFrame((state, delta) => {
     const pass = postProcessingRef.current
+    const liquidOre = liquidOreProcessingRef.current
     const pixelRatio = gl.getPixelRatio()
     const width = Math.max(1, Math.floor(size.width * pixelRatio))
     const height = Math.max(1, Math.floor(size.height * pixelRatio))
@@ -2214,8 +2485,21 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
       )
     }
     const opticalField = opticalFieldController.opticalField
+    const pointerState = opticalFieldController.state
+    pass.material.uniforms.uPointer.value.set(
+      (pointerState.x * 0.5 + 0.5) * width,
+      (pointerState.y * 0.5 + 0.5) * height,
+    )
+    liquidOre.glassMaterial.uniforms.uPointer.value.copy(pass.material.uniforms.uPointer.value)
     if (renderSizeRef.current.width !== width || renderSizeRef.current.height !== height) {
       renderTarget.setSize(width, height)
+      compositeTarget.setSize(width, height)
+      const blurWidth = Math.max(2, Math.floor(width / 2))
+      const blurHeight = Math.max(2, Math.floor(height / 2))
+      blurHorizontalTarget.setSize(blurWidth, blurHeight)
+      blurVerticalTarget.setSize(blurWidth, blurHeight)
+      liquidOre.horizontalMaterial.uniforms.uTexel.value.set(1 / blurWidth, 1 / blurHeight)
+      liquidOre.verticalMaterial.uniforms.uTexel.value.set(1 / blurWidth, 1 / blurHeight)
       renderSizeRef.current = { width, height }
     }
 
@@ -2245,16 +2529,8 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     pass.material.uniforms.uTopBlurStrength.value = mountainPanelIsOpen ? 0 : THREE.MathUtils.clamp(topBlurStrength, 0, 20)
     const libraryElement = document.querySelector('.local-library-drawer')
     const libraryTarget = libraryElement?.classList.contains('is-open') ? 1 : 0
-    const libraryResponse = libraryTarget > libraryOpenProgressRef.current ? 2.6 : 3.8
-    libraryOpenProgressRef.current = THREE.MathUtils.damp(
-      libraryOpenProgressRef.current,
-      libraryTarget,
-      libraryResponse,
-      delta,
-    )
-    if (Math.abs(libraryTarget - libraryOpenProgressRef.current) < 0.001) {
-      libraryOpenProgressRef.current = libraryTarget
-    }
+    librarySpringRef.current = stepLiquidMorph(librarySpringRef.current, delta, libraryTarget, liquidOreGlassState.bounce)
+    libraryOpenProgressRef.current = librarySpringRef.current.progress
     pass.material.uniforms.uLibraryOpenProgress.value = libraryOpenProgressRef.current
     if (libraryElement) {
       const libraryContent = libraryElement.querySelector('.library-content')
@@ -2269,15 +2545,8 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     }
     const topControlsElement = document.querySelector('.top-controls-card')
     const topControlsTarget = topControlsElement?.classList.contains('is-open') ? 1 : 0
-    topControlsOpenProgressRef.current = THREE.MathUtils.damp(
-      topControlsOpenProgressRef.current,
-      topControlsTarget,
-      topControlsTarget > topControlsOpenProgressRef.current ? 2.8 : 4.0,
-      delta,
-    )
-    if (Math.abs(topControlsTarget - topControlsOpenProgressRef.current) < 0.001) {
-      topControlsOpenProgressRef.current = topControlsTarget
-    }
+    topControlsSpringRef.current = stepLiquidMorph(topControlsSpringRef.current, delta, topControlsTarget, liquidOreGlassState.bounce)
+    topControlsOpenProgressRef.current = topControlsSpringRef.current.progress
     pass.material.uniforms.uTopControlsOpenProgress.value = topControlsOpenProgressRef.current
     if (topControlsElement) {
       const topControlsContent = topControlsElement.querySelector('.top-controls-content')
@@ -2291,61 +2560,67 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
       }
     }
     uiGlassFrameRef.current += 1
-    if (uiGlassFrameRef.current % 8 === 0) {
-      const selector = [
-        '.status-card',
-        '.mode-switch',
-        '.top-controls-card.is-open .mode-option',
-        '.persona-switch',
-        '.top-controls-card.is-open .persona-option',
-        '.top-controls-card.is-open .action-button',
-        '.top-controls-card.is-open .gesture-camera-toggle',
-        '.top-controls-card.is-open',
-        '.voice-popover.is-open',
-        '.memory-settings-panel.is-open',
-        '.ai-mode-expanded.is-open',
-        '.chat-panel',
+    if (uiGlassFrameRef.current % 2 === 0) {
+      // The source renderer receives physical glass bodies. Select every
+      // outer card/panel and every truly standalone button, then discard
+      // descendants so parent and child never refract the same pixels twice.
+      const liquidOreSurfaceSelector = [
+        '.liquid-morph-layer',
+        '.app [data-liquid-ore-surface="true"]',
+        '.app [class*="-card"]',
+        '.app [class*="-panel"]',
+        '.app [class*="-popover"]',
+        '.app [class*="-strip"]',
+        '.app [class*="-drawer"]',
+        '.app [class*="-glass"]',
+        '.app button:not(.settings-panel-backdrop)',
       ].join(',')
-      const elements = Array.from(document.querySelectorAll(selector))
+      const elements = Array.from(document.querySelectorAll(liquidOreSurfaceSelector))
+        .filter((element) => !element.parentElement?.closest(liquidOreSurfaceSelector))
+      const registeredElements = []
       let glassCount = 0
       for (const element of elements) {
-        if (glassCount >= 24) break
-        const isTopControlsButton = element.matches('.mode-option, .persona-option, .action-button, .gesture-camera-toggle')
-        const isTopControlsShell = element.matches('.top-controls-card')
-        if (element.closest('.top-controls-card') && !isTopControlsButton && !isTopControlsShell) continue
+        if (glassCount >= LIQUID_ORE_MAX_CARDS) break
         const rect = element.getBoundingClientRect()
         const style = window.getComputedStyle(element)
-        if (Number(style.opacity) <= 0.08 || style.display === 'none' || rect.width < 18 || rect.height < 18) continue
+        if (Number(style.opacity) <= 0.08 || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none' || rect.width < 18 || rect.height < 18) continue
         const visibleWidth = Math.min(rect.right, size.width) - Math.max(rect.left, 0)
         const visibleHeight = Math.min(rect.bottom, size.height) - Math.max(rect.top, 0)
         if (visibleWidth < 14 || visibleHeight < 14) continue
-        const libraryDrawer = element.closest('.local-library-drawer')
-        if (libraryDrawer && element !== libraryDrawer) {
-          const drawerRect = libraryDrawer.getBoundingClientRect()
-          const fullyInsideDrawer = rect.left >= drawerRect.left - 1
-            && rect.right <= drawerRect.right + 1
-            && rect.top >= drawerRect.top - 1
-            && rect.bottom <= drawerRect.bottom + 1
-          if (!fullyInsideDrawer) continue
-        }
         const radius = Math.min(parseFloat(style.borderRadius) || 18, rect.width * 0.5, rect.height * 0.5)
-        writeCanvasRect(pass.material.uniforms.uUiGlassRects.value[glassCount], rect)
-        pass.material.uniforms.uUiGlassRadii.value[glassCount] = radius * radiusScale
-        pass.material.uniforms.uUiGlassStrengths.value[glassCount] = isTopControlsButton ? 1.34 : 0.72
+        writeCanvasRect(liquidOre.glassMaterial.uniforms.uCards.value[glassCount], rect)
+        liquidOre.glassMaterial.uniforms.uCardRadius.value[glassCount] = radius * radiusScale
+        registeredElements.push(element)
         glassCount += 1
       }
-      pass.material.uniforms.uUiGlassCount.value = glassCount
-      pass.material.uniforms.uUiGlassRadii.value.needsUpdate = true
-      pass.material.uniforms.uUiGlassStrengths.value.needsUpdate = true
-      if (libraryElement) {
-        const rect = libraryElement.getBoundingClientRect()
-        writeCanvasRect(pass.material.uniforms.uLibraryRect.value, rect)
-      }
-      if (topControlsElement) {
-        const rect = topControlsElement.getBoundingClientRect()
-        writeCanvasRect(pass.material.uniforms.uTopControlsRect.value, rect)
-      }
+      uiGlassElementsRef.current = registeredElements
+      liquidOre.glassMaterial.uniforms.uCardCount.value = glassCount
     }
+    const glassHoverUniform = liquidOre.glassMaterial.uniforms.uHover.value
+    const glassMorphEnergyUniform = liquidOre.glassMaterial.uniforms.uMorphEnergy.value
+    const glassMorphDirUniform = liquidOre.glassMaterial.uniforms.uMorphDir.value
+    glassHoverUniform.fill(0)
+    glassMorphEnergyUniform.fill(0)
+    uiGlassElementsRef.current.forEach((element, index) => {
+      if (element.matches('.liquid-morph-layer')) {
+        const rect = element.getBoundingClientRect()
+        const radius = Math.min(parseFloat(element.style.borderRadius) || 18, rect.width * 0.5, rect.height * 0.5)
+        writeCanvasRect(liquidOre.glassMaterial.uniforms.uCards.value[index], rect)
+        liquidOre.glassMaterial.uniforms.uCardRadius.value[index] = radius * radiusScale
+      }
+      const currentHover = uiGlassHoverRef.current.get(element) || { progress: 0, velocity: 0 }
+      const nextHover = stepLiquidOreHover(currentHover, delta, element.matches(':hover') ? 1 : 0)
+      uiGlassHoverRef.current.set(element, nextHover)
+      glassHoverUniform[index] = THREE.MathUtils.clamp(nextHover.progress, 0, 1.12)
+      glassMorphEnergyUniform[index] = THREE.MathUtils.clamp(Number(element.dataset.morphEnergy) || 0, 0, 1)
+      const morphDirectionX = Number(element.dataset.morphDirX)
+      const morphDirectionY = Number(element.dataset.morphDirY)
+      glassMorphDirUniform[index].set(
+        Number.isFinite(morphDirectionX) ? morphDirectionX : 0,
+        Number.isFinite(morphDirectionY) ? -morphDirectionY : 1,
+      )
+    })
+    liquidOre.glassMaterial.uniformsNeedUpdate = true
     playerRectFrameRef.current += 1
     if (playerRectFrameRef.current % 6 === 0) {
       const playerElement = document.querySelector('.player-card')
@@ -2364,12 +2639,8 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
     const playerElement = document.querySelector('.player-card')
     const immersiveMode = document.querySelector('.app')?.classList.contains('immersive-mode')
     const playerOpenTarget = !immersiveMode || playerElement?.classList.contains('is-immersive-visible') ? 1 : 0
-    playerOpenProgressRef.current = THREE.MathUtils.damp(
-      playerOpenProgressRef.current,
-      playerOpenTarget,
-      playerOpenTarget > playerOpenProgressRef.current ? 2.7 : 4.0,
-      delta,
-    )
+    playerSpringRef.current = stepLiquidMorph(playerSpringRef.current, delta, playerOpenTarget, liquidOreGlassState.bounce)
+    playerOpenProgressRef.current = playerSpringRef.current.progress
     pass.material.uniforms.uPlayerOpenProgress.value = playerOpenProgressRef.current
     pass.material.uniforms.uPlayerGlassStrength.value = THREE.MathUtils.damp(
       pass.material.uniforms.uPlayerGlassStrength.value,
@@ -2381,15 +2652,67 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
       ? Math.min(1, revealProgressRef.current + delta / 3.6)
       : THREE.MathUtils.damp(revealProgressRef.current, 0, 3.4, delta)
     pass.material.uniforms.uOrbVisibility.value = THREE.MathUtils.smoothstep(revealProgressRef.current, 0, 1)
+
+    // The existing pass now owns only the music scene and voice orb. All UI
+    // glass is rendered once by the direct Liquid Ore source adapter below.
+    pass.material.uniforms.uPlayerGlassStrength.value = 0
+    pass.material.uniforms.uUiGlassCount.value = 0
+    pass.material.uniforms.uLibraryOpenProgress.value = 0
+    pass.material.uniforms.uTopControlsOpenProgress.value = 0
+    pass.material.uniforms.uLibraryRect.value.set(-100000, -100000, 1, 1)
+    pass.material.uniforms.uTopControlsRect.value.set(-100000, -100000, 1, 1)
+
+    const oreUniforms = liquidOre.glassMaterial.uniforms
+    const glassSettings = liquidOreGlassState
+    oreUniforms.uResolution.value.set(width, height)
+    liquidOre.horizontalMaterial.uniforms.uRadius.value = glassSettings.frost
+    liquidOre.verticalMaterial.uniforms.uRadius.value = glassSettings.frost
+    oreUniforms.uRefractionHeight.value = glassSettings.refractionHeight * radiusScale
+    oreUniforms.uRefractionAmount.value = glassSettings.refractionAmount * radiusScale
+    oreUniforms.uChromatic.value = glassSettings.chromatic
+    oreUniforms.uSaturation.value = glassSettings.saturation
+    oreUniforms.uTint.value = glassSettings.tint
+    oreUniforms.uSpecular.value = glassSettings.specular
+    oreUniforms.uShadow.value = glassSettings.shadow
+    oreUniforms.uEdgeWidth.value = glassSettings.edgeWidth * radiusScale
+    oreUniforms.uHoverGlow.value = glassSettings.hoverGlow
+    oreUniforms.uHoverScale.value = glassSettings.hoverScale
+    oreUniforms.uHoverRefract.value = glassSettings.hoverRefract
+
+    gl.setRenderTarget(compositeTarget)
+    gl.clear()
     gl.render(pass.postScene, pass.postCamera)
+
+    gl.setRenderTarget(blurHorizontalTarget)
+    gl.clear()
+    gl.render(liquidOre.horizontal.postScene, liquidOre.postCamera)
+
+    gl.setRenderTarget(blurVerticalTarget)
+    gl.clear()
+    gl.render(liquidOre.vertical.postScene, liquidOre.postCamera)
+
+    gl.setRenderTarget(null)
+    gl.clear()
+    gl.render(liquidOre.glass.postScene, liquidOre.postCamera)
   }, 1)
 
   return null
 }
 
-function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition, quality }) {
+function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition, gestureControlRef, quality, liquidMetal }) {
   return (
     <>
+      {liquidMetal?.visible && (
+        <LiquidMetalFieldQuad
+          colors={liquidMetal.colors}
+          trackKey={liquidMetal.trackKey}
+          settings={liquidMetal.settings}
+          paused={liquidMetal.paused}
+          forceTransitionSignal={liquidMetal.forceTransitionSignal}
+          active={active}
+          getFrequencyData={getFrequencyData}
+        />
+      )}
       <ambientLight intensity={0.45} />
       <PointerCameraRig pointerRef={pointerRef} voiceOrbVisible={voiceOrbVisible} />
       <ParticleVinylDisc
@@ -2400,6 +2723,7 @@ function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mo
         mountainControls={mountainControls}
         voiceOrbVisible={voiceOrbVisible}
         portraitTransition={portraitTransition}
+        gestureControlRef={gestureControlRef}
         quality={quality}
       />
       {/* The pass also composites the top controls and library glass. Keep it
@@ -2425,7 +2749,9 @@ export default function ParticleVinylBackground({
   voiceOrbLevel = 0,
   onReady,
   portraitTransition = 0,
+  gestureControlRef,
   quality = 'high',
+  liquidMetalSettings = LIQUID_METAL_BACKGROUND_DEFAULTS,
 }) {
   const pointerRef = useRef(opticalFieldController.state)
   const { colors: backgroundColors, source: paletteSource } = useCoverBackgroundColors(coverUrl, preloadCoverUrls)
@@ -2464,20 +2790,27 @@ export default function ParticleVinylBackground({
       accent: normalize(backgroundColors.accent, 1.08),
     }
   }, [backgroundBrightness, backgroundColors])
-  const flowSettings = useMemo(() => ({
-    baseFlowSpeed: quality === 'low' ? 0.012 : debugMode ? 0.036 : 0.022,
-    baseWarpStrength: quality === 'low' ? 0.07 : debugMode ? 0.22 : 0.14,
-    baseBreathAmount: quality === 'low' ? 0.018 : 0.045,
-    baseDriftAmount: quality === 'low' ? 0.014 : debugMode ? 0.052 : 0.035,
-    leftDarkness: 0.38,
-    vignetteStrength: 0.32,
+  const flowSettings = useMemo(() => resolveLiquidMetalBackgroundSettings({
+    settings: liquidMetalSettings,
+    quality,
+    active,
+    debugMode,
     debugFlowStrength,
     debugBurstStrength,
     showBaseFlow,
     showTransitionBurst,
     debugView,
-    audioReactiveAmount: active && quality !== 'low' ? 0.24 : 0,
-  }), [active, debugBurstStrength, debugFlowStrength, debugMode, debugView, quality, showBaseFlow, showTransitionBurst])
+  }), [
+    active,
+    debugBurstStrength,
+    debugFlowStrength,
+    debugMode,
+    debugView,
+    liquidMetalSettings,
+    quality,
+    showBaseFlow,
+    showTransitionBurst,
+  ])
   const resolvedCoverUrl = coverUrl || FALLBACK_COVER
   const flowTrackKey = paletteSource === resolvedCoverUrl ? (trackKey || resolvedCoverUrl) : ''
   const recordDpr = quality === 'low'
@@ -2591,7 +2924,7 @@ export default function ParticleVinylBackground({
       pointer.lastClientY = event.clientY
     }
     const handlePointerDown = (event) => {
-      if (event.button !== 0 || event.target instanceof Element && event.target.closest('.local-library-drawer, .library-edge-trigger, button, input, textarea, select, [contenteditable="true"], a')) return
+      if (event.button !== 0 || event.target instanceof Element && event.target.closest(UI_INTERACTION_SELECTOR)) return
       event.preventDefault()
       pointer.dragging = true
       pointer.lastClientX = event.clientX
@@ -2599,7 +2932,7 @@ export default function ParticleVinylBackground({
     }
     const handlePointerUp = () => { pointer.dragging = false }
     const handleWheel = (event) => {
-      if (event.target instanceof Element && event.target.closest('.local-library-drawer, .library-edge-trigger, button, input, textarea, select, [contenteditable="true"], a')) return
+      if (event.target instanceof Element && event.target.closest(UI_INTERACTION_SELECTOR)) return
       pointer.zoom = THREE.MathUtils.clamp(pointer.zoom + event.deltaY * 0.0042, -4.4, 4.2)
       event.preventDefault()
     }
@@ -2627,7 +2960,7 @@ export default function ParticleVinylBackground({
 
   return (
     <div className="particle-vinyl-background" style={backgroundStyle}>
-      {showFlowBackground && quality !== 'low' && (
+      {showFlowBackground && quality !== 'low' && !showRecord && (
         <div className="flow-field-layer" aria-hidden="true">
           <FlowFieldBackground
             colors={flowColors}
@@ -2636,6 +2969,8 @@ export default function ParticleVinylBackground({
             paused={pauseFlow}
             forceTransitionSignal={forceTransitionSignal}
             quality={quality}
+            active={active}
+            getFrequencyData={getFrequencyData}
           />
         </div>
       )}
@@ -2664,7 +2999,16 @@ export default function ParticleVinylBackground({
               voiceOrbVisible={voiceOrbVisible}
               voiceOrbLevel={voiceOrbLevel}
               portraitTransition={portraitTransition}
+              gestureControlRef={gestureControlRef}
               quality={quality}
+              liquidMetal={{
+                visible: showFlowBackground && quality !== 'low',
+                colors: flowColors,
+                trackKey: flowTrackKey,
+                settings: flowSettings,
+                paused: pauseFlow,
+                forceTransitionSignal,
+              }}
             />
           </Canvas>
         </div>

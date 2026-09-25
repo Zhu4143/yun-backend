@@ -1,18 +1,27 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AudioEngine } from '../player/audio/AudioEngine.js'
+import {
+  adjacentQueueSong,
+  commitHardPlayTarget,
+  createActivePlaybackRecovery,
+  pauseActivePlayback,
+  queuedNextTrack,
+  setPlaybackModeWithQueuePolicy,
+  shouldCommitHardPlayTarget,
+  toggleActivePlayback,
+  usesAutomaticNextQueue,
+} from '../player/playback/playbackOrchestration.js'
+import { CROSSFADE_DURATION, CrossfadeController } from '../player/transition/CrossfadeController.js'
+import { createCrossfadeTimeline } from '../player/playback/crossfadeTimeline.js'
+import { prefetchSongLyrics } from '../services/songLyrics.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
 const PLAYBACK_MODES = ['sequence', 'loop_one', 'shuffle', 'ai_recommend', 'companion_continue']
-const CROSSFADE_DURATION = 7000
-const CROSSFADE_START_VOLUME = 0.03
-const MIN_CROSSFADE_DURATION = 1200
 const DEFAULT_AUTO_TAIL_SILENCE_SECONDS = 4
 const SILENCE_DETECTION_LOOKAHEAD = 18000
 const SILENCE_HOLD_DURATION = 900
 const SILENCE_RMS_THRESHOLD = 0.006
 const TAIL_SILENCE_CACHE_KEY = 'yun_tail_silence_seconds'
-const MIN_TRANSITION_RATE = 0.95
-const MAX_TRANSITION_RATE = 1.05
 
 function getSongId(song) {
   return song?.id || `${song?.title || ''}-${song?.artist || ''}`
@@ -44,29 +53,8 @@ function getSongAudibleEndTime(song) {
   return Number.isFinite(value) && value > 0 ? value : 0
 }
 
-function equalPowerFadeIn(progress) {
-  return Math.sin((Math.PI / 2) * progress)
-}
-
-function equalPowerFadeOut(progress) {
-  return Math.cos((Math.PI / 2) * progress)
-}
-
 function sameSong(a, b) {
   return Boolean(a && b && getSongId(a) === getSongId(b))
-}
-
-function clampTransitionRate(rate) {
-  const value = Number(rate)
-  return Number.isFinite(value) ? Math.max(MIN_TRANSITION_RATE, Math.min(MAX_TRANSITION_RATE, value)) : 1
-}
-
-function setDeckPlaybackRate(audio, rate) {
-  if (!audio) return
-  audio.preservesPitch = true
-  audio.mozPreservesPitch = true
-  audio.webkitPreservesPitch = true
-  audio.playbackRate = clampTransitionRate(rate)
 }
 
 function getInitialPlaybackMode() {
@@ -119,6 +107,8 @@ function getInitialTailSilenceCache() {
 
 export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   const [audioEngine] = useState(() => new AudioEngine())
+  const [crossfadeController] = useState(() => new CrossfadeController({ audioEngine }))
+  const [activePlaybackRecovery] = useState(() => createActivePlaybackRecovery())
   const [restoreSnapshot] = useState(() => {
     const queue = Array.isArray(restoreState?.queue) ? restoreState.queue.filter((song) => song?.fileUrl) : []
     const currentTrackId = String(restoreState?.currentTrackId || '')
@@ -139,13 +129,6 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   const queuedNextSongRef = useRef(null)
   const upNextTracksRef = useRef([])
   const autoUpNextTracksRef = useRef([])
-  const crossfadeFrameRef = useRef(0)
-  const crossfadeRecoveryTimerRef = useRef(0)
-  const tempoRampFrameRef = useRef(0)
-  const crossfadeTokenRef = useRef(0)
-  const crossfadeTransactionRef = useRef(null)
-  const standbyPlayTokenRef = useRef(0)
-  const isCrossfadingRef = useRef(false)
   const duckTokensRef = useRef(new Map())
   const silenceStartedAtRef = useRef(0)
   const tailSilenceBySongRef = useRef(getInitialTailSilenceCache())
@@ -156,13 +139,16 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(restoreSnapshot.position)
   const [duration, setDuration] = useState(restoreSnapshot.duration)
+  const [crossfadeTimeline] = useState(() => createCrossfadeTimeline({
+    onTime: setCurrentTime,
+    onDuration: setDuration,
+  }))
   const [volume, setVolumeState] = useState(1)
   const [playbackMode, setPlaybackModeState] = useState(initialPlaybackMode)
   const [lastAutoNextSong, setLastAutoNextSong] = useState(null)
   const [upNextTracks, setUpNextTracks] = useState([])
   const [autoUpNextTracks, setAutoUpNextTracks] = useState([])
   const [audioVersion, setAudioVersion] = useState(0)
-  const mediaRecoveryRef = useRef({ source: '', attempts: 0, timer: 0 })
 
   useEffect(() => {
     playlistRef.current = playlist
@@ -226,7 +212,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   }, [audioEngine])
 
   const preloadTrack = useCallback((song) => {
-    if (!song?.fileUrl || isCrossfadingRef.current || sameSong(song, currentSongRef.current)) return false
+    if (!song?.fileUrl || crossfadeController.isCrossfading() || sameSong(song, currentSongRef.current)) return false
     const deck = ensureStandbyAudio()
     if (deck.src !== song.fileUrl) {
       deck.pause()
@@ -238,7 +224,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     deck.volume = 0
     ensureMusicAudioGraph(deck)
     return true
-  }, [ensureMusicAudioGraph, ensureStandbyAudio])
+  }, [crossfadeController, ensureMusicAudioGraph, ensureStandbyAudio])
 
   const getEffectiveVolume = useCallback(() => (
     // Deck volumes control user volume and crossfade only. Ducking lives on
@@ -247,118 +233,20 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   ), [audioEngine])
 
   const applyTransactionVolumes = useCallback(() => {
-    const effectiveVolume = getEffectiveVolume()
-    const transaction = crossfadeTransactionRef.current
+    crossfadeController.applyVolumes()
+  }, [crossfadeController])
 
-    if (transaction && isCrossfadingRef.current) {
-      transaction.fromAudio.volume = effectiveVolume * equalPowerFadeOut(transaction.progress)
-      transaction.toAudio.volume = effectiveVolume * (
-        CROSSFADE_START_VOLUME
-        + (1 - CROSSFADE_START_VOLUME) * equalPowerFadeIn(transaction.progress)
-      )
-      return
+  const cancelCrossfade = useCallback(() => {
+    crossfadeTimeline.clear()
+    const result = crossfadeController.cancel()
+    if (result.shouldRefreshActiveDeck) setAudioVersion((version) => version + 1)
+    if (result.hadTransaction) {
+      const activeDeck = audioEngine.getActiveDeck()
+      setCurrentTime(activeDeck?.currentTime || 0)
+      setDuration(getSafeDuration(activeDeck))
     }
-
-    const activeAudio = audioEngine.getActiveDeck()
-    const standbyAudio = audioEngine.getStandbyDeck()
-    if (activeAudio) activeAudio.volume = effectiveVolume
-    if (standbyAudio) standbyAudio.volume = 0
-  }, [audioEngine, getEffectiveVolume])
-
-  const assertStableDeckState = useCallback((label) => {
-    if (!import.meta.env.DEV) return
-    const activeAudio = audioEngine.getActiveDeck()
-    const standbyAudio = audioEngine.getStandbyDeck()
-    const expectedVolume = getEffectiveVolume()
-    const violations = []
-
-    if (isCrossfadingRef.current) violations.push('crossfade flag still set')
-    if (crossfadeFrameRef.current) violations.push('crossfade RAF still active')
-    if (crossfadeRecoveryTimerRef.current) violations.push('recovery timer still active')
-    if (activeAudio && Math.abs(activeAudio.volume - expectedVolume) > 0.001) {
-      violations.push(`active volume ${activeAudio.volume} != ${expectedVolume}`)
-    }
-    if (standbyAudio && (!standbyAudio.paused || standbyAudio.volume !== 0)) {
-      violations.push(`standby is not silent/paused (${standbyAudio.paused}, ${standbyAudio.volume})`)
-    }
-
-    if (violations.length) {
-      console.error(`[player:${label}] unstable deck state`, violations)
-    }
-  }, [audioEngine, getEffectiveVolume])
-
-  const cancelTempoRamp = useCallback(({ resetDecks = false } = {}) => {
-    if (tempoRampFrameRef.current) {
-      cancelAnimationFrame(tempoRampFrameRef.current)
-      tempoRampFrameRef.current = 0
-    }
-    if (resetDecks) {
-      setDeckPlaybackRate(audioEngine.getActiveDeck(), 1)
-      setDeckPlaybackRate(audioEngine.getStandbyDeck(), 1)
-    }
-  }, [audioEngine])
-
-  const rampPlaybackRate = useCallback((audio, targetRate, durationMs = 1200) => {
-    if (!audio) return
-    cancelTempoRamp()
-    const fromRate = clampTransitionRate(audio.playbackRate)
-    const toRate = clampTransitionRate(targetRate)
-    const startedAt = performance.now()
-    const step = (now) => {
-      const progress = Math.min(1, (now - startedAt) / Math.max(160, durationMs))
-      const eased = 1 - Math.pow(1 - progress, 3)
-      setDeckPlaybackRate(audio, fromRate + (toRate - fromRate) * eased)
-      if (progress < 1) tempoRampFrameRef.current = requestAnimationFrame(step)
-      else tempoRampFrameRef.current = 0
-    }
-    tempoRampFrameRef.current = requestAnimationFrame(step)
-  }, [cancelTempoRamp])
-
-  const cancelCrossfade = useCallback(({ pauseActive = false } = {}) => {
-    crossfadeTokenRef.current += 1
-    cancelTempoRamp({ resetDecks: true })
-
-    if (crossfadeFrameRef.current) {
-      cancelAnimationFrame(crossfadeFrameRef.current)
-      crossfadeFrameRef.current = 0
-    }
-
-    if (crossfadeRecoveryTimerRef.current) {
-      window.clearTimeout(crossfadeRecoveryTimerRef.current)
-      crossfadeRecoveryTimerRef.current = 0
-    }
-
-    const transaction = crossfadeTransactionRef.current
-    if (transaction) {
-      const { fromAudio, toAudio, song, resolve } = transaction
-      const promoteTarget = sameSong(currentSongRef.current, song) && !toAudio.paused
-      const activeAudio = promoteTarget ? toAudio : fromAudio
-      const inactiveAudio = promoteTarget ? fromAudio : toAudio
-
-      inactiveAudio.pause()
-      inactiveAudio.volume = 0
-      activeAudio.volume = getEffectiveVolume()
-      if (pauseActive) activeAudio.pause()
-      if (audioEngine.getActiveDeck() !== activeAudio) audioEngine.swapDecks()
-      crossfadeTransactionRef.current = null
-      setAudioVersion((version) => version + 1)
-      resolve?.({ ok: false, song, error: 'crossfade_cancelled' })
-    } else {
-      const activeAudio = audioEngine.getActiveDeck()
-      const standbyAudio = audioEngine.getStandbyDeck()
-      if (activeAudio) {
-        activeAudio.volume = getEffectiveVolume()
-        if (pauseActive) activeAudio.pause()
-      }
-      if (standbyAudio) {
-        standbyAudio.volume = 0
-        standbyAudio.pause()
-      }
-    }
-
-    isCrossfadingRef.current = false
-    assertStableDeckState('cancel')
-  }, [assertStableDeckState, audioEngine, cancelTempoRamp, getEffectiveVolume])
+    return result
+  }, [audioEngine, crossfadeController, crossfadeTimeline])
 
   const setVolume = useCallback((nextVolume) => {
     const safeVolume = clampVolume(nextVolume)
@@ -541,6 +429,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       return { ok: false, error: 'missing_file_url' }
     }
 
+    prefetchSongLyrics(song)
     cancelCrossfade()
     const audio = ensureActiveAudio()
     const outputReady = await resumeMusicOutput(audio)
@@ -551,20 +440,18 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       standbyAudio.removeAttribute('src')
       standbyAudio.load()
     }
-    const currentId = getSongId(currentSongRef.current)
-    const nextId = getSongId(song)
-
-    if (currentId !== nextId) {
+    if (shouldCommitHardPlayTarget({ audio, currentSong: currentSongRef.current, song })) {
       resetSilenceDetection()
-      audio.pause()
-      audio.src = song.fileUrl
-      audio.currentTime = 0
-      audio.volume = getEffectiveVolume()
-      currentSongRef.current = song
-      requestedSongRef.current = song
-      setCurrentSong(song)
-      setCurrentTime(0)
-      setDuration(0)
+      commitHardPlayTarget({
+        audio,
+        song,
+        effectiveVolume: getEffectiveVolume(),
+        currentSongRef,
+        requestedSongRef,
+        setCurrentSong,
+        setCurrentTime,
+        setDuration,
+      })
     }
 
     try {
@@ -572,7 +459,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       // state even though calling play() resolves. Reloading the same proxied
       // source forces a fresh request, which lets the server refresh expired
       // NetEase stream URLs.
-      if (audio.error && audio.src === song.fileUrl) {
+      if (audio.error) {
         audio.load()
       }
       await audio.play()
@@ -591,11 +478,12 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     }
   }, [audioEngine, cancelCrossfade, ensureActiveAudio, getEffectiveVolume, resetSilenceDetection, resumeMusicOutput])
 
-  const crossfadeToSong = useCallback(async (song) => {
+  const crossfadeToSong = useCallback(async (song, options = {}) => {
     if (!song?.fileUrl) {
       return { ok: false, error: 'missing_file_url' }
     }
 
+    prefetchSongLyrics(song)
     cancelCrossfade()
     const fromAudio = audioEngine.getActiveDeck()
     const previousSong = currentSongRef.current
@@ -605,9 +493,6 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     }
 
     resetSilenceDetection()
-    isCrossfadingRef.current = true
-    const token = crossfadeTokenRef.current
-    const toAudio = ensureStandbyAudio()
     const requestedTransition = playbackModeRef.current === 'companion_continue'
       ? song.transitionPlan
       : null
@@ -616,142 +501,48 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     const transitionPlan = requestedTransition && (!plannedTrackId || plannedTrackId === songTrackId)
       ? requestedTransition
       : null
-    await resumeMusicOutput(fromAudio)
-    await resumeMusicOutput(toAudio)
-    const targetVolume = getEffectiveVolume()
-    const naturalFadeDuration = Math.max(
-      MIN_CROSSFADE_DURATION,
-      Math.min(CROSSFADE_DURATION, (getSafeDuration(fromAudio) - fromAudio.currentTime) * 1000 || CROSSFADE_DURATION),
-    )
-    const fadeDuration = transitionPlan
-      ? Math.max(MIN_CROSSFADE_DURATION, Math.min(Number(transitionPlan.crossfadeMs) || naturalFadeDuration, naturalFadeDuration + 1800))
-      : naturalFadeDuration
-
-    toAudio.pause()
-    if (toAudio.src !== song.fileUrl) {
-      toAudio.src = song.fileUrl
-    }
-    toAudio.currentTime = transitionPlan ? Math.max(0, Math.min(0.75, Number(transitionPlan.startOffsetSec) || 0)) : 0
-    if (transitionPlan) {
-      setDeckPlaybackRate(toAudio, transitionPlan.toRate)
-      rampPlaybackRate(fromAudio, transitionPlan.fromRate, Math.min(1800, fadeDuration * 0.36))
-    } else {
-      setDeckPlaybackRate(fromAudio, 1)
-      setDeckPlaybackRate(toAudio, 1)
-    }
-    toAudio.volume = Math.min(targetVolume, targetVolume * CROSSFADE_START_VOLUME)
-    requestedSongRef.current = song
-    standbyPlayTokenRef.current = token
-
-    try {
-      await toAudio.play()
-    } catch (error) {
-      if (token === crossfadeTokenRef.current) {
-        isCrossfadingRef.current = false
-        requestedSongRef.current = currentSongRef.current
-        toAudio.volume = 0
-        toAudio.pause()
-      }
-      return {
-        ok: false,
-        song,
-        error: error instanceof Error ? error.message : 'play_failed',
-      }
-    }
-
-    if (token !== crossfadeTokenRef.current) {
-      if (audioEngine.getStandbyDeck() === toAudio && standbyPlayTokenRef.current === token) {
-        toAudio.volume = 0
-        toAudio.pause()
-      }
-      return { ok: false, song, error: 'crossfade_cancelled' }
-    }
-
-    currentSongRef.current = song
-    setCurrentSong(song)
-    setCurrentTime(0)
-    setDuration(getSafeDuration(toAudio))
-    setIsPlaying(true)
-
-    return new Promise((resolve) => {
-      const startedAt = performance.now()
-      let finished = false
-      const finish = () => {
-        if (finished || token !== crossfadeTokenRef.current) return
-        resetSilenceDetection()
-        finished = true
-        if (crossfadeRecoveryTimerRef.current) {
-          window.clearTimeout(crossfadeRecoveryTimerRef.current)
-          crossfadeRecoveryTimerRef.current = 0
+    const result = await crossfadeController.startTransition({
+      source: song.fileUrl,
+      transitionPlan,
+      shouldPromoteTarget: () => sameSong(currentSongRef.current, song),
+      onPrepared: () => {
+        requestedSongRef.current = song
+      },
+      onTargetPlaying: ({ toDeck }) => {
+        currentSongRef.current = song
+        crossfadeTimeline.follow(toDeck)
+        setCurrentSong(song)
+        setIsPlaying(true)
+        if (options.autoTransition && playbackModeRef.current === 'companion_continue') {
+          setLastAutoNextSong({
+            id: `${getSongId(song)}-${Date.now()}`,
+            song,
+            previousSong,
+          })
         }
-        crossfadeFrameRef.current = 0
-        isCrossfadingRef.current = false
-        fromAudio.pause()
-        fromAudio.currentTime = 0
-        fromAudio.volume = 0
-        setDeckPlaybackRate(fromAudio, 1)
-        toAudio.volume = getEffectiveVolume()
-        audioEngine.swapDecks()
-        crossfadeTransactionRef.current = null
+      },
+      onCommitted: ({ activeDeck }) => {
+        crossfadeTimeline.clear()
+        setCurrentTime(activeDeck.currentTime || 0)
+        setDuration(getSafeDuration(activeDeck))
+        resetSilenceDetection()
         setIsPlaying(true)
         setAudioVersion((version) => version + 1)
-        if (transitionPlan) {
-          // Hold the beat match through the blend, then return imperceptibly
-          // to the song's native tempo. The ramp is interruptible by any user
-          // skip, pause, or later transition.
-          rampPlaybackRate(toAudio, 1, Number(transitionPlan.restoreDurationMs) || 9000)
-        } else {
-          setDeckPlaybackRate(toAudio, 1)
-        }
-        assertStableDeckState('finish')
-        resolve({ ok: true, song })
-      }
-
-      const step = (now) => {
-        if (token !== crossfadeTokenRef.current) {
-          return
-        }
-
-        const progress = Math.min(1, (now - startedAt) / fadeDuration)
-        const fadeOut = equalPowerFadeOut(progress)
-        const fadeIn = equalPowerFadeIn(progress)
-        const audibleFadeIn = CROSSFADE_START_VOLUME + (1 - CROSSFADE_START_VOLUME) * fadeIn
-        const transaction = crossfadeTransactionRef.current
-        if (!transaction || transaction.token !== token) return
-        transaction.progress = progress
-        const effectiveVolume = getEffectiveVolume()
-        fromAudio.volume = effectiveVolume * fadeOut
-        toAudio.volume = Math.min(effectiveVolume, effectiveVolume * audibleFadeIn)
-
-        if (progress < 1) {
-          crossfadeFrameRef.current = requestAnimationFrame(step)
-          return
-        }
-
-        finish()
-      }
-
-      crossfadeTransactionRef.current = {
-        token,
-        fromAudio,
-        toAudio,
-        song,
-        progress: 0,
-        resolve,
-      }
-      crossfadeRecoveryTimerRef.current = window.setTimeout(() => {
-        if (token === crossfadeTokenRef.current && audioEngine.getStandbyDeck() === toAudio) {
-          finish()
-        }
-      }, fadeDuration + 350)
-
-      crossfadeFrameRef.current = requestAnimationFrame(step)
+      },
+      onFailed: () => {
+        crossfadeTimeline.clear()
+        requestedSongRef.current = currentSongRef.current
+      },
     })
-  }, [assertStableDeckState, audioEngine, cancelCrossfade, ensureStandbyAudio, getEffectiveVolume, playSongHard, rampPlaybackRate, resetSilenceDetection, resumeMusicOutput])
+
+    return result.ok
+      ? { ok: true, song }
+      : { ok: false, song, error: result.error }
+  }, [audioEngine, cancelCrossfade, crossfadeController, crossfadeTimeline, playSongHard, resetSilenceDetection])
 
   const playSong = useCallback((song, options = {}) => {
     if (!options.fromRadioQueue) queuedNextSongRef.current = null
-    return options.crossfade ? crossfadeToSong(song) : playSongHard(song)
+    return options.crossfade ? crossfadeToSong(song, options) : playSongHard(song)
   }, [crossfadeToSong, playSongHard])
 
   const playSongFromQueue = useCallback((song, songs, options = {}) => {
@@ -760,42 +551,24 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   }, [playSong, setPlaybackQueue])
 
   const pausePlayback = useCallback(() => {
-    cancelCrossfade({ pauseActive: true })
+    pauseActivePlayback({ audioEngine, cancelTransition: cancelCrossfade })
     resetSilenceDetection()
     setIsPlaying(false)
 
     return { ok: true, song: currentSongRef.current }
-  }, [cancelCrossfade, resetSilenceDetection])
+  }, [audioEngine, cancelCrossfade, resetSilenceDetection])
 
   const togglePlayPause = useCallback(async () => {
-    const audio = audioEngine.getActiveDeck()
-
-    if (!currentSongRef.current) {
-      const firstSong = playlistRef.current[0]
-      return firstSong ? playSong(firstSong) : { ok: false, error: 'empty_library' }
-    }
-
-    if (!audio) {
-      return { ok: false, error: 'missing_audio' }
-    }
-
-    if (audio.paused) {
-      try {
-        await resumeMusicOutput(audio)
-        await audio.play()
-        setIsPlaying(true)
-        return { ok: true, song: currentSongRef.current }
-      } catch (error) {
-        setIsPlaying(false)
-        return {
-          ok: false,
-          song: currentSongRef.current,
-          error: error instanceof Error ? error.message : 'play_failed',
-        }
-      }
-    }
-
-    return pausePlayback()
+    return toggleActivePlayback({
+      audioEngine,
+      currentSong: currentSongRef.current,
+      firstSong: playlistRef.current[0],
+      playSong,
+      pausePlayback,
+      resumeOutput: resumeMusicOutput,
+      onPlaying: () => setIsPlaying(true),
+      onFailed: () => setIsPlaying(false),
+    })
   }, [audioEngine, pausePlayback, playSong, resumeMusicOutput])
 
   const getCurrentIndex = useCallback(() => {
@@ -835,6 +608,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   }, [updateUpNextTracks])
 
   const setAutoUpNext = useCallback((songs, options = {}) => {
+    if (!usesAutomaticNextQueue(playbackModeRef.current)) return
     const manualKeys = new Set(upNextTracksRef.current.map(getRecommendationKey))
     const existingKeys = new Set(options.replace ? [] : autoUpNextTracksRef.current.map(getRecommendationKey))
     const excludedKeys = new Set([
@@ -879,24 +653,27 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
 
     const mode = playbackModeRef.current
 
-    if (mode === 'loop_one' && currentSongRef.current) {
+    if (mode === 'loop_one' && auto && currentSongRef.current) {
       return playSongHard(currentSongRef.current)
     }
 
-    const manualQueuedSong = upNextTracksRef.current[0]
-    if (manualQueuedSong) {
+    const queuedTrack = queuedNextTrack({
+      mode,
+      manualTracks: upNextTracksRef.current,
+      automaticTracks: autoUpNextTracksRef.current,
+    })
+    if (queuedTrack?.queue === 'manual') {
       updateUpNextTracks((current) => current.slice(1))
-      return playSong(manualQueuedSong, { crossfade: true, fromRadioQueue: true })
+      return playSong(queuedTrack.song, { crossfade: true, fromRadioQueue: true, autoTransition: auto })
     }
 
-    const automaticQueuedSong = autoUpNextTracksRef.current[0]
-    if (automaticQueuedSong) {
+    if (queuedTrack?.queue === 'automatic') {
       setAutoUpNextTracks((current) => {
         const next = current.slice(1)
         autoUpNextTracksRef.current = next
         return next
       })
-      return playSong(automaticQueuedSong, { crossfade: true, fromRadioQueue: true })
+      return playSong(queuedTrack.song, { crossfade: true, fromRadioQueue: true, autoTransition: auto })
     }
 
     if (mode === 'shuffle') {
@@ -911,13 +688,12 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
         || recommendedSong(songs, currentSongRef.current)
         || randomSong(songs, currentSongRef.current)
 
-      return nextSong ? playSong(nextSong, { crossfade: true, fromRadioQueue: Boolean(queuedSong) }) : { ok: false, error: 'no_next' }
+      return nextSong ? playSong(nextSong, { crossfade: true, fromRadioQueue: Boolean(queuedSong), autoTransition: auto }) : { ok: false, error: 'no_next' }
     }
 
-    const currentIndex = getCurrentIndex()
-    const nextIndex = currentIndex < 0 ? 0 : currentIndex + 1
+    const nextSong = adjacentQueueSong(songs, getCurrentIndex(), 1, mode === 'loop_one')
 
-    if (nextIndex >= songs.length) {
+    if (!nextSong) {
       if (auto && !earlyCrossfade && audioEngine.getActiveDeck()) {
         const audio = audioEngine.getActiveDeck()
         audio.pause()
@@ -927,7 +703,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       return { ok: false, error: 'no_next' }
     }
 
-    return playSong(songs[nextIndex], { crossfade: true })
+    return playSong(nextSong, { crossfade: true })
   }, [audioEngine, getActiveQueue, getCurrentIndex, playSong, playSongHard, updateUpNextTracks])
 
   const playPrevious = useCallback(async () => {
@@ -942,15 +718,13 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       return previousRandomSong ? playSongHard(previousRandomSong) : { ok: false, error: 'no_previous' }
     }
 
-    const currentIndex = getCurrentIndex()
-    const previousIndex =
-      currentIndex < 0 ? 0 : currentIndex - 1
+    const previousSong = adjacentQueueSong(songs, getCurrentIndex(), -1, playbackModeRef.current === 'loop_one')
 
-    if (previousIndex < 0) {
+    if (!previousSong) {
       return { ok: false, error: 'no_previous' }
     }
 
-    return playSongHard(songs[previousIndex])
+    return playSongHard(previousSong)
   }, [getActiveQueue, getCurrentIndex, playSongHard])
 
   const seekTo = useCallback((time) => {
@@ -968,14 +742,16 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   }, [audioEngine, cancelCrossfade, resetSilenceDetection])
 
   const setPlaybackMode = useCallback((mode) => {
-    if (!PLAYBACK_MODES.includes(mode)) {
-      return
-    }
-
-    playbackModeRef.current = mode
-    setPlaybackModeState(mode)
-    localStorage.setItem(PLAYBACK_MODE_KEY, mode)
-  }, [])
+    setPlaybackModeWithQueuePolicy({
+      mode,
+      validModes: PLAYBACK_MODES,
+      playbackModeRef,
+      setPlaybackModeState,
+      persistPlaybackMode: (nextMode) => localStorage.setItem(PLAYBACK_MODE_KEY, nextMode),
+      clearAutomaticQueue: clearAutoUpNext,
+      clearQueuedNext: () => setQueuedNextSong(null),
+    })
+  }, [clearAutoUpNext, setQueuedNextSong])
 
   useEffect(() => {
     const audio = audioEngine.getActiveDeck()
@@ -985,18 +761,19 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     }
 
     const handleTimeUpdate = () => {
-      if (audio !== audioEngine.getActiveDeck()) {
+      if (audio !== audioEngine.getActiveDeck() || crossfadeTimeline.ignores(audio)) {
         return
       }
 
+      activePlaybackRecovery.observeProgress(audio)
       setCurrentTime(audio.currentTime || 0)
       const safeDuration = getSafeDuration(audio)
       setDuration(safeDuration)
 
-      if (!isCrossfadingRef.current && shouldStartAudibleEndCrossfade(audio, safeDuration)) {
+      if (!crossfadeController.isCrossfading() && shouldStartAudibleEndCrossfade(audio, safeDuration)) {
         resetSilenceDetection()
         playNext({ auto: true, earlyCrossfade: true }).then((result) => {
-          if (result?.ok && result.song) {
+          if (result?.ok && result.song && playbackModeRef.current !== 'companion_continue') {
             setLastAutoNextSong({
               id: `${getSongId(result.song)}-${Date.now()}`,
               song: result.song,
@@ -1006,11 +783,11 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
         return
       }
 
-      if (!isCrossfadingRef.current && shouldStartSilenceCrossfade(audio, safeDuration)) {
+      if (!crossfadeController.isCrossfading() && shouldStartSilenceCrossfade(audio, safeDuration)) {
         rememberTailSilence(currentSongRef.current, safeDuration - (audio.currentTime || 0))
         resetSilenceDetection()
         playNext({ auto: true, earlyCrossfade: true }).then((result) => {
-          if (result?.ok && result.song) {
+          if (result?.ok && result.song && playbackModeRef.current !== 'companion_continue') {
             setLastAutoNextSong({
               id: `${getSongId(result.song)}-${Date.now()}`,
               song: result.song,
@@ -1021,7 +798,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     }
 
     const handleLoadedMetadata = () => {
-      if (audio !== audioEngine.getActiveDeck()) {
+      if (audio !== audioEngine.getActiveDeck() || crossfadeTimeline.ignores(audio)) {
         return
       }
 
@@ -1045,14 +822,14 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     }
 
     const handleEnded = async () => {
-      if (audio !== audioEngine.getActiveDeck() || isCrossfadingRef.current) {
+      if (audio !== audioEngine.getActiveDeck() || crossfadeController.isCrossfading()) {
         return
       }
 
       setIsPlaying(false)
       const result = await playNext({ auto: true })
 
-      if (result?.ok && result.song) {
+      if (result?.ok && result.song && playbackModeRef.current !== 'companion_continue') {
         setLastAutoNextSong({
           id: `${getSongId(result.song)}-${Date.now()}`,
           song: result.song,
@@ -1060,23 +837,27 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       }
     }
 
+    const recoverActivePlayback = ({ force = false, delayMs } = {}) => (
+      activePlaybackRecovery.schedule({
+        audio,
+        isActive: (candidate) => candidate === audioEngine.getActiveDeck(),
+        resumeOutput: resumeMusicOutput,
+        onPlaying: () => setIsPlaying(true),
+        onFailed: () => setIsPlaying(false),
+        force,
+        delayMs,
+      })
+    )
+
+    const handlePlaybackStall = () => {
+      if (audio !== audioEngine.getActiveDeck() || !currentSongRef.current?.fileUrl) return
+      recoverActivePlayback()
+    }
+
     const handleError = () => {
       if (audio !== audioEngine.getActiveDeck() || !currentSongRef.current?.fileUrl) return
       setIsPlaying(false)
-      const source = audio.currentSrc || audio.src || ''
-      const recovery = mediaRecoveryRef.current
-      if (recovery.source !== source) {
-        recovery.source = source
-        recovery.attempts = 0
-      }
-      if (recovery.attempts >= 1) return
-      recovery.attempts += 1
-      window.clearTimeout(recovery.timer)
-      recovery.timer = window.setTimeout(() => {
-        if (audio !== audioEngine.getActiveDeck() || !audio.paused) return
-        audio.load()
-        resumeMusicOutput(audio).then(() => audio.play()).then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
-      }, 220)
+      recoverActivePlayback({ force: true, delayMs: 220 })
     }
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
@@ -1084,6 +865,8 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     audio.addEventListener('play', handlePlay)
     audio.addEventListener('pause', handlePause)
     audio.addEventListener('ended', handleEnded)
+    audio.addEventListener('waiting', handlePlaybackStall)
+    audio.addEventListener('stalled', handlePlaybackStall)
     audio.addEventListener('error', handleError)
 
     return () => {
@@ -1092,18 +875,28 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       audio.removeEventListener('play', handlePlay)
       audio.removeEventListener('pause', handlePause)
       audio.removeEventListener('ended', handleEnded)
+      audio.removeEventListener('waiting', handlePlaybackStall)
+      audio.removeEventListener('stalled', handlePlaybackStall)
       audio.removeEventListener('error', handleError)
     }
-  }, [audioEngine, playNext, currentSong, audioVersion, rememberTailSilence, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
+  }, [activePlaybackRecovery, audioEngine, crossfadeController, crossfadeTimeline, playNext, currentSong, audioVersion, rememberTailSilence, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
 
-  useEffect(() => () => {
-    cancelCrossfade()
-    cancelTempoRamp({ resetDecks: true })
-    duckTokensRef.current.clear()
-    resetSilenceDetection()
-    audioEngine.dispose().catch(() => {})
-    window.clearTimeout(mediaRecoveryRef.current.timer)
-  }, [audioEngine, cancelCrossfade, cancelTempoRamp, resetSilenceDetection])
+  useEffect(() => {
+    const duckTokens = duckTokensRef.current
+    // React StrictMode replays setup -> cleanup -> setup while preserving the
+    // lazy controller instance. Reactivate it on every committed setup so the
+    // replay cleanup cannot leave first-play cancellation permanently inert.
+    crossfadeController.reactivate()
+
+    return () => {
+      crossfadeTimeline.clear()
+      crossfadeController.dispose()
+      duckTokens.clear()
+      resetSilenceDetection()
+      activePlaybackRecovery.cancel()
+      audioEngine.dispose().catch(() => {})
+    }
+  }, [activePlaybackRecovery, audioEngine, crossfadeController, crossfadeTimeline, resetSilenceDetection])
 
   return {
     audioRef: audioEngine.getActiveDeckRef(),
@@ -1127,14 +920,15 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     musicDuckingController,
     getPlaybackDiagnostics: () => {
       const resources = audioEngine.getDiagnostics()
+      const transition = crossfadeController.getDiagnostics()
       return {
-        isCrossfading: isCrossfadingRef.current,
+        isCrossfading: transition.isCrossfading,
         activePaused: resources.activePaused,
         activeVolume: resources.activeVolume,
         standbyPaused: resources.standbyPaused,
         standbyVolume: resources.standbyVolume,
-        hasCrossfadeFrame: Boolean(crossfadeFrameRef.current),
-        hasRecoveryTimer: Boolean(crossfadeRecoveryTimerRef.current),
+        hasCrossfadeFrame: transition.hasCrossfadeFrame,
+        hasRecoveryTimer: transition.hasRecoveryTimer,
         userVolume: resources.userVolume,
         duckingFactor: resources.duckingFactor,
         audioContextState: resources.audioContextState,

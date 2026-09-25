@@ -3,7 +3,10 @@ param(
   [switch]$NoWechat,
   [switch]$EnableWechat,
   [switch]$DebugOcr,
-  [switch]$Silent
+  [switch]$Silent,
+  [switch]$DesktopApp,
+  [switch]$CheckDesktopApp,
+  [string]$DesktopAppDirectory
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +14,27 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$DesktopDirectories = if ($DesktopAppDirectory) {
+  @($DesktopAppDirectory)
+} else {
+  @(
+    (Join-Path $Root "release-login\win-unpacked"),
+    (Join-Path $Root "release\win-unpacked")
+  )
+}
+$DesktopExecutable = $DesktopDirectories |
+  ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter "*.exe" -File -ErrorAction SilentlyContinue } |
+  Select-Object -First 1 -ExpandProperty FullName
+$DesktopDirectory = if ($DesktopExecutable) { Split-Path -Parent $DesktopExecutable } else { $DesktopDirectories[0] }
+
+if ($CheckDesktopApp) {
+  if (-not $DesktopExecutable) {
+    Write-Error "No packaged desktop executable was found in $DesktopDirectory."
+    exit 1
+  }
+  Write-Output $DesktopExecutable
+  exit 0
+}
 
 function Test-PortOpen {
   param([int]$Port)
@@ -130,7 +154,16 @@ $Command
 Write-Host "Starting Yun Companion stack..." -ForegroundColor Cyan
 Write-Host "Workspace: $Root"
 
-if (Test-PortOpen 3030) {
+if ($DesktopApp) {
+  if (-not $DesktopExecutable -or -not (Test-Path -LiteralPath $DesktopExecutable)) {
+    throw "Desktop executable not found: $DesktopExecutable. Run npm run desktop:dist first."
+  }
+
+  Start-Process -FilePath $DesktopExecutable -WorkingDirectory (Split-Path -Parent $DesktopExecutable) | Out-Null
+  if (-not (Wait-YunService -Title "Yun desktop backend" -Url "http://127.0.0.1:3030/api/health" -TimeoutSeconds 45)) {
+    throw "Yun desktop application did not start its backend on port 3030."
+  }
+} elseif (Test-PortOpen 3030) {
   Write-Host "Backend already running on http://127.0.0.1:3030" -ForegroundColor Yellow
 } else {
   Start-YunWindow -Title "Yun Backend :3030" -Command "npm run server"
@@ -184,7 +217,9 @@ if (Test-PortOpen 17894) {
   Write-Host "Native voice engine Python environment is unavailable; browser AEC fallback remains available." -ForegroundColor Yellow
 }
 
-if (Test-PortOpen 5173) {
+if ($DesktopApp) {
+  Write-Host "Desktop application owns the frontend; Vite/browser launch is skipped." -ForegroundColor Green
+} elseif (Test-PortOpen 5173) {
   Write-Host "Frontend already running on http://127.0.0.1:5173" -ForegroundColor Yellow
 } else {
   Start-YunWindow -Title "Yun Frontend :5173" -Command "npm run dev -- --host 127.0.0.1"
@@ -210,7 +245,13 @@ Write-Host "Voiceprint: http://127.0.0.1:17891/health"
 Write-Host "OmniVoice: http://127.0.0.1:17893/health"
 Write-Host "Native Voice Engine: http://127.0.0.1:17894/health"
 Write-Host ""
-Wait-YunFrontend | Out-Null
+if (-not $DesktopApp) {
+  Wait-YunFrontend | Out-Null
+}
 Confirm-YunService -Title "Local speech recognition" -Url "http://127.0.0.1:17892/health" -RetryTitle "Yun Local GPU Speech :17892" -RetryCommand $localSpeechCommand -TimeoutSeconds 75 | Out-Null
 Confirm-YunService -Title "Native wake-word engine" -Url "http://127.0.0.1:17894/health" -RetryTitle "Yun Native Voice Engine :17894" -RetryCommand $nativeVoiceCommand -TimeoutSeconds 35 | Out-Null
-Write-Host "Close the opened terminal windows to stop each service."
+if ($DesktopApp -and $Silent) {
+  Write-Host "Yun is running as one desktop window; companion services are hidden in the background."
+} else {
+  Write-Host "Close the opened terminal windows to stop each service."
+}

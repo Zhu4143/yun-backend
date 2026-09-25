@@ -18,14 +18,38 @@ import { useVoiceSessionController } from './hooks/useVoiceSessionController'
 import { usePersistentAudioCapture } from './hooks/usePersistentAudioCapture'
 import { useFullDuplexPhysicalTest } from './hooks/useFullDuplexPhysicalTest'
 import { createYunLegacyPlayerAdapter } from './player/adapters/yunLegacyPlayerAdapter'
+import { usesAutomaticNextQueue } from './player/playback/playbackOrchestration'
 import { PlayerProvider } from './player/react/PlayerProvider'
 import { usePlayerObserver } from './telemetry/playerObserver'
 import { useTtsObserver } from './telemetry/ttsObserver'
 import FloatingLyrics from './components/FloatingLyrics'
+import {
+  LYRIC_3D_CONTROLS,
+  LYRIC_3D_DEFAULTS,
+  LYRIC_3D_STORAGE_KEY,
+  loadLyric3DSettings,
+  normalizeLyric3DSettings,
+} from './components/lyric3DSettings'
 import LyricForegroundFog from './components/LyricForegroundFog'
 import VoicePickupGlass from './components/VoicePickupGlass'
 import AsrSettingsPanel from './components/AsrSettingsPanel'
 import VictoryGestureWake from './components/VictoryGestureWake'
+import LiquidMorphTransition from './components/LiquidMorphTransition'
+import {
+  LIQUID_ORE_CONTROL_GROUPS,
+  applyLiquidOreGlassSettings,
+  loadLiquidOreGlassSettings,
+  resetLiquidOreGlassSettings,
+  saveLiquidOreGlassSettings,
+} from './components/liquidOreSource'
+import {
+  LIQUID_METAL_BACKGROUND_CONTROL_GROUPS,
+  applyLiquidMetalBackgroundSettings,
+  loadLiquidMetalBackgroundSettings,
+  resetLiquidMetalBackgroundSettings,
+  saveLiquidMetalBackgroundSettings,
+} from './components/liquidMetalSettings'
+import YunLoginPanel from './intro/YunLoginPanel'
 import './App.css'
 
 const ParticleVinylBackground = lazy(() => import('./components/ParticleVinylBackground'))
@@ -453,7 +477,7 @@ function getWallpaperRuntime() {
   return { wallpaperMode, quality }
 }
 
-function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', preloadCoverUrls = [], getFrequencyData, mountainControls, backgroundBrightness, topFogStrength, topBlurStrength, viewLocked, voiceOrbVisible, voiceOrbLevel = 0, onReady, quality = 'high' }) {
+function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', preloadCoverUrls = [], getFrequencyData, mountainControls, backgroundBrightness, topFogStrength, topBlurStrength, viewLocked, voiceOrbVisible, voiceOrbLevel = 0, gestureControlRef, onReady, quality = 'high', liquidMetalSettings }) {
   return (
     <div className="bg-image">
       <Suspense fallback={null}>
@@ -470,8 +494,10 @@ function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', prel
           viewLocked={viewLocked}
           voiceOrbVisible={voiceOrbVisible}
           voiceOrbLevel={voiceOrbLevel}
+          gestureControlRef={gestureControlRef}
           onReady={onReady}
           quality={quality}
+          liquidMetalSettings={liquidMetalSettings}
         />
       </Suspense>
     </div>
@@ -522,9 +548,21 @@ function shouldIgnorePlaybackShortcut(target) {
 
 function App({ onVisualReady, bootData = {} }) {
   const bootLibrary = bootData.LOAD_LIBRARY || null
-  const bootPlaylists = bootData.LOAD_PLAYLISTS || null
+  const bootProvider = bootData.INIT_MUSIC_PROVIDER || null
+  const bootPlaylists = bootData.LOAD_PLAYLISTS || (bootProvider ? {
+    account: {
+      ...bootProvider,
+      playlists: bootProvider.playlists || bootProvider.items || [],
+    },
+  } : null)
   const [{ wallpaperMode, quality: initialVisualQuality }] = useState(getWallpaperRuntime)
   const [visualQuality, setVisualQuality] = useState(initialVisualQuality)
+  const [liquidOreSettings, setLiquidOreSettings] = useState(loadLiquidOreGlassSettings)
+  const [liquidOreSettingsStatus, setLiquidOreSettingsStatus] = useState('已加载本机保存值')
+  const [liquidMetalSettings, setLiquidMetalSettings] = useState(loadLiquidMetalBackgroundSettings)
+  const [liquidMetalSettingsStatus, setLiquidMetalSettingsStatus] = useState('已加载本机保存值')
+  const [lyric3DSettings, setLyric3DSettings] = useState(loadLyric3DSettings)
+  const [lyric3DSettingsStatus, setLyric3DSettingsStatus] = useState('已加载本机保存值')
   // Let React paint the controls before the two WebGL renderers begin shader
   // compilation. Without this gap, a cold start can look like a frozen black
   // window even though the rest of the interface is already ready.
@@ -559,6 +597,7 @@ function App({ onVisualReady, bootData = {} }) {
   const [neteaseError, setNeteaseError] = useState('')
   const [neteaseMe, setNeteaseMe] = useState(() => bootPlaylists?.account || null)
   const [neteaseAccountStatus, setNeteaseAccountStatus] = useState(() => bootPlaylists ? 'ready' : 'idle')
+  const [neteaseLoginOpen, setNeteaseLoginOpen] = useState(false)
   const [neteaseLibraryView, setNeteaseLibraryView] = useState('songs')
   const [activeNeteasePlaylist, setActiveNeteasePlaylist] = useState(null)
   const [libraryScrollTop, setLibraryScrollTop] = useState(0)
@@ -567,10 +606,21 @@ function App({ onVisualReady, bootData = {} }) {
   const musicImportInputRef = useRef(null)
   const libraryScrollListRef = useRef(null)
   const neteaseRequestRef = useRef(0)
+
+  useEffect(() => {
+    const refreshedAccount = bootData.LOAD_PLAYLISTS?.account
+    if (!refreshedAccount) return
+    setNeteaseMe(refreshedAccount)
+    setNeteaseAccountStatus('ready')
+  }, [bootData.LOAD_PLAYLISTS])
   const [isAnalyzingLibrary, setIsAnalyzingLibrary] = useState(false)
   const [panelContentVisible, setPanelContentVisible] = useState(true)
   const [pendingMorph, setPendingMorph] = useState(null)
   const [morphLayer, setMorphLayer] = useState(null)
+  const [topControlsMorph, setTopControlsMorph] = useState(null)
+  const [playerMorph, setPlayerMorph] = useState(null)
+  const [topControlsMorphContentVisible, setTopControlsMorphContentVisible] = useState(true)
+  const [playerMorphContentVisible, setPlayerMorphContentVisible] = useState(true)
   const [pressedPanel, setPressedPanel] = useState(null)
   const [chatDraft, setChatDraft] = useState('')
   const [chatImageFile, setChatImageFile] = useState(null)
@@ -615,13 +665,17 @@ function App({ onVisualReady, bootData = {} }) {
   const wakeAcknowledgementEchoRef = useRef({ text: '', expiresAt: 0 })
   const [gestureCameraEnabled, setGestureCameraEnabled] = useState(false)
   const [gestureCameraStatus, setGestureCameraStatus] = useState('off')
+  const gestureVisualRef = useRef({ scatter: 0, rotation: 0, tracking: false })
   const [volumeControlOpen, setVolumeControlOpen] = useState(false)
   const [immersivePlayerVisible, setImmersivePlayerVisible] = useState(false)
   const immersivePlayerTimerRef = useRef(null)
+  const playerPointerInsideRef = useRef(false)
   const libraryEdgeTimerRef = useRef(null)
   const chatDockTimerRef = useRef(null)
   const topControlsTimerRef = useRef(null)
   const speakingOpticsRef = useRef(null)
+  const topControlsOpenRectRef = useRef(null)
+  const playerOpenRectRef = useRef(null)
 
   // Native wake events arrive over a separate websocket.  If that connection
   // drops halfway through a turn, the normal final/error event never reaches
@@ -649,14 +703,39 @@ function App({ onVisualReady, bootData = {} }) {
     }
   }, [])
 
+  const scheduleImmersivePlayerHide = useCallback(() => {
+    window.clearTimeout(immersivePlayerTimerRef.current)
+    const hideWhenIdle = () => {
+      if (playerPointerInsideRef.current || playerCardRef.current?.contains(document.activeElement)) {
+        immersivePlayerTimerRef.current = window.setTimeout(hideWhenIdle, 1000)
+        return
+      }
+      setPlayerMorphContentVisible(false)
+      setImmersivePlayerVisible(false)
+    }
+    immersivePlayerTimerRef.current = window.setTimeout(hideWhenIdle, 6000)
+  }, [])
+
   const revealImmersivePlayer = useCallback(() => {
     if (uiMode !== 'immersive') return
-    setImmersivePlayerVisible(true)
     window.clearTimeout(immersivePlayerTimerRef.current)
-    immersivePlayerTimerRef.current = window.setTimeout(() => {
-      setImmersivePlayerVisible(false)
-    }, 6000)
-  }, [uiMode])
+    if (!immersivePlayerVisible) {
+      setPlayerMorphContentVisible(false)
+      setImmersivePlayerVisible(true)
+      return
+    }
+    if (!playerPointerInsideRef.current) scheduleImmersivePlayerHide()
+  }, [immersivePlayerVisible, scheduleImmersivePlayerHide, uiMode])
+
+  const keepImmersivePlayerOpen = useCallback(() => {
+    playerPointerInsideRef.current = true
+    window.clearTimeout(immersivePlayerTimerRef.current)
+  }, [])
+
+  const releaseImmersivePlayer = useCallback(() => {
+    playerPointerInsideRef.current = false
+    scheduleImmersivePlayerHide()
+  }, [scheduleImmersivePlayerHide])
 
   useEffect(() => {
     if (!immersivePlayerVisible || uiMode !== 'immersive') return undefined
@@ -668,6 +747,14 @@ function App({ onVisualReady, bootData = {} }) {
       window.removeEventListener('keydown', keepOpen)
     }
   }, [immersivePlayerVisible, revealImmersivePlayer, uiMode])
+
+  useEffect(() => {
+    if (uiMode !== 'immersive' || activePanel !== 'playMode') return
+    // The mode chooser grows out of the player button. Do not let the
+    // immersive auto-hide timer remove its source while the chooser is open.
+    window.clearTimeout(immersivePlayerTimerRef.current)
+    setImmersivePlayerVisible(true)
+  }, [activePanel, uiMode])
 
   useEffect(() => () => window.clearTimeout(immersivePlayerTimerRef.current), [])
 
@@ -697,7 +784,12 @@ function App({ onVisualReady, bootData = {} }) {
   const voiceTriggerRef = useRef(null)
   const memoryTriggerRef = useRef(null)
   const libraryTriggerRef = useRef(null)
+  const mountainTriggerRef = useRef(null)
   const playModeTriggerRef = useRef(null)
+  const topControlsTriggerRef = useRef(null)
+  const topControlsCardRef = useRef(null)
+  const playerHandleRef = useRef(null)
+  const playerCardRef = useRef(null)
   const chatMessagesRef = useRef(null)
   const chatImageInputRef = useRef(null)
   const autoNextReactionRef = useRef('')
@@ -1034,6 +1126,7 @@ function App({ onVisualReady, bootData = {} }) {
     setResponseMode: applyResponseMode,
     voice: yunVoice,
     responseMode,
+    playbackMode,
     personaMode,
     musicSource: librarySource,
     memory: yunMemory,
@@ -1055,11 +1148,6 @@ function App({ onVisualReady, bootData = {} }) {
   const selectedVoiceLabel = selectedVoiceOption?.label || 'custom voice'
 
   const setResponseMode = applyResponseMode
-
-  const selectPlaybackMode = useCallback((mode) => {
-    playerCore.setPlaybackMode(mode)
-    setActivePanel(null)
-  }, [playerCore])
 
   const handleVoiceRecognitionError = useCallback((error) => {
     const labels = {
@@ -1291,9 +1379,10 @@ function App({ onVisualReady, bootData = {} }) {
       return
     }
     setLibraryListReady(false)
-    setPanelContentVisible(true)
-    setPendingMorph(null)
+    setPanelContentVisible(false)
+    setPendingMorph({ panel: 'library', direction: 'open' })
     setMorphLayer(null)
+    setMountainPanelOpen(false)
     setLibraryEdgeOpen(true)
     setActivePanel('library')
   }, [activePanel])
@@ -1362,8 +1451,9 @@ function App({ onVisualReady, bootData = {} }) {
   const openTopControls = useCallback(() => {
     window.clearTimeout(topControlsTimerRef.current)
     topControlsTimerRef.current = null
+    if (!topControlsOpen) setTopControlsMorphContentVisible(false)
     setTopControlsOpen(true)
-  }, [])
+  }, [topControlsOpen])
 
   const keepTopControlsOpen = useCallback(() => {
     window.clearTimeout(topControlsTimerRef.current)
@@ -1377,6 +1467,7 @@ function App({ onVisualReady, bootData = {} }) {
     if (!topControlsOpen || topControlsTimerRef.current) return
     topControlsTimerRef.current = window.setTimeout(() => {
       topControlsTimerRef.current = null
+      setTopControlsMorphContentVisible(false)
       setTopControlsOpen(false)
     }, 680)
   }, [activePanel, mountainPanelOpen, topControlsOpen])
@@ -1439,6 +1530,22 @@ function App({ onVisualReady, bootData = {} }) {
 
     return result
   }, [playerCore, reactToSongChange])
+
+  const handleGestureState = useCallback((state) => {
+    gestureVisualRef.current.scatter = Number.isFinite(state?.scatter)
+      ? Math.max(0, Math.min(1, state.scatter))
+      : 0
+    gestureVisualRef.current.rotation = Number.isFinite(state?.rotation)
+      ? state.rotation
+      : 0
+    gestureVisualRef.current.tracking = Boolean(state?.tracking)
+  }, [])
+
+  const handleGestureAction = useCallback((action) => {
+    if (action === 'next') {
+      playNextWithPodcastReaction()
+    }
+  }, [playNextWithPodcastReaction])
 
   const visibleLibraryTracks = useMemo(() => {
     const query = libraryQuery.trim().toLowerCase()
@@ -1567,6 +1674,31 @@ function App({ onVisualReady, bootData = {} }) {
     return () => window.removeEventListener('yun:login-submit', syncNeteaseAccount)
   }, [])
 
+  useEffect(() => {
+    if (!neteaseLoginOpen) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setNeteaseLoginOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [neteaseLoginOpen])
+
+  const handleNeteaseLoginSubmit = useCallback((account) => {
+    setNeteaseMe({
+      loggedIn: true,
+      nickname: account?.nickname || '网易云用户',
+      avatar: account?.avatar || '',
+      playlists: [],
+    })
+    setNeteaseAccountStatus('idle')
+    setNeteaseLoginOpen(false)
+  }, [])
+
+  const handleNeteaseLogout = useCallback(() => {
+    setNeteaseMe(null)
+    setNeteaseAccountStatus('idle')
+  }, [])
+
   const openNeteasePlaylist = useCallback(async (playlist) => {
     resetLibraryScroll()
     setLibrarySource('netease')
@@ -1679,6 +1811,7 @@ function App({ onVisualReady, bootData = {} }) {
     library: libraryTriggerRef,
     voice: voiceTriggerRef,
     memory: memoryTriggerRef,
+    mountain: mountainTriggerRef,
     playMode: playModeTriggerRef,
   }), [])
 
@@ -1686,6 +1819,7 @@ function App({ onVisualReady, bootData = {} }) {
     library: '.local-library-drawer',
     voice: '.voice-popover',
     memory: '.memory-settings-panel',
+    mountain: '.mountain-tuning-panel',
     playMode: '.ai-mode-expanded',
   }), [])
 
@@ -1693,6 +1827,7 @@ function App({ onVisualReady, bootData = {} }) {
     library: 28,
     voice: 30,
     memory: 32,
+    mountain: 22,
     playMode: 999,
   }), [])
 
@@ -1727,7 +1862,7 @@ function App({ onVisualReady, bootData = {} }) {
   }, [lastAutoNextSong, rememberPlayedSong])
 
   useEffect(() => {
-    if (responseMode !== 'podcast' || !lastAutoNextSong?.song) {
+    if ((responseMode !== 'podcast' && playbackMode !== 'companion_continue') || !lastAutoNextSong?.song) {
       return
     }
 
@@ -1737,12 +1872,26 @@ function App({ onVisualReady, bootData = {} }) {
 
     autoNextReactionRef.current = lastAutoNextSong.id
 
-    reactToSongChange(lastAutoNextSong.song, 'auto_next')
-  }, [lastAutoNextSong, reactToSongChange, responseMode])
+    reactToSongChange(
+      lastAutoNextSong.song,
+      playbackMode === 'companion_continue' ? 'companion_transition' : 'auto_next',
+      lastAutoNextSong.previousSong,
+    )
+  }, [lastAutoNextSong, playbackMode, reactToSongChange, responseMode])
+
+  useEffect(() => {
+    const nextSong = autoUpNextTracks[0]
+    if (!currentSong || !nextSong || (responseMode !== 'podcast' && playbackMode !== 'companion_continue')) return
+    prefetchSongReaction(
+      nextSong,
+      playbackMode === 'companion_continue' ? 'companion_transition' : 'auto_next',
+      currentSong,
+    )
+  }, [autoUpNextTracks, currentSong, playbackMode, prefetchSongReaction, responseMode])
 
   useEffect(() => {
     const keepsAiQueueFull = playbackMode === 'ai_recommend'
-    const supportsRadioPrefetch = responseMode === 'podcast' || keepsAiQueueFull || playbackMode === 'companion_continue'
+    const supportsRadioPrefetch = usesAutomaticNextQueue(playbackMode)
     const songKey = currentSong?.id || currentSong?.fileUrl || ''
     const minimumQueue = keepsAiQueueFull || playbackMode === 'companion_continue' ? 3 : 1
     const shouldTopUp = autoUpNextTracks.length < minimumQueue
@@ -1806,7 +1955,6 @@ function App({ onVisualReady, bootData = {} }) {
           // first item in the legacy one-track slot would replay it after the
           // visible queue has been consumed.
           playerCore.setQueuedNextTrack(null)
-          if (responseMode === 'podcast') prefetchSongReaction(tracks[0], 'auto_next')
         } else {
           retry()
         }
@@ -1827,7 +1975,7 @@ function App({ onVisualReady, bootData = {} }) {
     return () => {
       cancelled = true
     }
-  }, [autoUpNextTracks.length, currentSong, isPlaying, libraryTracks, playbackMode, playHistory, playerCore, prefetchSongReaction, radioPrefetchRetryNonce, radioRecommendationHistory, recentRecommendations, responseMode])
+  }, [autoUpNextTracks.length, currentSong, isPlaying, libraryTracks, playbackMode, playHistory, playerCore, radioPrefetchRetryNonce, radioRecommendationHistory, recentRecommendations])
 
   useEffect(() => () => window.clearTimeout(radioPrefetchRetryTimerRef.current), [])
 
@@ -1849,20 +1997,20 @@ function App({ onVisualReady, bootData = {} }) {
 
   const openPanel = (panel) => {
     pressPanel(panel)
-    // Top settings extend from the lower edge of the controls shell. They do
-    // not use the generic trigger-to-panel morph used by drawers and menus.
-    if (panel === 'voice' || panel === 'memory') {
-      setPendingMorph(null)
-      setMorphLayer(null)
-      setPanelContentVisible(true)
-      setActivePanel(panel)
-      return
-    }
     if (panel === 'library') {
       setLibraryListReady(false)
     }
     setPanelContentVisible(false)
-    setActivePanel(panel)
+    // These panels occupy the same interaction lane. Keeping mountain in a
+    // separate boolean previously allowed voice/memory and mountain to be
+    // open at once, stacking two complete control trees at one position.
+    if (panel === 'mountain') {
+      setActivePanel(null)
+      setMountainPanelOpen(true)
+    } else {
+      setMountainPanelOpen(false)
+      setActivePanel(panel)
+    }
     setPendingMorph({ panel, direction: 'open' })
   }
 
@@ -1870,59 +2018,39 @@ function App({ onVisualReady, bootData = {} }) {
     if (!panel) {
       return
     }
-    // Top settings are attached sheets, not objects that should collapse back
-    // into their trigger. Fade them away on click-away/toggle instead.
-    if (panel === 'voice' || panel === 'memory') {
-      setActivePanel((current) => current === panel ? null : current)
-      setPendingMorph(null)
-      setMorphLayer(null)
-      setPanelContentVisible(true)
-      return
-    }
     if (panel === 'library') {
       setLibraryEdgeOpen(false)
       window.clearTimeout(libraryEdgeTimerRef.current)
-      if (libraryEdgeOpen) {
-        setActivePanel(null)
-        setPanelContentVisible(true)
-        return
-      }
     }
 
     const trigger = triggerRefs[panel]?.current
     const panelElement = document.querySelector(panelSelectors[panel])
 
     if (!trigger || !panelElement) {
-      setActivePanel(null)
+      if (panel === 'mountain') setMountainPanelOpen(false)
+      else setActivePanel(null)
+      setPendingMorph(null)
+      setMorphLayer(null)
+      setPanelContentVisible(true)
       return
     }
 
     setPanelContentVisible(false)
+    setPendingMorph(null)
 
     setMorphLayer({
       panel,
-      phase: 'from',
+      direction: 'close',
       from: getRect(panelElement),
       to: getRect(trigger),
       fromRadius: panelRadii[panel],
-      toRadius: 999,
+      toRadius: Math.min(trigger.getBoundingClientRect().width, trigger.getBoundingClientRect().height) * 0.5,
     })
-
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        setMorphLayer((layer) => (layer ? { ...layer, phase: 'to' } : layer))
-      })
-    })
-
-    window.setTimeout(() => {
-      setActivePanel(null)
-      setMorphLayer(null)
-      setPanelContentVisible(true)
-    }, 430)
-  }, [activePanel, getRect, libraryEdgeOpen, panelRadii, panelSelectors, triggerRefs])
+  }, [activePanel, getRect, panelRadii, panelSelectors, triggerRefs])
 
   const togglePanel = (panel) => {
-    if (activePanel === panel) {
+    const isOpen = panel === 'mountain' ? mountainPanelOpen : activePanel === panel
+    if (isOpen) {
       pressPanel(panel)
       closePanel(panel)
       return
@@ -1932,7 +2060,10 @@ function App({ onVisualReady, bootData = {} }) {
   }
 
   useLayoutEffect(() => {
-    if (!pendingMorph || pendingMorph.direction !== 'open' || activePanel !== pendingMorph.panel) {
+    const pendingPanelIsOpen = pendingMorph?.panel === 'mountain'
+      ? mountainPanelOpen
+      : activePanel === pendingMorph?.panel
+    if (!pendingMorph || pendingMorph.direction !== 'open' || !pendingPanelIsOpen) {
       return undefined
     }
 
@@ -1951,45 +2082,185 @@ function App({ onVisualReady, bootData = {} }) {
       }
     }
 
-    const openTimer = window.setTimeout(() => {
-      setPanelContentVisible(true)
-    }, 275)
+    const triggerRect = getRect(trigger)
+    setMorphLayer({
+      panel,
+      direction: 'open',
+      from: triggerRect,
+      to: getRect(panelElement),
+      fromRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
+      toRadius: panelRadii[panel],
+    })
+    return undefined
+  }, [activePanel, getRect, mountainPanelOpen, panelRadii, panelSelectors, pendingMorph, triggerRefs])
 
-    const finishTimer = window.setTimeout(() => {
-      setMorphLayer(null)
-      setPendingMorph(null)
-    }, 430)
+  useLayoutEffect(() => {
+    const trigger = topControlsTriggerRef.current
+    const panel = topControlsCardRef.current
+    if (!trigger || !panel) return undefined
 
-    const kickoffTimer = window.setTimeout(() => {
-      setMorphLayer({
-        panel,
-        phase: 'from',
-        from: getRect(trigger),
-        to: getRect(panelElement),
-        fromRadius: 999,
-        toRadius: panelRadii[panel],
+    const triggerRect = getRect(trigger)
+    if (topControlsOpen) {
+      const panelRect = getRect(panel)
+      topControlsOpenRectRef.current = panelRect
+      setTopControlsMorph({
+        panel: 'topControls',
+        direction: 'open',
+        from: triggerRect,
+        to: panelRect,
+        fromRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
+        toRadius: 28,
       })
-
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          setMorphLayer((layer) => (layer ? { ...layer, phase: 'to' } : layer))
-        })
-      })
-    }, 0)
-
-    return () => {
-      window.clearTimeout(kickoffTimer)
-      window.clearTimeout(openTimer)
-      window.clearTimeout(finishTimer)
-    }
-  }, [activePanel, getRect, panelRadii, panelSelectors, pendingMorph, triggerRefs])
-
-  useEffect(() => {
-    if (!activePanel) {
       return undefined
     }
 
-    if (activePanel === 'voice' || activePanel === 'memory') {
+    if (topControlsOpenRectRef.current) {
+      setTopControlsMorph({
+        panel: 'topControls',
+        direction: 'close',
+        from: topControlsOpenRectRef.current,
+        to: triggerRect,
+        fromRadius: 28,
+        toRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
+      })
+    }
+    return undefined
+  }, [getRect, topControlsOpen])
+
+  useLayoutEffect(() => {
+    if (uiMode !== 'immersive') {
+      setPlayerMorph(null)
+      setPlayerMorphContentVisible(true)
+      return undefined
+    }
+
+    const trigger = playerHandleRef.current
+    const panel = playerCardRef.current
+    if (!trigger || !panel) return undefined
+
+    const triggerRect = getRect(trigger)
+    if (immersivePlayerVisible) {
+      const panelRect = getRect(panel)
+      playerOpenRectRef.current = panelRect
+      setPlayerMorph({
+        panel: 'player',
+        direction: 'open',
+        from: triggerRect,
+        to: panelRect,
+        fromRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
+        toRadius: Math.min(panelRect.width, panelRect.height) * 0.5,
+      })
+      return undefined
+    }
+
+    if (playerOpenRectRef.current) {
+      setPlayerMorph({
+        panel: 'player',
+        direction: 'close',
+        from: playerOpenRectRef.current,
+        to: triggerRect,
+        fromRadius: Math.min(playerOpenRectRef.current.width, playerOpenRectRef.current.height) * 0.5,
+        toRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
+      })
+    }
+    return undefined
+  }, [getRect, immersivePlayerVisible, uiMode])
+
+  const revealLiquidMorphContent = useCallback(() => {
+    setPanelContentVisible(true)
+  }, [])
+  const revealTopControlsMorph = useCallback(() => {
+    setTopControlsMorphContentVisible(true)
+  }, [])
+  const finishTopControlsMorph = useCallback(() => {
+    setTopControlsMorph(null)
+    setTopControlsMorphContentVisible(true)
+  }, [])
+  const revealPlayerMorph = useCallback(() => {
+    setPlayerMorphContentVisible(true)
+  }, [])
+  const finishPlayerMorph = useCallback((transition) => {
+    setPlayerMorph(null)
+    setPlayerMorphContentVisible(true)
+    if (transition?.direction === 'open' && activePanel !== 'playMode') {
+      scheduleImmersivePlayerHide()
+    }
+  }, [activePanel, scheduleImmersivePlayerHide])
+  const previewLiquidOreSetting = useCallback((key, value) => {
+    const next = applyLiquidOreGlassSettings({ [key]: Number(value) })
+    setLiquidOreSettings(next)
+    setLiquidOreSettingsStatus('正在预览，尚未保存')
+  }, [])
+  const persistLiquidOreSettings = useCallback(() => {
+    const next = saveLiquidOreGlassSettings()
+    setLiquidOreSettings(next)
+    setLiquidOreSettingsStatus('已保存并固定为启动效果')
+  }, [])
+  const restoreLiquidOreDefaults = useCallback(() => {
+    const next = resetLiquidOreGlassSettings()
+    setLiquidOreSettings(next)
+    setLiquidOreSettingsStatus('已恢复源码默认，点击保存后固定')
+  }, [])
+  const restoreSavedLiquidOreSettings = useCallback(() => {
+    resetLiquidOreGlassSettings()
+    const next = loadLiquidOreGlassSettings()
+    setLiquidOreSettings(next)
+    setLiquidOreSettingsStatus('已恢复本机保存值')
+  }, [])
+  const previewLiquidMetalSetting = useCallback((key, value) => {
+    const next = applyLiquidMetalBackgroundSettings({ [key]: value })
+    setLiquidMetalSettings(next)
+    setLiquidMetalSettingsStatus('正在预览，尚未保存')
+  }, [])
+  const persistLiquidMetalSettings = useCallback(() => {
+    const next = saveLiquidMetalBackgroundSettings()
+    setLiquidMetalSettings(next)
+    setLiquidMetalSettingsStatus('已保存并固定为启动效果')
+  }, [])
+  const restoreLiquidMetalDefaults = useCallback(() => {
+    const next = resetLiquidMetalBackgroundSettings()
+    setLiquidMetalSettings(next)
+    setLiquidMetalSettingsStatus('已恢复源码默认，点击保存后固定')
+  }, [])
+  const restoreSavedLiquidMetalSettings = useCallback(() => {
+    resetLiquidMetalBackgroundSettings()
+    const next = loadLiquidMetalBackgroundSettings()
+    setLiquidMetalSettings(next)
+    setLiquidMetalSettingsStatus('已恢复本机保存值')
+  }, [])
+  const previewLyric3DSetting = useCallback((key, value) => {
+    setLyric3DSettings((current) => normalizeLyric3DSettings({
+      ...current,
+      [key]: value,
+      ...(key === 'color' || key === 'sideColor' || key === 'glowColor' ? { followCover: false } : {}),
+    }))
+    setLyric3DSettingsStatus('正在预览，尚未保存')
+  }, [])
+  const persistLyric3DSettings = useCallback(() => {
+    window.localStorage.setItem(LYRIC_3D_STORAGE_KEY, JSON.stringify(lyric3DSettings))
+    setLyric3DSettingsStatus('已保存并固定为启动效果')
+  }, [lyric3DSettings])
+  const restoreLyric3DDefaults = useCallback(() => {
+    setLyric3DSettings({ ...LYRIC_3D_DEFAULTS })
+    setLyric3DSettingsStatus('已恢复默认，点击保存后固定')
+  }, [])
+  const restoreSavedLyric3DSettings = useCallback(() => {
+    setLyric3DSettings(loadLyric3DSettings())
+    setLyric3DSettingsStatus('已恢复本机保存值')
+  }, [])
+
+  const finishLiquidMorph = useCallback((transition) => {
+    if (transition.direction === 'close') {
+      if (transition.panel === 'mountain') setMountainPanelOpen(false)
+      else setActivePanel((current) => current === transition.panel ? null : current)
+    }
+    setMorphLayer((current) => current === transition ? null : current)
+    setPendingMorph((current) => current?.panel === transition.panel ? null : current)
+    setPanelContentVisible(true)
+  }, [])
+
+  useEffect(() => {
+    if (!activePanel) {
       return undefined
     }
 
@@ -2026,8 +2297,6 @@ function App({ onVisualReady, bootData = {} }) {
     }
   }, [activePanel, closePanel])
 
-  const morphRect = morphLayer?.phase === 'to' ? morphLayer.to : morphLayer?.from
-  const morphRadius = morphLayer?.phase === 'to' ? morphLayer.toRadius : morphLayer?.fromRadius
   const displayedSong = playerState.currentTrack || {
     title: 'golden hour',
     artist: 'kudasai',
@@ -2164,15 +2433,6 @@ function App({ onVisualReady, bootData = {} }) {
   const backgroundCoverUrl = getSongCoverUrl(currentSong, sceneCoverItems[0]?.coverUrl || sceneTestCovers[0])
   const songThemeStyle = useSongTheme(backgroundCoverUrl)
   const volumePercent = Math.round((Number.isFinite(playerState.volume) ? playerState.volume : 1) * 100)
-  const morphStyle = morphLayer
-    ? {
-        left: `${morphRect.left}px`,
-        top: `${morphRect.top}px`,
-        width: `${morphRect.width}px`,
-        height: `${morphRect.height}px`,
-        borderRadius: `${morphRadius}px`,
-      }
-    : undefined
 
   const applyProModelConfig = useCallback(async (event) => {
     event.preventDefault()
@@ -2211,8 +2471,10 @@ function App({ onVisualReady, bootData = {} }) {
           viewLocked={viewLocked}
           voiceOrbVisible={voiceVisualVisible}
           voiceOrbLevel={voiceOrbLevel}
+          gestureControlRef={gestureVisualRef}
           onReady={onVisualReady}
           quality={visualQuality}
+          liquidMetalSettings={liquidMetalSettings}
         />
       )}
       <div
@@ -2228,7 +2490,9 @@ function App({ onVisualReady, bootData = {} }) {
         <span className="yun-speaking-optics__tint" />
       </div>
       <div
+        ref={libraryTriggerRef}
         className={`library-edge-trigger${libraryEdgeOpen ? ' is-active' : ''}`}
+        data-liquid-ore-surface="true"
         aria-hidden="true"
         onPointerEnter={openLibraryFromEdge}
         onPointerMove={keepEdgeLibraryOpen}
@@ -2239,8 +2503,10 @@ function App({ onVisualReady, bootData = {} }) {
         onPointerEnter={openTopControls}
         onPointerMove={keepTopControlsOpen}
         onPointerLeave={scheduleTopControlsClose}
-      />
-      <FloatingLyrics />
+      >
+        <span ref={topControlsTriggerRef} data-liquid-ore-surface="true" />
+      </div>
+      <FloatingLyrics settings={lyric3DSettings} theme={songThemeStyle} />
       {visualQuality === 'high' && <LyricForegroundFog quality={visualQuality} />}
       <div className="scene-cover-overlay">
         <div className="scene-cover-stage">
@@ -2280,7 +2546,7 @@ function App({ onVisualReady, bootData = {} }) {
         onPointerEnter={revealImmersivePlayer}
         onPointerMove={revealImmersivePlayer}
       >
-        <span />
+        <span ref={playerHandleRef} data-liquid-ore-surface="true" />
       </div>
 
       <LiquidGlass
@@ -2316,7 +2582,8 @@ function App({ onVisualReady, bootData = {} }) {
       </LiquidGlass>
 
       <div
-        className={`top-controls-card${topControlsOpen ? ' is-open' : ''}`}
+        ref={topControlsCardRef}
+        className={`top-controls-card${topControlsOpen ? ' is-open' : ''}${topControlsMorphContentVisible ? '' : ' is-surface-morph-hidden'}`}
         onPointerEnter={keepTopControlsOpen}
         onPointerMove={keepTopControlsOpen}
         onPointerLeave={scheduleTopControlsClose}
@@ -2366,18 +2633,19 @@ function App({ onVisualReady, bootData = {} }) {
             </button>
             <button className={`action-button${pressedPanel === 'voice' ? ' is-pressed' : ''}`} type="button" aria-label="声音" aria-expanded={activePanel === 'voice'} ref={voiceTriggerRef} onClick={() => togglePanel('voice')}>声</button>
             <button className={`action-button${pressedPanel === 'memory' ? ' is-pressed' : ''}`} type="button" aria-label="设置" aria-expanded={activePanel === 'memory'} ref={memoryTriggerRef} onClick={() => togglePanel('memory')}>设</button>
-            <button className={`action-button${mountainPanelOpen ? ' is-pressed' : ''}`} type="button" aria-label="山脉调节" aria-expanded={mountainPanelOpen} onClick={() => setMountainPanelOpen((open) => !open)}>山</button>
+            <button className={`action-button${mountainPanelOpen ? ' is-pressed' : ''}`} type="button" aria-label="山脉调节" aria-expanded={mountainPanelOpen} ref={mountainTriggerRef} onClick={() => togglePanel('mountain')}>山</button>
             <button
               className={`action-button gesture-camera-toggle${gestureCameraStatus === 'active' || gestureCameraStatus === 'starting' ? ' is-on' : ''}${gestureCameraStatus === 'error' ? ' is-error' : ''}`}
               type="button"
               aria-pressed={gestureCameraEnabled}
-              aria-label={gestureCameraEnabled ? '关闭手势摄像头' : '开启手势摄像头'}
+              aria-label={gestureCameraEnabled ? '关闭手掌控制' : '开启手掌控制：单手张合粒子，旋转唱片，双手合拢换下一首'}
+              title="单手张合控制粒子聚散；旋转手掌带动唱片；双手从两侧合拢换下一首"
               onClick={() => {
                 if (gestureCameraEnabled) setGestureCameraStatus('off')
                 setGestureCameraEnabled((enabled) => !enabled)
               }}
             >
-              {gestureCameraStatus === 'starting' ? '启动中' : gestureCameraStatus === 'active' ? '手势开' : gestureCameraStatus === 'error' ? '摄像头错误' : '手势'}
+              {gestureCameraStatus === 'starting' ? '启动中' : gestureCameraStatus === 'active' ? '手控开' : gestureCameraStatus === 'error' ? '摄像头错误' : '手控'}
             </button>
           </div>
         </div>
@@ -2389,7 +2657,7 @@ function App({ onVisualReady, bootData = {} }) {
           type="button"
           aria-label="收起设置面板"
           onClick={() => {
-            setMountainPanelOpen(false)
+            if (mountainPanelOpen) closePanel('mountain')
             if (activePanel === 'voice' || activePanel === 'memory') closePanel(activePanel)
           }}
         />
@@ -2407,7 +2675,7 @@ function App({ onVisualReady, bootData = {} }) {
             className="memory-settings-close"
             type="button"
             aria-label="关闭山脉调节"
-            onClick={() => setMountainPanelOpen(false)}
+            onClick={() => closePanel('mountain')}
           >
             ×
           </button>
@@ -2611,8 +2879,9 @@ function App({ onVisualReady, bootData = {} }) {
       <VictoryGestureWake
         enabled={gestureCameraEnabled}
         disabled={voiceInputActive}
-        onWake={wakeVoiceInput}
         onCameraStateChange={setGestureCameraStatus}
+        onGestureState={handleGestureState}
+        onAction={handleGestureAction}
       />
 
       <div
@@ -2896,6 +3165,136 @@ function App({ onVisualReady, bootData = {} }) {
                 : '平衡画面和流畅度，适合作为日常默认。'}
           </p>
 
+          <section className="liquid-ore-settings" aria-labelledby="liquid-ore-settings-title">
+            <div className="memory-settings-row memory-settings-row--section liquid-ore-settings-heading">
+              <span id="liquid-ore-settings-title">液态玻璃效果</span>
+              <span className="voice-value">Liquid Ore · WebGL</span>
+            </div>
+            <p className="memory-mode-description">
+              滑动时直接预览全部按钮和卡片；只有点击“保存为固定效果”才会写入本机。
+            </p>
+
+            {LIQUID_ORE_CONTROL_GROUPS.map((group) => (
+              <fieldset className="liquid-ore-settings-group" key={group.id}>
+                <legend>{group.label}</legend>
+                {group.controls.map((control) => (
+                  <label className="liquid-ore-settings-control" key={control.key} htmlFor={`liquid-ore-${control.key}`}>
+                    <span>
+                      {control.label}
+                      <code>{Number(liquidOreSettings[control.key]).toFixed(control.digits)}{control.suffix || ''}</code>
+                    </span>
+                    <input
+                      id={`liquid-ore-${control.key}`}
+                      type="range"
+                      min={control.min}
+                      max={control.max}
+                      step={control.step}
+                      value={liquidOreSettings[control.key]}
+                      onChange={(event) => previewLiquidOreSetting(control.key, event.target.value)}
+                    />
+                  </label>
+                ))}
+              </fieldset>
+            ))}
+
+            <div className="liquid-ore-settings-actions">
+              <button type="button" onClick={restoreSavedLiquidOreSettings}>恢复已保存</button>
+              <button type="button" onClick={restoreLiquidOreDefaults}>源码默认</button>
+              <button className="liquid-ore-settings-save" type="button" onClick={persistLiquidOreSettings}>保存为固定效果</button>
+            </div>
+            <small className="liquid-ore-settings-status" role="status">{liquidOreSettingsStatus}</small>
+          </section>
+
+          <section className="liquid-ore-settings liquid-metal-settings" aria-labelledby="liquid-metal-settings-title">
+            <div className="memory-settings-row memory-settings-row--section liquid-ore-settings-heading">
+              <span id="liquid-metal-settings-title">背景液态金属</span>
+              <span className="voice-value">Liquid Metal · WebGL</span>
+            </div>
+            <p className="memory-mode-description">
+              颜色仍跟随当前歌曲封面；滑动会直接改变背景着色器，保存后作为下次启动的固定效果。
+            </p>
+
+            {LIQUID_METAL_BACKGROUND_CONTROL_GROUPS.map((group) => (
+              <fieldset className="liquid-ore-settings-group" key={group.id}>
+                <legend>{group.label}</legend>
+                {group.controls.map((control) => (
+                  <label className="liquid-ore-settings-control" key={control.key} htmlFor={`liquid-metal-${control.key}`}>
+                    <span>
+                      {control.label}
+                      <code>
+                        {control.type === 'color'
+                          ? liquidMetalSettings[control.key]
+                          : `${Number(liquidMetalSettings[control.key]).toFixed(control.digits)}${control.suffix || ''}`}
+                      </code>
+                    </span>
+                    <input
+                      id={`liquid-metal-${control.key}`}
+                      type={control.type || 'range'}
+                      min={control.min}
+                      max={control.max}
+                      step={control.step}
+                      value={liquidMetalSettings[control.key]}
+                      onChange={(event) => previewLiquidMetalSetting(
+                        control.key,
+                        control.type === 'color' ? event.target.value : Number(event.target.value),
+                      )}
+                    />
+                  </label>
+                ))}
+              </fieldset>
+            ))}
+
+            <div className="liquid-ore-settings-actions">
+              <button type="button" onClick={restoreSavedLiquidMetalSettings}>恢复已保存</button>
+              <button type="button" onClick={restoreLiquidMetalDefaults}>源码默认</button>
+              <button className="liquid-ore-settings-save" type="button" onClick={persistLiquidMetalSettings}>保存为固定效果</button>
+            </div>
+            <small className="liquid-ore-settings-status" role="status">{liquidMetalSettingsStatus}</small>
+          </section>
+
+          <section className="liquid-ore-settings" aria-labelledby="lyric-3d-settings-title">
+            <div className="memory-settings-row memory-settings-row--section liquid-ore-settings-heading">
+              <span id="lyric-3d-settings-title">歌词 3D 字体</span>
+              <span className="voice-value">Three.js</span>
+            </div>
+            <p className="memory-mode-description">所有可见歌词使用封面配色和播放进度渐变；调整手动颜色时自动关闭封面跟随。</p>
+            <label className="liquid-ore-settings-control" htmlFor="lyric-3d-follow-cover">
+              <span>歌词颜色跟随封面</span>
+              <input
+                id="lyric-3d-follow-cover"
+                type="checkbox"
+                checked={lyric3DSettings.followCover}
+                onChange={(event) => previewLyric3DSetting('followCover', event.target.checked)}
+              />
+            </label>
+            <fieldset className="liquid-ore-settings-group">
+              <legend>字体与光效</legend>
+              {LYRIC_3D_CONTROLS.map((control) => (
+                <label className="liquid-ore-settings-control" key={control.key} htmlFor={`lyric-3d-${control.key}`}>
+                  <span>
+                    {control.label}
+                    <code>{control.type === 'color' ? lyric3DSettings[control.key] : `${Number(lyric3DSettings[control.key]).toFixed(control.digits)}${control.suffix || ''}`}</code>
+                  </span>
+                  <input
+                    id={`lyric-3d-${control.key}`}
+                    type={control.type || 'range'}
+                    min={control.min}
+                    max={control.max}
+                    step={control.step}
+                    value={lyric3DSettings[control.key]}
+                    onChange={(event) => previewLyric3DSetting(control.key, event.target.value)}
+                  />
+                </label>
+              ))}
+            </fieldset>
+            <div className="liquid-ore-settings-actions">
+              <button type="button" onClick={restoreSavedLyric3DSettings}>恢复已保存</button>
+              <button type="button" onClick={restoreLyric3DDefaults}>源码默认</button>
+              <button className="liquid-ore-settings-save" type="button" onClick={persistLyric3DSettings}>保存为固定效果</button>
+            </div>
+            <small className="liquid-ore-settings-status" role="status">{lyric3DSettingsStatus}</small>
+          </section>
+
           <p className="memory-settings-status">{yunMemory.summary}</p>
 
           <div className="memory-mode-options" aria-label="记忆模式">
@@ -3136,9 +3535,11 @@ function App({ onVisualReady, bootData = {} }) {
       </LiquidGlass>
 
       <div
-        className={`player-card${immersivePlayerVisible ? ' is-immersive-visible' : ''}`}
-        onPointerEnter={revealImmersivePlayer}
-        onPointerMove={revealImmersivePlayer}
+        ref={playerCardRef}
+        className={`player-card${immersivePlayerVisible ? ' is-immersive-visible' : ''}${uiMode === 'immersive' && !playerMorphContentVisible ? ' is-surface-morph-hidden' : ''}`}
+        onPointerEnter={keepImmersivePlayerOpen}
+        onPointerMove={keepImmersivePlayerOpen}
+        onPointerLeave={releaseImmersivePlayer}
         onPointerDown={revealImmersivePlayer}
       >
         <span className="glass-edge-highlight" aria-hidden="true" />
@@ -3324,6 +3725,15 @@ function App({ onVisualReady, bootData = {} }) {
                 <div className="library-account-nav" aria-label="网易云曲库导航">
                   <button
                     type="button"
+                    className="library-nav-button library-nav-button-account"
+                    aria-label="管理网易云账户"
+                    title="网易云账户"
+                    onClick={() => setNeteaseLoginOpen(true)}
+                  >
+                    <span aria-hidden="true">账</span>
+                  </button>
+                  <button
+                    type="button"
                     className="library-nav-button library-nav-button-liked"
                     aria-label="打开我喜欢的音乐"
                     title="我喜欢的音乐"
@@ -3353,6 +3763,7 @@ function App({ onVisualReady, bootData = {} }) {
                 {neteaseAccountStatus === 'error' && (
                   <button type="button" onClick={loadNeteaseAccount}>重试</button>
                 )}
+                <button type="button" onClick={() => setNeteaseLoginOpen(true)}>登录</button>
               </span>
             )}
             <button type="button" className="library-import-button" disabled={isImportingMusic} onClick={() => musicImportInputRef.current?.click()}>
@@ -3585,14 +3996,7 @@ function App({ onVisualReady, bootData = {} }) {
         </div>
       </div>
 
-      <LiquidGlass
-        displacementScale={40}
-        blurAmount={0.01}
-        saturation={160}
-        aberrationIntensity={3}
-        elasticity={0.35}
-        cornerRadius={999}
-        padding="6px"
+      <div
         className={`ai-mode-expanded${activePanel === 'playMode' ? ' is-open' : ''}`}
       >
         <div className="ai-mode-options">
@@ -3602,13 +4006,16 @@ function App({ onVisualReady, bootData = {} }) {
               type="button"
               key={mode.id}
               aria-pressed={playbackMode === mode.id}
-              onClick={() => selectPlaybackMode(mode.id)}
+              onClick={() => {
+                playerCore.setPlaybackMode(mode.id)
+                closePanel('playMode')
+              }}
             >
               {mode.label}
             </button>
           ))}
         </div>
-      </LiquidGlass>
+      </div>
 
       <div className="ai-popover glass-popover glass-level-3">
         <div className="ai-popover-compact">
@@ -3672,12 +4079,39 @@ function App({ onVisualReady, bootData = {} }) {
         </div>
         <button className="ai-popover-action" aria-label="重新推荐">重新推荐</button>
       </div>
-      {morphLayer && (
+      {neteaseLoginOpen && (
         <div
-          className={`liquid-morph-layer ${morphLayer.phase === 'to' ? 'is-to' : 'is-from'}`}
-          style={morphStyle}
-        />
+          className="netease-login-dialog-backdrop"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setNeteaseLoginOpen(false)
+          }}
+        >
+          <div className="netease-login-dialog" role="dialog" aria-modal="true" aria-label="网易云登录">
+            <YunLoginPanel
+              open
+              onBack={() => setNeteaseLoginOpen(false)}
+              onLoginSubmit={handleNeteaseLoginSubmit}
+              onLogout={handleNeteaseLogout}
+            />
+          </div>
+        </div>
       )}
+      <LiquidMorphTransition
+        transition={morphLayer}
+        onReveal={revealLiquidMorphContent}
+        onComplete={finishLiquidMorph}
+      />
+      <LiquidMorphTransition
+        transition={topControlsMorph}
+        onReveal={revealTopControlsMorph}
+        onComplete={finishTopControlsMorph}
+      />
+      <LiquidMorphTransition
+        transition={playerMorph}
+        onReveal={revealPlayerMorph}
+        onComplete={finishPlayerMorph}
+      />
     </main>
     </PlayerProvider>
   )

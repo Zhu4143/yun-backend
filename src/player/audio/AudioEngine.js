@@ -25,6 +25,7 @@ export class AudioEngine {
     this.standbyDeck = null
     this.graph = null
     this.entriesByDeck = new WeakMap()
+    this.envelopeByDeck = new WeakMap()
     this.entries = new Set()
     this.userVolume = 1
     this.duckingFactor = 1
@@ -64,7 +65,10 @@ export class AudioEngine {
     this.reactivate()
     if (!this.activeDeck) {
       this.activeDeck = this.audioFactory()
-      if (this.activeDeck) this.activeDeck.volume = this.userVolume
+      if (this.activeDeck) {
+        this.envelopeByDeck.set(this.activeDeck, 1)
+        this.activeDeck.volume = this.userVolume
+      }
     }
     return this.activeDeck
   }
@@ -73,7 +77,10 @@ export class AudioEngine {
     this.reactivate()
     if (!this.standbyDeck) {
       this.standbyDeck = this.audioFactory()
-      if (this.standbyDeck) this.standbyDeck.volume = 0
+      if (this.standbyDeck) {
+        this.envelopeByDeck.set(this.standbyDeck, 0)
+        this.standbyDeck.volume = 0
+      }
     }
     return this.standbyDeck
   }
@@ -105,14 +112,18 @@ export class AudioEngine {
       if (!entry) {
         const source = this.graph.context.createMediaElementSource(deck)
         const analyser = this.graph.context.createAnalyser()
+        const deckGain = this.graph.context.createGain()
         analyser.fftSize = 1024
         analyser.smoothingTimeConstant = 0.72
+        deckGain.gain.value = this.envelopeByDeck.get(deck) ?? 1
         source.connect(analyser)
-        analyser.connect(this.graph.musicGain)
+        analyser.connect(deckGain)
+        deckGain.connect(this.graph.musicGain)
         entry = {
           deck,
           source,
           analyser,
+          deckGain,
           frequencyBuffer: new Uint8Array(analyser.frequencyBinCount),
           timeBuffer: new Uint8Array(analyser.fftSize),
         }
@@ -142,6 +153,49 @@ export class AudioEngine {
       console.warn('[player] unable to resume music output', error)
       return false
     }
+  }
+
+  setDeckEnvelope(deck, value) {
+    if (!deck) return false
+    const envelope = clampUnit(value)
+    this.envelopeByDeck.set(deck, envelope)
+    const binding = this.ensureGraphFor(deck)
+    const gain = binding?.entry?.deckGain?.gain
+    const context = binding?.graph?.context
+
+    if (!gain || !context) return false
+    const now = context.currentTime
+    gain.cancelScheduledValues(now)
+    gain.setValueAtTime(envelope, now)
+    return true
+  }
+
+  scheduleCrossfadeEnvelopes({
+    fromDeck,
+    toDeck,
+    durationMs,
+    fadeOutCurve,
+    fadeInCurve,
+  }) {
+    const fromBinding = this.ensureGraphFor(fromDeck)
+    const toBinding = this.ensureGraphFor(toDeck)
+    const context = fromBinding?.graph?.context
+    const fromGain = fromBinding?.entry?.deckGain?.gain
+    const toGain = toBinding?.entry?.deckGain?.gain
+    if (!context || context !== toBinding?.graph?.context || !fromGain || !toGain) return false
+    if (!(fadeOutCurve?.length > 1) || !(fadeInCurve?.length > 1)) return false
+
+    const now = context.currentTime
+    const duration = Math.max(0.001, Number(durationMs) / 1000 || 0)
+    fromGain.cancelScheduledValues(now)
+    toGain.cancelScheduledValues(now)
+    fromGain.setValueCurveAtTime(fadeOutCurve, now, duration)
+    toGain.setValueCurveAtTime(fadeInCurve, now, duration)
+    this.envelopeByDeck.set(fromDeck, fadeOutCurve.at(-1))
+    this.envelopeByDeck.set(toDeck, fadeInCurve.at(-1))
+    fromDeck.volume = this.userVolume
+    toDeck.volume = this.userVolume
+    return true
   }
 
   readTimeDomainData(deck = this.activeDeck) {
@@ -221,6 +275,7 @@ export class AudioEngine {
     for (const entry of this.entries) {
       try { entry.source?.disconnect?.() } catch { /* already disconnected */ }
       try { entry.analyser?.disconnect?.() } catch { /* already disconnected */ }
+      try { entry.deckGain?.disconnect?.() } catch { /* already disconnected */ }
     }
 
     const graph = this.graph
@@ -247,6 +302,7 @@ export class AudioEngine {
     this.graph = null
     this.entries.clear()
     this.entriesByDeck = new WeakMap()
+    this.envelopeByDeck = new WeakMap()
     this.duckingFactor = 1
     this.disposePromise = Promise.resolve(closeResult).catch(() => {})
     return this.disposePromise
