@@ -188,6 +188,15 @@ test('agent creates its runtime data directory on first request', async () => {
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('agent Memory Off mode skips its recent-turn persistence', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'yun-agent-'))
+  try {
+    const agent = createYunAgent({ dataDir: dir, modelProvider: onlineModel() })
+    await agent.handle({ message: '帮我做一个歌单', context: { online: true, memoryEnabled: false } })
+    await assert.rejects(stat(path.join(dir, 'memory.json')), { code: 'ENOENT' })
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('approved mined skills bypass the model on their next matching request', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'yun-agent-'))
   try {

@@ -33,11 +33,14 @@ export async function fetchYunSettings({ signal } = {}) {
   return data
 }
 
-export async function saveYunSettings({ memoryMode }) {
+export async function saveYunSettings({ memoryMode, memoryEnabled }) {
+  const settings = {}
+  if (memoryMode !== undefined) settings.memoryMode = memoryMode
+  if (memoryEnabled !== undefined) settings.memoryEnabled = Boolean(memoryEnabled)
   const response = await fetch('/api/yun-settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ memoryMode }),
+    body: JSON.stringify(settings),
   })
   const data = await response.json().catch(() => ({}))
 
@@ -49,11 +52,12 @@ export async function saveYunSettings({ memoryMode }) {
 }
 
 export async function fetchDefaultUserMemory({ signal } = {}) {
-  const response = await fetch('/user_memory.json', { cache: 'no-store', signal })
+  const response = await fetch('/api/yun/default-memory', { cache: 'no-store', signal })
 
   if (!response.ok) {
     throw new Error('默认记忆加载失败')
   }
 
-  return response.json()
+  const data = await response.json()
+  return data.enabled === false ? null : data
 }

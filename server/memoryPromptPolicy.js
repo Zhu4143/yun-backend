@@ -1,12 +1,18 @@
 const DISABLED_MEMORY_TEXT = '本地记忆未启用。'
 
+export function resolveYunMemoryPolicy(settings = {}) {
+  const memoryMode = ['off', 'smart', 'deep'].includes(settings.memoryMode) ? settings.memoryMode : 'smart'
+  const memoryEnabled = settings.memoryEnabled !== false
+  return { memoryEnabled, memoryMode, enabled: memoryEnabled && memoryMode !== 'off' }
+}
+
 export function createMemoryPromptContext({
   memoryMode = 'smart',
   memoryEnabled = true,
   userMemory = null,
   companionMemory = {},
 } = {}) {
-  const enabled = memoryMode !== 'off' && memoryEnabled !== false
+  const enabled = resolveYunMemoryPolicy({ memoryMode, memoryEnabled }).enabled
   return {
     enabled,
     userMemory: enabled && userMemory

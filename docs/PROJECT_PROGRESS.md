@@ -2,6 +2,16 @@
 
 Branch: feature/netease-capability-p2.
 
+### Follow-up fixes from `11eee2355ae6795dfd97af02a6a013ab8efe3884`
+
+- Current-turn memory updates in chat, mood recommendations, Companion tool results, and Yun/CowAgent commands now carry the request AbortSignal and finish before the HTTP response. Server settings persist `memoryEnabled`; memory reads/writes and default user-memory delivery follow the same policy, including the legacy static URL.
+- Browser fallback keeps capturing and segmenting frames during recognition, queues complete segments, and processes them serially. Existing wake and silence thresholds are unchanged.
+- NetEase fetch retries combine caller cancellation with per-attempt timeouts. The audio proxy passes the request signal to upstream fetches and cancels stream work when the client disconnects.
+- Boot reads memory policy before memory content and checks `/api/tts/health`, which reports the provider selected by `/api/tts`; native playback remains optional.
+- `npm.cmd run verify` passed on 2026-09-28. The build emitted the existing large-chunk advisory. The new tests cover memory policy and write awaiting, cancellation-aware retries, recognition serialization, TTS provider health, and Boot memory/voice decisions.
+- No particle-person visuals were changed in this follow-up, and `main` was not merged. Physical microphone sensitivity and live local TTS/CDN disconnect behavior still require runtime checks.
+- Follow-up handoff: [YUN_HANDOFF_2026-09-28-core-wake-memory-followup.md](./YUN_HANDOFF_2026-09-28-core-wake-memory-followup.md).
+
 This checkpoint covers the boot dependency chain and degraded-provider behavior; response/session cancellation across chat, TTS, and HTTP requests; single-owner native/browser microphone fallback and command capture; memory prompt-off semantics and serialized atomic persistence; transactional Up Next queue consumption; and Electron backend identity, runtime environment, and per-user data setup.
 
 - npm.cmd run verify passed on 2026-09-28, including lint, the full configured unit/integration suites, conversation E2E, and production build.

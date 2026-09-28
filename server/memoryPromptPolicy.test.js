@@ -28,3 +28,18 @@ test('per-turn memory disable excludes memory even when the saved mode is enable
   assert.equal(context.enabled, false)
   assert.doesNotMatch(JSON.stringify(context), /privateDetail|rememberedPreference/)
 })
+
+
+test('persisted memoryEnabled overrides a permissive per-turn prompt request', async () => {
+  const { resolveYunMemoryPolicy } = await import('./memoryPromptPolicy.js')
+  const policy = resolveYunMemoryPolicy({ memoryEnabled: false, memoryMode: 'deep' })
+  const context = createMemoryPromptContext({
+    ...policy,
+    userMemory: { privateDetail: 'not included' },
+    companionMemory: { recentTopic: 'not included' },
+  })
+
+  assert.equal(policy.enabled, false)
+  assert.equal(context.enabled, false)
+  assert.doesNotMatch(JSON.stringify(context), /privateDetail|recentTopic/)
+})

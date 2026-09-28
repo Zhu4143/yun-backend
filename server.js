@@ -47,6 +47,10 @@ import { getRelevantNeteaseCapabilityTruth } from "./src/services/netease/capabi
 import { createRequestLifecycle } from "./server/requestLifecycle.js";
 import { AtomicJsonStore } from "./server/atomicJsonStore.js";
 import { createMemoryPromptContext } from "./server/memoryPromptPolicy.js";
+import { resolveYunMemoryPolicy } from "./server/memoryPromptPolicy.js";
+import { awaitConversationMemoryWrites } from "./server/conversationMemoryWrites.js";
+import { fetchWithRetry } from "./server/netRequest.js";
+import { getTtsRuntimeHealth } from "./server/ttsRuntimeHealth.js";
 import { createBackendIdentity } from "./server/backendIdentity.js";
 
 const {
@@ -93,6 +97,13 @@ const manualMusicTagsPath = path.join(dataDir, "manualMusicTags.json");
 const yunMemoryPath = path.join(dataDir, "yunMemory.json");
 const yunMemoryStore = new AtomicJsonStore(yunMemoryPath);
 const yunSettingsPath = path.join(dataDir, "yunSettings.json");
+const yunSettingsStore = new AtomicJsonStore(yunSettingsPath);
+let memoryPolicyWriteQueue = Promise.resolve();
+function serializeMemoryPolicyOperation(operation) {
+  const result = memoryPolicyWriteQueue.then(operation, operation);
+  memoryPolicyWriteQueue = result.catch(() => {});
+  return result;
+}
 const listeningProfilePath = path.join(dataDir, "yunListeningProfile.json");
 const neteaseCookiePath = path.join(dataDir, "netease-cookie.txt");
 const defaultCoverPath = "/covers/default-cover.jpg";
@@ -214,19 +225,13 @@ function waitFor(ms) {
 // failure inside the provider boundary instead of returning Node's opaque
 // "fetch failed" to the UI.
 async function fetchNeteaseWithRetry(url, options = {}, { attempts = neteaseRequestAttempts, timeoutMs = neteaseRequestTimeoutMs } = {}) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
-      if (response.status < 500 || attempt === attempts) return response;
-      lastError = new Error(`网易云服务暂时不可用（${response.status}）`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < attempts) await waitFor(300 * attempt);
+  try {
+    return await fetchWithRetry(url, options, { attempts, timeoutMs, retryDelayMs: attempt => 300 * attempt });
+  } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason || error;
+    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+    throw new Error(timedOut ? "网易云响应超时，请稍后重试" : "网易云连接暂时不稳定，请重试", { cause: error });
   }
-  const timedOut = lastError?.name === "TimeoutError" || lastError?.name === "AbortError";
-  throw new Error(timedOut ? "网易云响应超时，请稍后重试" : "网易云连接暂时不稳定，请重试");
 }
 const visionUpload = multer({
   storage: multer.memoryStorage(),
@@ -1964,7 +1969,8 @@ function getNeteasePlayableUrlCacheKey(id, level = "") {
   return level ? `${id}:${level}` : String(id);
 }
 
-async function getNeteasePlayableUrl(id, { level = "", strictLevel = false } = {}) {
+async function getNeteasePlayableUrl(id, { level = "", strictLevel = false, signal } = {}) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   const safeId = String(id || "").trim();
   if (!safeId) return null;
   const requestedLevel = String(level || "").trim();
@@ -1991,7 +1997,7 @@ async function getNeteasePlayableUrl(id, { level = "", strictLevel = false } = {
   if (strictLevel || requestedLevel) return null;
 
   const url = `https://music.163.com/api/song/enhance/player/url?id=${encodeURIComponent(safeId)}&ids=%5B${encodeURIComponent(safeId)}%5D&br=320000`;
-  const response = await fetchNeteaseWithRetry(url, { headers: neteaseHeaders });
+  const response = await fetchNeteaseWithRetry(url, { headers: neteaseHeaders, signal });
   if (!response.ok) return null;
 
   const data = await response.json();
@@ -2318,6 +2324,9 @@ async function handleNeteaseUrl(req, res) {
 }
 
 async function handleNeteaseAudio(req, res) {
+  const lifecycle = createRequestLifecycle(req, res, { responseId: req.headers?.["x-yun-response-id"] });
+  const { signal } = lifecycle;
+  let reader = null;
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const id = String(url.searchParams.get("id") || "").trim();
@@ -2332,17 +2341,17 @@ async function handleNeteaseAudio(req, res) {
     const headers = { ...neteaseHeaders };
     if (req.headers.range) headers.Range = req.headers.range;
     const cacheKey = getNeteasePlayableUrlCacheKey(id, level);
-    let playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level) });
+    let playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level), signal });
     if (!playableUrl) return sendJson(res, 404, { ok: false, code: "not_found", error: "No playable url for this song and requested level" });
 
-    let audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers });
+    let audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers, signal });
     // CDN stream URLs can expire while a song is playing. Do not keep serving
     // a cached, expired address on the next Range request: evict it and obtain
     // one fresh URL before the browser turns the player into a silent state.
     if (!audioResponse.ok && audioResponse.status !== 206) {
       neteasePlayableUrlCache.delete(cacheKey);
-      playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level) });
-      if (playableUrl) audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers });
+      playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level), signal });
+      if (playableUrl) audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers, signal });
     }
     if (!audioResponse.ok && audioResponse.status !== 206) {
       return sendJson(res, audioResponse.status || 502, { ok: false, error: "网易云音频地址已失效，请重试" });
@@ -2359,18 +2368,37 @@ async function handleNeteaseAudio(req, res) {
       return res.end();
     }
 
-    const reader = audioResponse.body.getReader();
+    reader = audioResponse.body.getReader();
     while (true) {
+      if (signal.aborted || res.destroyed) break;
       const { done, value } = await reader.read();
       if (done) break;
-      res.write(Buffer.from(value));
+      if (!res.write(Buffer.from(value))) {
+        await new Promise(resolve => {
+          const finish = () => {
+            res.off("drain", finish);
+            res.off("close", finish);
+            signal.removeEventListener("abort", finish);
+            resolve();
+          };
+          res.once("drain", finish);
+          res.once("close", finish);
+          signal.addEventListener("abort", finish, { once: true });
+          if (signal.aborted || res.destroyed) finish();
+        });
+      }
     }
-    return res.end();
+    if (!signal.aborted && !res.destroyed) return res.end();
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
+    if (res.headersSent) return res.destroy(error);
     return sendJson(res, 500, {
       ok: false,
       error: error instanceof Error ? error.message : "Netease audio failed",
     });
+  } finally {
+    if (signal.aborted) await reader?.cancel(signal.reason).catch(() => {});
+    lifecycle.cleanup();
   }
 }
 
@@ -3167,10 +3195,12 @@ async function handleApiChat(req, res) {
     });
   }
 
+  const lifecycle = createRequestLifecycle(req, res, { responseId: req.headers?.["x-yun-response-id"] });
+  const { signal } = lifecycle;
   try {
     const { messages = [], systemPrompt = "", jsonMode = false } = await readJson(req);
     const userMessage = [...messages].reverse().find(item => item?.role === "user")?.content || "";
-    const memoryContext = await resolveYunMemoryForPrompt(userMessage);
+    const memoryContext = await resolveYunMemoryForPrompt(userMessage, { signal });
     const relationshipPrompt = shouldUseRelationshipSupport(userMessage) ? RELATIONSHIP_SUPPORT_GUIDE : "";
     const memoryPrompt = memoryContext.relevantMemory
       ? `以下是你关于用户东宇的长期记忆，请自然使用，不要生硬复述：\n${memoryContext.relevantMemory}`
@@ -3182,6 +3212,7 @@ async function handleApiChat(req, res) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
+      signal,
       body: JSON.stringify({
         model: runtimeModel,
         messages: [
@@ -3205,16 +3236,21 @@ async function handleApiChat(req, res) {
 
     const aiReply = shapeYunIdentityReply(userMessage, data.choices?.[0]?.message?.content?.trim() || "");
     if (memoryContext.memoryMode !== "off" && userMessage && aiReply && !jsonMode) {
-      updateYunMemoryIfNeeded(userMessage, aiReply).catch(error => {
-        console.error("[yun-memory] background update failed:", error);
+      await awaitConversationMemoryWrites({
+        policy: memoryContext,
+        signal,
+        writes: [({ signal: writeSignal }) => updateYunMemoryIfNeeded(userMessage, aiReply, { signal: writeSignal })],
       });
     }
 
     return sendJson(res, 200, { text: aiReply });
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
     return sendJson(res, 500, {
       error: error instanceof Error ? error.message : "服务器请求失败",
     });
+  } finally {
+    lifecycle.cleanup();
   }
 }
 
@@ -4282,6 +4318,8 @@ async function handleMusicStructureSeek(req, res) {
 }
 
 async function handleMoodRecommend(req, res) {
+  const lifecycle = createRequestLifecycle(req, res, { responseId: req.headers?.["x-yun-response-id"] });
+  const { signal } = lifecycle;
   try {
     const {
       userText = "",
@@ -4308,7 +4346,7 @@ async function handleMoodRecommend(req, res) {
       .filter(item => item?.role === "assistant")
       .slice(-5)
       .map(item => item.content);
-    const memoryContext = await resolveYunMemoryForPrompt(userText);
+    const memoryContext = await resolveYunMemoryForPrompt(userText, { signal });
 
     const systemPrompt = `你是昀的情绪分析模块，只分析用户当前状态，不推荐具体歌名。
 必须只输出严格 JSON，不要 Markdown。
@@ -4349,6 +4387,7 @@ companionReply 要像昀本人说话，短、自然，不要像 AI 助手。不�
       maxTokens: 900,
       frequencyPenalty: 0.35,
       presencePenalty: 0.15,
+      signal,
     });
 
     analysis.moodTags = uniqueStrings(analysis.moodTags);
@@ -4362,8 +4401,10 @@ companionReply 要像昀本人说话，短、自然，不要像 AI 助手。不�
     analysis.shouldAutoPlay = Boolean(analysis.shouldAutoPlay || detectAutoPlayRequest(userText));
     analysis.companionReply = String(analysis.companionReply || "我给你挑几首贴近现在的。").trim();
     if (memoryContext.memoryMode !== "off") {
-      updateYunMemoryIfNeeded(userText, analysis.companionReply).catch(error => {
-        console.error("[yun-memory] mood background update failed:", error);
+      await awaitConversationMemoryWrites({
+        policy: memoryContext,
+        signal,
+        writes: [({ signal: writeSignal }) => updateYunMemoryIfNeeded(userText, analysis.companionReply, { signal: writeSignal })],
       });
     }
 
@@ -4379,9 +4420,12 @@ companionReply 要像昀本人说话，短、自然，不要像 AI 助手。不�
       recommendations,
     });
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
     return sendJson(res, 500, {
       error: error instanceof Error ? error.message : "情绪分析失败，先手动选一首吧。",
     });
+  } finally {
+    lifecycle.cleanup();
   }
 }
 
@@ -4427,35 +4471,30 @@ function createDefaultYunMemory() {
 const YUN_MEMORY_MODES = new Set(["off", "smart", "deep"]);
 
 function createDefaultYunSettings() {
-  return { memoryMode: "smart" };
+  return { memoryEnabled: true, memoryMode: "smart" };
 }
 
 function normalizeYunSettings(settings = {}) {
   const memoryMode = YUN_MEMORY_MODES.has(settings?.memoryMode) ? settings.memoryMode : "smart";
-  return { memoryMode };
+  return { memoryEnabled: settings?.memoryEnabled !== false, memoryMode };
 }
 
 async function loadYunSettings() {
   try {
-    const raw = await readFile(yunSettingsPath, "utf8");
-    return normalizeYunSettings(JSON.parse(raw));
+    return normalizeYunSettings(await yunSettingsStore.load(createDefaultYunSettings()));
   } catch {
     const settings = createDefaultYunSettings();
-    try {
-      await mkdir(dataDir, { recursive: true });
-      await writeFile(yunSettingsPath, JSON.stringify(settings, null, 2), "utf8");
-    } catch (writeError) {
-      console.error("[yun-settings] init failed:", writeError);
-    }
     return settings;
   }
 }
 
 async function saveYunSettings(settings = {}) {
-  const normalized = normalizeYunSettings(settings);
-  await mkdir(dataDir, { recursive: true });
-  await writeFile(yunSettingsPath, JSON.stringify(normalized, null, 2), "utf8");
-  return normalized;
+  return serializeMemoryPolicyOperation(async () => {
+    const current = await yunSettingsStore.load(createDefaultYunSettings());
+    const normalized = normalizeYunSettings({ ...current, ...settings });
+    await yunSettingsStore.write(normalized);
+    return normalized;
+  });
 }
 
 function normalizeYunMemory(memory = {}) {
@@ -4540,30 +4579,45 @@ function normalizeYunMemory(memory = {}) {
   return next;
 }
 
-async function loadYunMemory() {
-  return normalizeYunMemory(await yunMemoryStore.load(createDefaultYunMemory()));
+async function loadYunMemory({ signal } = {}) {
+  return serializeMemoryPolicyOperation(async () => {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
+    const policy = resolveYunMemoryPolicy(await loadYunSettings());
+    if (!policy.enabled) return null;
+    const memory = await yunMemoryStore.load(createDefaultYunMemory());
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
+    return normalizeYunMemory(memory);
+  });
 }
 
 async function saveYunMemory(memory, { signal } = {}) {
-  const normalized = normalizeYunMemory(memory);
-  try {
-    await yunMemoryStore.write(normalized, { signal });
-  } catch (error) {
-    console.error("[yun-memory] save failed:", error);
-    throw error;
-  }
-  return normalized;
+  return serializeMemoryPolicyOperation(async () => {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
+    if (!resolveYunMemoryPolicy(await loadYunSettings()).enabled) return null;
+    const normalized = normalizeYunMemory(memory);
+    try {
+      await yunMemoryStore.write(normalized, { signal });
+    } catch (error) {
+      console.error("[yun-memory] save failed:", error);
+      throw error;
+    }
+    return normalized;
+  });
 }
 
 async function mutateYunMemory(mutator, { signal } = {}) {
   let result;
-  const memory = await yunMemoryStore.update(async current => {
+  return serializeMemoryPolicyOperation(async () => {
     if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
-    const normalized = normalizeYunMemory(current);
-    result = await mutator(normalized);
-    return normalized;
-  }, { signal, defaultValue: createDefaultYunMemory() });
-  return { memory: normalizeYunMemory(memory), result };
+    if (!resolveYunMemoryPolicy(await loadYunSettings()).enabled) return { memory: null, result: undefined, disabled: true };
+    const memory = await yunMemoryStore.update(async current => {
+      if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
+      const normalized = normalizeYunMemory(current);
+      result = await mutator(normalized);
+      return normalized;
+    }, { signal, defaultValue: createDefaultYunMemory() });
+    return { memory: normalizeYunMemory(memory), result };
+  });
 }
 
 const readYunMemory = loadYunMemory;
@@ -4588,7 +4642,8 @@ function getMemoryIntentKeywords(userMessage = "") {
 
 function getRelevantYunMemory(userMessage = "", options = {}) {
   const limit = clampNumber(options.limit, 5, 12, 10);
-  return loadYunMemory().then(memory => {
+  return loadYunMemory({ signal: options.signal }).then(memory => {
+    if (!memory || options.signal?.aborted) return "";
     const groups = getMemoryIntentKeywords(userMessage);
     const lines = [];
     const profile = memory.userProfile || {};
@@ -4627,10 +4682,7 @@ function getRelevantYunMemory(userMessage = "", options = {}) {
     for (const { item } of scored) lines.push(item.content);
     const output = uniqueStrings(lines).slice(0, limit);
     return `【关于东宇的长期记忆】\n${output.map(line => `- ${line}`).join("\n")}`;
-  }).catch(() => {
-    const base = createDefaultYunMemory();
-    return `【关于东宇的长期记忆】\n- 用户名字：${base.userProfile.name}\n- ${base.relationshipMemory.tone}`;
-  });
+  }).catch(() => "");
 }
 
 async function shouldFetchLongTermMemory(userMessage = "") {
@@ -4656,17 +4708,15 @@ async function shouldFetchLongTermMemory(userMessage = "") {
 
 async function resolveYunMemoryForPrompt(userMessage = "", options = {}) {
   const settings = await loadYunSettings();
-  const requestedMemoryMode = YUN_MEMORY_MODES.has(options.memoryMode) ? options.memoryMode : settings.memoryMode;
-  const memoryMode = options.allowMemory === false ? "off" : (requestedMemoryMode || "smart");
-  if (memoryMode === "off") {
-    return { memoryMode, relevantMemory: "" };
-  }
+  const policy = resolveYunMemoryPolicy(settings);
+  const { memoryMode } = policy;
+  if (!policy.enabled) return { memoryMode: "off", memoryEnabled: false, enabled: false, relevantMemory: "" };
   if (memoryMode === "smart") {
     const needMemory = await shouldFetchLongTermMemory(userMessage);
-    if (!needMemory) return { memoryMode, relevantMemory: "" };
+    if (!needMemory) return { ...policy, relevantMemory: "" };
   }
-  const relevantMemory = await getRelevantYunMemory(userMessage, { limit: 12 });
-  return { memoryMode, relevantMemory };
+  const relevantMemory = await getRelevantYunMemory(userMessage, { limit: 12, signal: options.signal });
+  return { ...policy, relevantMemory };
 }
 
 async function extractMemoryFromConversation(userMessage, aiReply, { signal } = {}) {
@@ -5448,8 +5498,6 @@ async function handleCompanionChat(req, res) {
       persona = "warm",
       companionMemory = {},
       userMemory = null,
-      memoryEnabled = true,
-      memoryMode = null,
       recentAiReplies = [],
       questionCountWindow = 0,
       localTime = "",
@@ -5476,16 +5524,16 @@ async function handleCompanionChat(req, res) {
     const songs = needsSongContext ? await readMusicLibraryForServer() : [];
     if (signal.aborted) throw signal.reason;
     const relationshipSupportActive = shouldUseRelationshipSupport(userText);
-    const memoryContextInfo = await resolveYunMemoryForPrompt(userText, { allowMemory: memoryEnabled, memoryMode });
+    const memoryContextInfo = await resolveYunMemoryForPrompt(userText, { signal });
     const effectiveMemoryMode = memoryContextInfo.memoryMode;
     const memoryPromptContext = createMemoryPromptContext({
       memoryMode: effectiveMemoryMode,
-      memoryEnabled,
-      userMemory,
-      companionMemory,
+      memoryEnabled: memoryContextInfo.memoryEnabled,
+      userMemory: memoryContextInfo.enabled ? userMemory : null,
+      companionMemory: memoryContextInfo.enabled ? companionMemory : {},
     });
     const memoryActive = memoryPromptContext.enabled;
-    const yunMemory = memoryActive ? await readYunMemory() : createDefaultYunMemory();
+    const yunMemory = memoryActive ? await readYunMemory({ signal }) : createDefaultYunMemory();
     const yunMemoryContext = memoryActive
       ? summarizeYunMemoryForPrompt(yunMemory, userText, currentSong, responseMode)
       : "长期记忆未启用。";
@@ -5648,23 +5696,25 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
 
       if (signal.aborted) throw signal.reason;
       if (memoryActive && userText && finalReply) {
-        updateYunMemoryIfNeeded(userText, finalReply, { signal }).catch(error => {
-          console.error("[yun-memory] companion background update failed:", error);
-        });
-        await recordWechatConversationMemory({
-          source,
-          from: sourceContact,
-          rawText,
-          command: userText,
-          reply: finalReply,
-          decision: {
-            ...decision,
-            ...toolReplyDecision,
-            companionState: decision.companionState || "soft_reply",
-          },
-          memoryPatch: toolReplyDecision.memoryPatch || decision.memoryPatch || {},
-        }, { signal }).catch(error => {
-          console.error("[yun-memory] wechat record failed:", error instanceof Error ? error.message : error);
+        await awaitConversationMemoryWrites({
+          policy: memoryContextInfo,
+          signal,
+          writes: [
+            ({ signal: writeSignal }) => updateYunMemoryIfNeeded(userText, finalReply, { signal: writeSignal }),
+            ({ signal: writeSignal }) => recordWechatConversationMemory({
+              source,
+              from: sourceContact,
+              rawText,
+              command: userText,
+              reply: finalReply,
+              decision: {
+                ...decision,
+                ...toolReplyDecision,
+                companionState: decision.companionState || "soft_reply",
+              },
+              memoryPatch: toolReplyDecision.memoryPatch || decision.memoryPatch || {},
+            }, { signal: writeSignal }),
+          ],
         });
       }
 
@@ -5766,9 +5816,12 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
     }
     if (signal.aborted) throw signal.reason;
     if (memoryWriteActive && userText && finalReply) {
-      await Promise.all([
-        updateYunMemoryIfNeeded(userText, finalReply, { signal }),
-        recordWechatConversationMemory({
+      await awaitConversationMemoryWrites({
+        policy: memoryContextInfo,
+        signal,
+        writes: [
+          ({ signal: writeSignal }) => updateYunMemoryIfNeeded(userText, finalReply, { signal: writeSignal }),
+          ({ signal: writeSignal }) => recordWechatConversationMemory({
           source,
           from: sourceContact,
           rawText,
@@ -5776,11 +5829,12 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
           reply: finalReply,
           decision,
           memoryPatch: decision.memoryPatch || {},
-        }, { signal }).catch(error => {
-          if (signal.aborted) throw error;
-          console.error("[yun-memory] wechat record failed:", error instanceof Error ? error.message : error);
-        }),
-      ]);
+          }, { signal: writeSignal }).catch(error => {
+            if (signal.aborted) throw error;
+            console.error("[yun-memory] wechat record failed:", error instanceof Error ? error.message : error);
+          }),
+        ],
+      });
       if (signal.aborted) throw signal.reason;
     }
 
@@ -5932,8 +5986,22 @@ async function recordWechatConversationMemory({
 }
 
 async function handleGetYunMemory(req, res) {
+  const policy = resolveYunMemoryPolicy(await loadYunSettings());
+  if (!policy.enabled) return sendJson(res, 200, { ok: true, enabled: false, memory: null });
   const memory = await loadYunMemory();
-  return sendJson(res, 200, { ok: true, memory });
+  return sendJson(res, 200, { ok: true, enabled: true, memory });
+}
+
+async function handleGetDefaultUserMemory(req, res) {
+  const policy = resolveYunMemoryPolicy(await loadYunSettings());
+  if (!policy.enabled) return sendJson(res, 200, { ok: true, enabled: false });
+  try {
+    const filePath = path.join(publicDir, "user_memory.json");
+    const memory = JSON.parse(await readFile(filePath, "utf8"));
+    return sendJson(res, 200, memory);
+  } catch (error) {
+    return sendJson(res, 404, { error: error instanceof Error ? error.message : "默认记忆加载失败" });
+  }
 }
 
 async function handleGetYunSettings(req, res) {
@@ -5943,11 +6011,15 @@ async function handleGetYunSettings(req, res) {
 
 async function handlePostYunSettings(req, res) {
   try {
-    const { memoryMode = "smart" } = await readJson(req);
-    if (!YUN_MEMORY_MODES.has(memoryMode)) {
+    const body = await readJson(req);
+    const { memoryMode, memoryEnabled } = body;
+    if (memoryMode !== undefined && !YUN_MEMORY_MODES.has(memoryMode)) {
       return sendJson(res, 400, { error: "memoryMode 只能是 off、smart 或 deep" });
     }
-    const settings = await saveYunSettings({ memoryMode });
+    if (memoryEnabled !== undefined && typeof memoryEnabled !== "boolean") {
+      return sendJson(res, 400, { error: "memoryEnabled 必须是布尔值" });
+    }
+    const settings = await saveYunSettings({ ...(memoryMode !== undefined ? { memoryMode } : {}), ...(memoryEnabled !== undefined ? { memoryEnabled } : {}) });
     return sendJson(res, 200, settings);
   } catch (error) {
     return sendJson(res, 500, {
@@ -5957,12 +6029,15 @@ async function handlePostYunSettings(req, res) {
 }
 
 async function handleResetYunMemory(req, res) {
+  if (!resolveYunMemoryPolicy(await loadYunSettings()).enabled) return sendJson(res, 403, { error: "记忆已关闭，不能读取或写入记忆" });
   const memory = await saveYunMemory(createDefaultYunMemory());
+  if (!memory) return sendJson(res, 403, { error: "记忆已关闭，不能读取或写入记忆" });
   return sendJson(res, 200, { ok: true, memory });
 }
 
 async function handleAddYunMemory(req, res) {
   try {
+    if (!resolveYunMemoryPolicy(await loadYunSettings()).enabled) return sendJson(res, 403, { error: "记忆已关闭，不能读取或写入记忆" });
     const { content = "", importance = 7, tags = [] } = await readJson(req);
     const cleanContent = String(content || "").trim();
     if (!cleanContent) {
@@ -5979,6 +6054,7 @@ async function handleAddYunMemory(req, res) {
       exists = (current.episodicMemories || []).some(existing => normalizeTagText(existing.content) === normalizeTagText(item.content));
       if (!exists) current.episodicMemories = trimEpisodicMemories([...(current.episodicMemories || []), item]);
     });
+    if (!memory) return sendJson(res, 403, { error: "记忆已关闭，不能读取或写入记忆" });
     return sendJson(res, 200, { ok: true, memory, added: !exists, item });
   } catch (error) {
     return sendJson(res, 500, {
@@ -6714,6 +6790,7 @@ async function handleCurrentTrack(req, res) {
 async function serveStatic(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const requestedPath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+  if (requestedPath === "user_memory.json") return handleGetDefaultUserMemory(req, res);
   const requested = requestedPath || "index.html";
   const roots = requested.startsWith("covers/")
     ? uniqueStrings([publicDir, legacyPublicDir])
@@ -6798,8 +6875,12 @@ async function handleMossChat(req, res) {
 }
 
 async function handleYunAgent(req, res) {
+  const lifecycle = createRequestLifecycle(req, res, { responseId: req.headers?.["x-yun-response-id"] });
+  const { signal } = lifecycle;
   try {
     const body = await readJson(req);
+    const memoryPolicy = resolveYunMemoryPolicy(await loadYunSettings());
+    if (signal.aborted) throw signal.reason;
     const inputMode = body.inputMode === "voice" ? "voice" : "text";
     const capabilityTruth = getRelevantNeteaseCapabilityTruth({ message: body.message, inputMode });
     const result = await yunAgent.handle({
@@ -6809,11 +6890,17 @@ async function handleYunAgent(req, res) {
         ...(body.context && typeof body.context === "object" ? body.context : {}),
         inputMode,
         capabilityTruth,
+        memoryEnabled: memoryPolicy.enabled,
+        signal,
       },
     });
+    if (signal.aborted) throw signal.reason;
     return sendJson(res, result.ok ? 200 : 422, result);
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
     return sendJson(res, 400, { ok: false, message: `昀 Agent 请求失败：${error instanceof Error ? error.message : String(error)}`, actions: [] });
+  } finally {
+    lifecycle.cleanup();
   }
 }
 
@@ -6846,8 +6933,12 @@ function rejectNonLocalCowAgentBridge(req, res) {
 
 async function handleCowAgentCommand(req, res) {
   if (rejectNonLocalCowAgentBridge(req, res)) return;
+  const lifecycle = createRequestLifecycle(req, res, { responseId: req.headers?.["x-yun-response-id"] });
+  const { signal } = lifecycle;
   try {
     const body = await readJson(req);
+    const memoryPolicy = resolveYunMemoryPolicy(await loadYunSettings());
+    if (signal.aborted) throw signal.reason;
     const command = extractCowAgentCommand(body.message);
     if (!command) {
       return sendJson(res, 200, {
@@ -6861,25 +6952,30 @@ async function handleCowAgentCommand(req, res) {
     const result = await yunAgent.handle({
       message: command,
       sessionId,
-      context: { online: true, source: "cowagent", channel: "wechat" },
+      context: { online: true, source: "cowagent", channel: "wechat", memoryEnabled: memoryPolicy.enabled, signal },
     });
     if (!result.ok) {
       return sendJson(res, 422, { ok: false, accepted: false, message: result.message || "昀暂时没能理解这条微信命令。" });
     }
 
+    await awaitConversationMemoryWrites({
+      policy: memoryPolicy,
+      signal,
+      writes: [({ signal: writeSignal }) => recordWechatConversationMemory({
+        source: "wechat",
+        from: body.sender || "微信用户",
+        rawText: body.message,
+        command,
+        reply: result.message,
+      }, { signal: writeSignal })],
+    });
+    if (signal.aborted) throw signal.reason;
     const job = cowAgentCommandQueue.enqueue({
       message: command,
       reply: result.message,
       actions: result.actions,
       sender: body.sender || "微信",
     });
-    void recordWechatConversationMemory({
-      source: "wechat",
-      from: body.sender || "微信用户",
-      rawText: body.message,
-      command,
-      reply: result.message,
-    }).catch((error) => console.error("[cowagent-bridge] memory record failed:", error instanceof Error ? error.message : error));
     return sendJson(res, 200, {
       ok: true,
       accepted: true,
@@ -6888,7 +6984,10 @@ async function handleCowAgentCommand(req, res) {
       execution: result.actions?.length ? "queued_for_local_yun" : "no_local_action_needed",
     });
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
     return sendJson(res, 400, { ok: false, accepted: false, message: `CowAgent 桥接失败：${error instanceof Error ? error.message : String(error)}` });
+  } finally {
+    lifecycle.cleanup();
   }
 }
 
@@ -7221,6 +7320,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/api/tts") {
     return handleTts(req, res);
   }
+  if (req.method === "GET" && req.url === "/api/tts/health") {
+    return sendJson(res, 200, await getTtsRuntimeHealth());
+  }
   if (req.method === "GET" && req.url === "/api/native-voice/health") {
     return handleNativeVoiceProxy(req, res, "/health");
   }
@@ -7247,6 +7349,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && req.url === "/api/yun-settings") {
     return handlePostYunSettings(req, res);
+  }
+  if (req.method === "GET" && req.url === "/api/yun/default-memory") {
+    return handleGetDefaultUserMemory(req, res);
+  }
+  if (req.method === "GET" && req.url?.split("?")[0] === "/user_memory.json") {
+    return handleGetDefaultUserMemory(req, res);
   }
   if (req.method === "GET" && req.url === "/api/yun-memory") {
     return handleGetYunMemory(req, res);

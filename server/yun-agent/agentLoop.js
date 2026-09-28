@@ -110,6 +110,16 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
     const cleanMessage = String(message || '').trim()
     if (!cleanMessage) return { ok: false, message: '消息为空。', actions: [] }
     const runtimeContext = { ...context, library: safeLibrary(context.library) }
+    const turnSignal = runtimeContext.signal
+    const throwIfTurnCancelled = () => {
+      if (turnSignal?.aborted) throw turnSignal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' })
+    }
+    const recordTurn = async (turn) => {
+      if (runtimeContext.memoryEnabled === false) return
+      throwIfTurnCancelled()
+      await core.memory.appendTurn(sessionId, turn, { signal: turnSignal })
+    }
+    throwIfTurnCancelled()
     await core.state.update({ status: 'ANALYZING', currentTask: cleanMessage, activeTool: null, lastError: null })
 
     const userSkill = await skillMining.match(cleanMessage)
@@ -119,7 +129,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
         message: `已按你的快捷操作“${userSkill.name.replace(/^常用操作：/, '')}”执行。`,
         actions: userSkill.actions,
       }
-      await core.memory.appendTurn(sessionId, { at: now().toISOString(), user: cleanMessage, assistant: result.message })
+      await recordTurn({ at: now().toISOString(), user: cleanMessage, assistant: result.message })
       await core.state.update({ status: 'SUCCESS', currentTask: userSkill.id, activeTool: null, lastError: null })
       return { ok: true, sessionId, source: 'user_skill', ...result, runtimeState: await core.state.get() }
     }
@@ -127,7 +137,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
     const skill = selectSkill(cleanMessage, skills)
     if (skill) {
       const result = await skill.run({ message: cleanMessage, context: runtimeContext })
-      await core.memory.appendTurn(sessionId, { at: now().toISOString(), user: cleanMessage, assistant: result.message })
+      await recordTurn({ at: now().toISOString(), user: cleanMessage, assistant: result.message })
       await core.state.update({ status: 'SUCCESS', currentTask: skill.name, activeTool: null, lastError: null })
       return { ok: true, sessionId, source: 'skill', ...result, runtimeState: await core.state.get() }
     }
@@ -146,6 +156,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
           messages: [{ role: 'user', content: cleanMessage }],
           tools: core.registry.toModelTools(),
           runtimeState,
+          signal: turnSignal,
           // Some Pro endpoints accept the connection probe but do not support
           // OpenAI function calls. Detect that quickly, then use JSON below.
           timeoutMs: 8000,
@@ -157,6 +168,7 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
           messages: [{ role: 'user', content: cleanMessage }],
           tools: [],
           runtimeState,
+          signal: turnSignal,
           timeoutMs: 30000,
         })
       }
@@ -164,15 +176,19 @@ export function createYunAgent({ dataDir, modelProvider, modelEnv = process.env,
         ? result.toolCalls
         : result.response?.toolCalls || []).slice(0, MAX_TOOL_CALLS)
       const executions = []
-      for (const call of calls) executions.push(await executeToolCall(call, runtimeContext))
+      for (const call of calls) {
+        throwIfTurnCancelled()
+        executions.push(await executeToolCall(call, runtimeContext))
+      }
       const actions = executions.filter((item) => item.ok).map((item) => item.data)
       const runId = actions.length ? id('run') : null
       if (runId) await skillMining.recordPlan({ runId, message: cleanMessage, actions })
       const messageText = result.response?.answer || result.response?.message || (actions.length ? '计划已生成，等待播放器执行结果。' : '我还需要你再说明一点想做什么。')
-      await core.memory.appendTurn(sessionId, { at: now().toISOString(), user: cleanMessage, assistant: messageText })
+      await recordTurn({ at: now().toISOString(), user: cleanMessage, assistant: messageText })
       await core.state.update({ status: actions.length ? 'SUCCESS' : 'READY', currentTask: null, activeTool: null, lastError: null, lastToolResult: executions.at(-1) || null })
       return { ok: true, sessionId, runId, source: 'model', message: messageText, actions, executions, runtimeState: await core.state.get() }
     } catch (error) {
+      if (turnSignal?.aborted) throw turnSignal.reason || error
       const messageText = error instanceof Error ? error.message : String(error)
       await core.state.update({ status: 'ERROR', currentTask: null, activeTool: null, lastError: messageText })
       return { ok: false, sessionId, message: `智能音乐处理失败：${messageText}`, actions: [], runtimeState: await core.state.get() }

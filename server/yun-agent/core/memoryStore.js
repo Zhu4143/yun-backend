@@ -28,6 +28,10 @@ export function createMemoryStore(filePath, { scope = 'default', longTermLimit =
     await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
   }
 
+  function throwIfAborted(signal) {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' })
+  }
+
   return {
     scope,
     async context(sessionId) {
@@ -38,10 +42,20 @@ export function createMemoryStore(filePath, { scope = 'default', longTermLimit =
         recent: (memory.sessions[sessionId] || []).filter((turn) => (turn?.scope || 'default') === scope).slice(-8),
       }
     },
-    async appendTurn(sessionId, turn) {
+    async appendTurn(sessionId, turn, { signal } = {}) {
+      throwIfAborted(signal)
       const memory = await load()
+      throwIfAborted(signal)
+      const previous = memory.sessions[sessionId]
       memory.sessions[sessionId] = [...(memory.sessions[sessionId] || []), { ...turn, scope }].slice(-sessionLimit)
-      await save()
+      try {
+        throwIfAborted(signal)
+        await save()
+      } catch (error) {
+        if (previous === undefined) delete memory.sessions[sessionId]
+        else memory.sessions[sessionId] = previous
+        throw error
+      }
     },
     async remember(text, options = {}) {
       const memory = await load()

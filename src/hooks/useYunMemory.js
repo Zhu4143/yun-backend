@@ -83,13 +83,20 @@ function buildSummary({ userMemory, companionMemory, memoryEnabled, memoryMode, 
 export function useYunMemory(initial = {}) {
   const bootMemory = initial.memory || null
   const hasBootMemory = Boolean(bootMemory)
-  const [memoryEnabled, setMemoryEnabledState] = useState(() => localStorage.getItem(MEMORY_ENABLED_KEY) !== 'false')
+  const initialSettings = bootMemory?.settings || initial.settings || null
+  const [memoryEnabled, setMemoryEnabledState] = useState(() => initialSettings?.memoryEnabled !== false)
   const [memoryMode, setMemoryModeState] = useState(() => (
     ['off', 'smart', 'deep'].includes(initial.settings?.memoryMode) ? initial.settings.memoryMode : 'smart'
   ))
-  const [userMemory, setUserMemory] = useState(() => bootMemory?.defaultUserMemory || readJsonStorage(USER_MEMORY_KEY, null))
+  const [userMemory, setUserMemory] = useState(() => (
+    memoryEnabled && initialSettings?.memoryMode !== 'off'
+      ? bootMemory?.defaultUserMemory || (hasBootMemory ? null : readJsonStorage(USER_MEMORY_KEY, null))
+      : null
+  ))
   const [companionMemory, setCompanionMemoryState] = useState(() =>
-    normalizeRecentMemory(readJsonStorage(COMPANION_MEMORY_KEY, createEmptyRecentMemory())),
+    memoryEnabled && initialSettings?.memoryMode !== 'off'
+      ? normalizeRecentMemory(readJsonStorage(COMPANION_MEMORY_KEY, createEmptyRecentMemory()))
+      : createEmptyRecentMemory(),
   )
   const [longTermMemory, setLongTermMemory] = useState(() => bootMemory?.longTermMemory || null)
   const [status, setStatus] = useState(() => hasBootMemory ? 'ready' : 'loading')
@@ -103,6 +110,7 @@ export function useYunMemory(initial = {}) {
 
   const reloadDefaultMemory = useCallback(async () => {
     const data = await fetchDefaultUserMemory()
+    if (!data) return null
     const recentMemory = normalizeRecentMemory(data.recentMemory || createEmptyRecentMemory())
 
     setUserMemory(data)
@@ -118,15 +126,23 @@ export function useYunMemory(initial = {}) {
     async function loadMemory() {
       setStatus('loading')
       try {
-        const [settings, serverMemory] = await Promise.all([
-          fetchYunSettings().catch(() => ({ memoryMode: 'smart' })),
-          fetchYunMemory().catch(() => null),
-        ])
+        const settings = await fetchYunSettings().catch(() => ({ memoryEnabled: true, memoryMode: 'smart' }))
 
         if (cancelled) return
+        const enabled = settings.memoryEnabled !== false && settings.memoryMode !== 'off'
+        setMemoryEnabledState(settings.memoryEnabled !== false)
         if (['off', 'smart', 'deep'].includes(settings.memoryMode)) {
           setMemoryModeState(settings.memoryMode)
         }
+        if (!enabled) {
+          setLongTermMemory(null)
+          setUserMemory(null)
+          setCompanionMemoryState(createEmptyRecentMemory())
+          setStatus('ready')
+          return
+        }
+        const [serverMemory] = await Promise.all([fetchYunMemory().catch(() => null)])
+        if (cancelled) return
         setLongTermMemory(serverMemory)
 
         if (!userMemory) {
@@ -146,28 +162,61 @@ export function useYunMemory(initial = {}) {
     }
   }, [hasBootMemory, reloadDefaultMemory, userMemory])
 
-  const setMemoryEnabled = useCallback((enabled) => {
-    setMemoryEnabledState(Boolean(enabled))
-    localStorage.setItem(MEMORY_ENABLED_KEY, String(Boolean(enabled)))
-  }, [])
-
-  const setMemoryMode = useCallback(async (mode) => {
-    if (!['off', 'smart', 'deep'].includes(mode)) return
-
-    setMemoryModeState(mode)
+  const setMemoryEnabled = useCallback(async (enabled) => {
     try {
-      const settings = await saveYunSettings({ memoryMode: mode })
-      if (['off', 'smart', 'deep'].includes(settings.memoryMode)) {
-        setMemoryModeState(settings.memoryMode)
+      const settings = await saveYunSettings({ memoryEnabled: Boolean(enabled) })
+      setMemoryEnabledState(settings.memoryEnabled !== false)
+      localStorage.setItem(MEMORY_ENABLED_KEY, String(settings.memoryEnabled !== false))
+      if (settings.memoryEnabled === false) {
+        setUserMemory(null)
+        setLongTermMemory(null)
+        setCompanionMemoryState(createEmptyRecentMemory())
+        localStorage.removeItem(USER_MEMORY_KEY)
+        localStorage.removeItem(COMPANION_MEMORY_KEY)
+      } else if (settings.memoryMode !== 'off') {
+        const [serverMemory] = await Promise.all([fetchYunMemory().catch(() => null)])
+        setLongTermMemory(serverMemory)
+        const cachedUserMemory = readJsonStorage(USER_MEMORY_KEY, null)
+        if (!cachedUserMemory) await reloadDefaultMemory()
+        else setUserMemory(cachedUserMemory)
       }
     } catch {
       setStatus('error')
     }
-  }, [])
+  }, [reloadDefaultMemory])
+
+  const setMemoryMode = useCallback(async (mode) => {
+    if (!['off', 'smart', 'deep'].includes(mode)) return
+
+    try {
+      const settings = await saveYunSettings({ memoryMode: mode })
+      if (['off', 'smart', 'deep'].includes(settings.memoryMode)) {
+        setMemoryModeState(settings.memoryMode)
+        if (settings.memoryMode === 'off') {
+          setUserMemory(null)
+          setLongTermMemory(null)
+          setCompanionMemoryState(createEmptyRecentMemory())
+          localStorage.removeItem(USER_MEMORY_KEY)
+          localStorage.removeItem(COMPANION_MEMORY_KEY)
+        } else if (settings.memoryEnabled !== false && !userMemory) {
+          const [serverMemory] = await Promise.all([fetchYunMemory().catch(() => null)])
+          setLongTermMemory(serverMemory)
+          await reloadDefaultMemory()
+        }
+      }
+    } catch {
+      setStatus('error')
+    }
+  }, [reloadDefaultMemory, userMemory])
 
   const clearRecentMemory = useCallback(() => {
+    if (!memoryEnabled || memoryMode === 'off') {
+      setCompanionMemoryState(createEmptyRecentMemory())
+      localStorage.removeItem(COMPANION_MEMORY_KEY)
+      return
+    }
     saveCompanionMemory(createEmptyRecentMemory())
-  }, [saveCompanionMemory])
+  }, [memoryEnabled, memoryMode, saveCompanionMemory])
 
   const resetDefaultMemory = useCallback(async () => {
     await reloadDefaultMemory()

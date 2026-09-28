@@ -207,15 +207,18 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
         label: '读取长期记忆',
         blocking: false,
         weight: 8,
-        dependencies: ['BACKEND_HEALTH'],
+        dependencies: ['LOAD_SETTINGS'],
         retries: 1,
         timeoutMs: 10000,
-        run: async ({ signal }) => {
+        run: async ({ signal, getResult }) => {
+          const settings = (typeof getResult === 'function' ? getResult('LOAD_SETTINGS') : null) || await fetchYunSettings({ signal })
+          const enabled = settings.memoryEnabled !== false && settings.memoryMode !== 'off'
+          if (!enabled) return { settings, enabled, longTermMemory: null, defaultUserMemory: null }
           const [longTermMemory, defaultUserMemory] = await Promise.all([
             fetchYunMemory({ signal }),
             fetchDefaultUserMemory({ signal }),
           ])
-          return { longTermMemory, defaultUserMemory }
+          return { settings, enabled, longTermMemory, defaultUserMemory }
         },
       },
       {
@@ -237,7 +240,7 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
         retries: 1,
         timeoutMs: 8000,
         run: async ({ signal }) => {
-          const status = await requestJson('/api/moss-tts/health', { signal })
+          const status = await requestJson('/api/tts/health', { signal })
           if (status.configured === false || status.available === false) throw new Error('语音服务未配置')
           return status
         },

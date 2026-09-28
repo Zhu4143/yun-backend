@@ -3,6 +3,7 @@ import { detectWakeWord, getAsrStatus, transcribeAudio } from '../api/asrApi'
 import { getSharedAudioCaptureManager } from '../voice/audio/AudioCaptureManager.js'
 import { BrowserAecFallback, getSharedSpeakerReferenceBuffer } from '../voice/audio/EchoCanceller.js'
 import { MicrophoneOwnerStateMachine } from '../voice/MicrophoneOwnerStateMachine.js'
+import { BrowserRecognitionQueue } from '../voice/BrowserRecognitionQueue.js'
 
 const WAKE_WORD = '小昀'
 const WAKE_ALIASES = ['小昀', '小云', '晓云', '小韵', '小芸', '小允', '老赢', '角蝇', 'xiaoyun']
@@ -119,6 +120,7 @@ export function useAsrWakeWord({ suspended = false, speaking = false, onWake } =
   const silenceFramesRef = useRef(0)
   const speechFramesRef = useRef([])
   const recognizingRef = useRef(false)
+  const recognitionQueueRef = useRef(new BrowserRecognitionQueue())
   const segmentAbortControllerRef = useRef(null)
   const commandCaptureRef = useRef(false)
   const commandCaptureTimerRef = useRef(0)
@@ -191,14 +193,16 @@ export function useAsrWakeWord({ suspended = false, speaking = false, onWake } =
     }, true)
   }, [publishDiagnostics])
 
-  const recognizeSegment = useCallback(async (chunks, sampleRate) => {
-    if (recognizingRef.current || !chunks.length) return
+  const recognizeSegment = useCallback((chunks, sampleRate) => {
+    if (!chunks.length) return
+    recognitionQueueRef.current.enqueue({ chunks, sampleRate })
+    void recognitionQueueRef.current.drain(async ({ chunks: segmentChunks, sampleRate: segmentSampleRate }) => {
     recognizingRef.current = true
     const requestController = new AbortController()
     segmentAbortControllerRef.current = requestController
     setRuntimeStatus('recognizing')
     try {
-      const blob = encodeWavBlob(chunks, sampleRate)
+      const blob = encodeWavBlob(segmentChunks, segmentSampleRate)
       if (commandCaptureRef.current) {
         const transcriptResult = await transcribeAudio(blob, { signal: requestController.signal }).catch(() => null)
         if (requestController.signal.aborted || !commandCaptureRef.current) return
@@ -239,6 +243,7 @@ export function useAsrWakeWord({ suspended = false, speaking = false, onWake } =
       if (segmentAbortControllerRef.current === requestController) segmentAbortControllerRef.current = null
       if (!speechActiveRef.current) setRuntimeStatus(commandCaptureRef.current ? 'command-listening' : 'listening')
     }
+    })
   }, [finishCommandCapture, fireWake, publishDiagnostics])
 
   useEffect(() => {
@@ -252,6 +257,7 @@ export function useAsrWakeWord({ suspended = false, speaking = false, onWake } =
     let browserFallbackActive = false
     let nativeStartRequested = false
     let unsubscribeBrowser = null
+    const recognitionQueue = recognitionQueueRef.current
     const manager = managerRef.current
     const ownerState = ownerStateRef.current
     const publishOwner = () => {
@@ -270,7 +276,7 @@ export function useAsrWakeWord({ suspended = false, speaking = false, onWake } =
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('native voice unavailable')))
 
     const onBrowserFrame = (frame) => {
-      if (suspendedRef.current || recognizingRef.current) {
+      if (suspendedRef.current) {
         publishDiagnostics({
           commandSuppressedFrames: diagnosticsRef.current.commandSuppressedFrames + 1,
         })
@@ -545,6 +551,7 @@ export function useAsrWakeWord({ suspended = false, speaking = false, onWake } =
       cancelled = true
       segmentAbortControllerRef.current?.abort(new DOMException('Wake capture stopped', 'AbortError'))
       segmentAbortControllerRef.current = null
+      recognitionQueue.clear()
       commandCaptureRef.current = false
       window.clearTimeout(commandCaptureTimerRef.current)
       commandCaptureTimerRef.current = 0

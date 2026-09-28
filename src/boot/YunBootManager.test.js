@@ -261,6 +261,43 @@ test('a second start after ready does not initialize again', async () => {
   assert.equal(runs, 1)
 })
 
+test('boot skips every memory endpoint when the persisted policy is off', async () => {
+  const manager = createYunBootManager({ storage: { getItem: () => null, setItem: () => {} } })
+  const loadMemory = manager.definitions.get('LOAD_MEMORY').run
+  const originalFetch = globalThis.fetch
+  const requested = []
+  globalThis.fetch = async (url) => {
+    requested.push(String(url))
+    return new Response(JSON.stringify({ memoryEnabled: false, memoryMode: 'deep' }), { status: 200 })
+  }
+  try {
+    const result = await loadMemory({ signal: new AbortController().signal })
+    assert.equal(result.enabled, false)
+    assert.equal(result.longTermMemory, null)
+    assert.deepEqual(requested, ['/api/yun-settings'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('boot probes the runtime used by /api/tts', async () => {
+  const manager = createYunBootManager({ storage: { getItem: () => null, setItem: () => {} } })
+  const initTts = manager.definitions.get('INIT_TTS').run
+  const originalFetch = globalThis.fetch
+  let requested = ''
+  globalThis.fetch = async (url) => {
+    requested = String(url)
+    return new Response(JSON.stringify({ provider: 'doubao', configured: true, available: true }), { status: 200 })
+  }
+  try {
+    const status = await initTts({ signal: new AbortController().signal })
+    assert.equal(status.provider, 'doubao')
+    assert.equal(requested, '/api/tts/health')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('manual retry reruns a failed pipeline and can recover', async () => {
   let runs = 0
   const manager = new YunBootManager({
