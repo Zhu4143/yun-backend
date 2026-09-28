@@ -1,4 +1,4 @@
-export async function sendVisionMessage(imageFile, text = '') {
+export async function sendVisionMessage(imageFile, text = '', { signal, responseId = '' } = {}) {
   if (!imageFile) {
     throw new Error('缺少图片')
   }
@@ -9,6 +9,8 @@ export async function sendVisionMessage(imageFile, text = '') {
 
   const response = await fetch('/api/vision-chat', {
     method: 'POST',
+    headers: responseId ? { 'X-Yun-Response-Id': responseId } : undefined,
+    signal,
     body: formData,
   })
   const data = await response.json().catch(() => ({}))

@@ -12,8 +12,19 @@ function retryableError(message, cause) {
   return error
 }
 
-function waitBeforeRetry(attempt) {
-  return new Promise((resolve) => setTimeout(resolve, 250 * attempt))
+function waitBeforeRetry(attempt, signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' }))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, 250 * attempt)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' }))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 function getConfig(env) {
@@ -77,38 +88,46 @@ export function createModelProvider({
     writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
   }
 
-  async function request(payload, timeoutMs = requestTimeoutMs) {
+  async function request(payload, timeoutMs = requestTimeoutMs, signal) {
     const endpoint = config.baseUrl.endsWith('/chat/completions') ? config.baseUrl : `${config.baseUrl}/chat/completions`
-    let response
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || requestTimeoutMs))
+    let timedOut = false
+    const onAbort = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+    const timeout = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, Math.max(1000, Number(timeoutMs) || requestTimeoutMs))
     try {
-      response = await fetchImpl(endpoint, {
+      const response = await fetchImpl(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
         body: JSON.stringify(payload),
         signal: controller.signal,
       })
+      const raw = await response.text()
+      let data
+      try {
+        data = JSON.parse(raw)
+      } catch (error) {
+        throw retryableError(raw.trim() ? 'model service returned invalid JSON' : 'model service returned an empty response', error)
+      }
+      if (!response.ok) {
+        const message = data?.error?.message || `model request failed: HTTP ${response.status}`
+        if (response.status === 408 || response.status === 429 || response.status >= 500) throw retryableError(message)
+        throw new Error(message)
+      }
+      return data
     } catch (error) {
-      if (error?.name === 'AbortError') throw retryableError('model request timed out')
+      if (signal?.aborted) throw signal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' })
+      if (timedOut) throw retryableError('model request timed out', error)
+      if (error?.retryable) throw error
       throw retryableError(`model connection error: ${describeFetchError(error)}`, error)
     } finally {
       clearTimeout(timeout)
+      signal?.removeEventListener('abort', onAbort)
     }
-
-    const raw = await response.text()
-    let data
-    try {
-      data = JSON.parse(raw)
-    } catch (error) {
-      throw retryableError(raw.trim() ? 'model service returned invalid JSON' : 'model service returned an empty response', error)
-    }
-    if (!response.ok) {
-      const message = data?.error?.message || `model request failed: HTTP ${response.status}`
-      if (response.status === 408 || response.status === 429 || response.status >= 500) throw retryableError(message)
-      throw new Error(message)
-    }
-    return data
   }
 
   return {
@@ -134,7 +153,7 @@ export function createModelProvider({
         throw error
       }
     },
-    async sendMessage({ systemPrompt, messages, tools = [], runtimeState, timeoutMs }) {
+    async sendMessage({ systemPrompt, messages, tools = [], runtimeState, timeoutMs, signal }) {
       if (!config.apiKey || !config.model) throw new Error('model is offline: configure API Key, Base URL, and model name')
       const payload = {
         model: config.model,
@@ -150,7 +169,8 @@ export function createModelProvider({
       const attempts = Math.max(1, Math.min(3, Number(maxAttempts) || MODEL_MAX_ATTEMPTS))
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         try {
-          const data = await request(payload, timeoutMs)
+          if (signal?.aborted) throw signal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' })
+          const data = await request(payload, timeoutMs, signal)
           const choice = data?.choices?.[0]?.message
           if (choice?.tool_calls?.length) return { toolCalls: choice.tool_calls, response: null }
 
@@ -166,9 +186,10 @@ export function createModelProvider({
             throw retryableError('model returned incomplete structured output', error)
           }
         } catch (error) {
+          if (signal?.aborted || error?.name === 'AbortError') throw error
           lastError = error
           if (!error?.retryable || attempt === attempts) break
-          await waitBeforeRetry(attempt)
+          await waitBeforeRetry(attempt, signal)
         }
       }
       throw new Error(`model response failed after ${attempts} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`)

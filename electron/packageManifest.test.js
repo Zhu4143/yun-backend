@@ -10,4 +10,6 @@ test('desktop package includes every server runtime source root', async () => {
     packagedFiles.includes('src/services/netease/**/*.js'),
     'server.js imports NetEase capability truth from src/services/netease, so that runtime source root must ship',
   )
+  assert.ok(packagedFiles.includes('!server/data/**'), 'runtime user data must stay out of the installer')
+  assert.ok(packageJson.build?.extraResources?.some((resource) => resource.from === 'build/build-info.json'))
 })

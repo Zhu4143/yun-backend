@@ -23,6 +23,8 @@ export class AudioCaptureManager {
     this.droppedFrames = 0
     this.maxQueueDepth = 0
     this.status = 'idle'
+    this.captureOwner = 'none'
+    this.startPromise = null
     this.lastMetricLogAt = 0
   }
 
@@ -41,6 +43,7 @@ export class AudioCaptureManager {
     const elapsedSeconds = Math.max(0.001, (now() - this.startedAt) / 1000)
     return {
       status: this.status,
+      captureOwner: this.captureOwner,
       frameCount: this.frameCount,
       droppedFrames: this.droppedFrames,
       queueDepth: this.frames.length,
@@ -53,7 +56,7 @@ export class AudioCaptureManager {
 
   emitMetrics() {
     const metrics = this.getMetrics()
-    if (import.meta.env.DEV && now() - this.lastMetricLogAt >= 1000) {
+    if (import.meta.env?.DEV && now() - this.lastMetricLogAt >= 1000) {
       this.lastMetricLogAt = now()
       console.debug('[CAPTURE]', metrics)
     }
@@ -81,56 +84,115 @@ export class AudioCaptureManager {
     this.emitMetrics()
   }
 
-  async start() {
-    if (this.status === 'running') {
-      await this.context?.resume?.()
+  async setOwner(owner) {
+    if (!['none', 'native', 'browser'].includes(owner)) throw new Error(`invalid_microphone_owner:${owner}`)
+    if (owner === 'native') {
+      this.captureOwner = 'native'
+      if (this.status === 'running' || this.startPromise) await this.stop('native-owned')
+      else this.status = 'native-owned'
+      this.emitMetrics()
       return this.getMetrics()
     }
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error('microphone_unsupported')
-    this.status = 'starting'
-    this.emitMetrics()
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    })
-    const AudioContext = window.AudioContext || window.webkitAudioContext
-    if (!AudioContext) {
-      stream.getTracks().forEach((track) => track.stop())
-      throw new Error('audio_context_unsupported')
+    if (owner === 'none') {
+      const hadBrowserCapture = this.captureOwner === 'browser' || this.status === 'running' || this.startPromise
+      this.captureOwner = 'none'
+      if (hadBrowserCapture) await this.stop('owner-released')
+      else this.status = 'idle'
+      this.emitMetrics()
+      return this.getMetrics()
     }
-    const context = new AudioContext()
-    const source = context.createMediaStreamSource(stream)
-    const processor = context.createScriptProcessor(this.frameSize, 1, 1)
-    const silentGain = context.createGain()
-    silentGain.gain.value = 0
-    processor.onaudioprocess = (event) => {
-      // Keep the real-time callback intentionally tiny: copy, queue, return.
-      this.enqueue(new Float32Array(event.inputBuffer.getChannelData(0)))
-    }
-    source.connect(processor)
-    processor.connect(silentGain)
-    silentGain.connect(context.destination)
-    this.stream = stream
-    this.context = context
-    this.source = source
-    this.processor = processor
-    this.silentGain = silentGain
-    this.frames = []
-    this.frameCount = 0
-    this.droppedFrames = 0
-    this.maxQueueDepth = 0
-    this.startedAt = now()
-    this.status = 'running'
-    await context.resume?.()
+    if (this.captureOwner === 'native') throw new Error('microphone_owned_by_native')
+    this.captureOwner = 'browser'
     this.emitMetrics()
     return this.getMetrics()
   }
 
+  start() {
+    if (this.captureOwner === 'native') return Promise.reject(new Error('microphone_owned_by_native'))
+    if (this.status === 'running') {
+      return Promise.resolve(this.context?.resume?.()).then(() => this.getMetrics())
+    }
+    if (this.startPromise) return this.startPromise
+    if (this.captureOwner === 'none') this.captureOwner = 'browser'
+    const starting = this.startBrowserCapture()
+    const tracked = starting.finally(() => {
+      if (this.startPromise === tracked) this.startPromise = null
+    })
+    this.startPromise = tracked
+    return tracked
+  }
+
+  async startBrowserCapture() {
+    this.status = 'starting'
+    this.emitMetrics()
+    let stream
+    let context
+    let source
+    let processor
+    let silentGain
+    try {
+      if (!globalThis.navigator?.mediaDevices?.getUserMedia) throw new Error('microphone_unsupported')
+      stream = await globalThis.navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
+      if (this.captureOwner !== 'browser') throw new Error('microphone_owner_changed')
+      const AudioContext = window.AudioContext || window.webkitAudioContext
+      if (!AudioContext) throw new Error('audio_context_unsupported')
+      context = new AudioContext()
+      source = context.createMediaStreamSource(stream)
+      processor = context.createScriptProcessor(this.frameSize, 1, 1)
+      silentGain = context.createGain()
+      silentGain.gain.value = 0
+      processor.onaudioprocess = (event) => {
+        // Keep the real-time callback intentionally tiny: copy, queue, return.
+        this.enqueue(new Float32Array(event.inputBuffer.getChannelData(0)))
+      }
+      source.connect(processor)
+      processor.connect(silentGain)
+      silentGain.connect(context.destination)
+      this.stream = stream
+      this.context = context
+      this.source = source
+      this.processor = processor
+      this.silentGain = silentGain
+      this.frames = []
+      this.frameCount = 0
+      this.droppedFrames = 0
+      this.maxQueueDepth = 0
+      this.startedAt = now()
+      this.status = 'running'
+      await context.resume?.()
+      if (this.captureOwner !== 'browser') throw new Error('microphone_owner_changed')
+      this.emitMetrics()
+      return this.getMetrics()
+    } catch (error) {
+      processor?.disconnect?.()
+      source?.disconnect?.()
+      silentGain?.disconnect?.()
+      stream?.getTracks().forEach((track) => track.stop())
+      if (context?.state !== 'closed') await context?.close?.().catch(() => {})
+      if (this.stream === stream) {
+        this.stream = null
+        this.context = null
+        this.source = null
+        this.processor = null
+        this.silentGain = null
+        this.frames = []
+      }
+      this.status = this.captureOwner === 'native' ? 'native-owned' : 'error'
+      this.emitMetrics()
+      throw error
+    }
+  }
+
   async stop(reason = 'stopped') {
+    const starting = this.startPromise
+    if (starting) await starting.catch(() => {})
     this.status = reason
     this.processor?.disconnect?.()
     this.source?.disconnect?.()

@@ -36,15 +36,15 @@ export function clearAsrConfig() {
 }
 
 // 上传音频转写为文字。file 可以是 Blob/File。
-export function transcribeAudio(file, { language = 'zh' } = {}) {
+export function transcribeAudio(file, { language = 'zh', signal } = {}) {
   const form = new FormData()
   form.append('file', file)
   form.append('language', language)
-  return request('/api/asr/transcribe', { method: 'POST', body: form })
+  return request('/api/asr/transcribe', { method: 'POST', body: form, signal })
 }
 
-export function detectWakeWord(file) {
+export function detectWakeWord(file, { signal } = {}) {
   const form = new FormData()
   form.append('file', file, 'wake.wav')
-  return request('/api/asr/wake-detect', { method: 'POST', body: form })
+  return request('/api/asr/wake-detect', { method: 'POST', body: form, signal })
 }

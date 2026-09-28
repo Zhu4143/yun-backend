@@ -105,8 +105,65 @@ test('full NetEase playlist synchronization is outside the startup critical path
     storage: { getItem: () => null, setItem: () => {} },
   })
 
+  assert.equal(manager.definitions.get('INIT_MUSIC_PROVIDER').blocking, false)
+  assert.deepEqual(manager.definitions.get('LOAD_LIBRARY').dependencies, ['LOAD_SETTINGS'])
   assert.equal(manager.definitions.get('LOAD_PLAYLISTS').blocking, false)
   assert.deepEqual(manager.definitions.get('INIT_PLAYER_CORE').dependencies, ['LOAD_LIBRARY'])
+})
+
+test('a NetEase outage degrades provider features while the local library boots', async () => {
+  const manager = createYunBootManager({
+    storage: { getItem: () => null, setItem: () => {} },
+  })
+  let libraryLoads = 0
+
+  for (const definition of manager.definitions.values()) {
+    if (definition.id === 'INIT_MUSIC_PROVIDER') {
+      definition.run = async () => { throw new Error('NetEase unavailable') }
+    } else if (definition.id === 'LOAD_LIBRARY') {
+      definition.run = async () => {
+        libraryLoads += 1
+        return { songs: [{ id: 'local-1', title: 'Local song' }] }
+      }
+    } else if (definition.id === 'LOAD_PLAYLISTS') {
+      // Keep the production provider-unavailable behavior under test.
+    } else {
+      definition.run = async () => ({ ok: true })
+    }
+  }
+
+  await manager.start()
+
+  await new Promise((resolve) => {
+    const isSettled = (state) => ['INIT_MUSIC_PROVIDER', 'LOAD_PLAYLISTS'].every((id) => (
+      state.tasks.find((task) => task.id === id)?.status === 'warning'
+    ))
+    if (isSettled(manager.getState())) return resolve()
+    const unsubscribe = manager.subscribe((state) => {
+      if (!isSettled(state)) return
+      unsubscribe()
+      resolve()
+    })
+  })
+
+  assert.equal(libraryLoads, 1)
+  assert.equal(manager.getState().status, 'degraded')
+  assert.equal(manager.getState().tasks.find((task) => task.id === 'LOAD_LIBRARY').status, 'success')
+  assert.equal(manager.getState().tasks.find((task) => task.id === 'INIT_MUSIC_PROVIDER').status, 'warning')
+  assert.equal(manager.getState().tasks.find((task) => task.id === 'LOAD_PLAYLISTS').status, 'warning')
+})
+
+test('playlist sync reports a missing provider instead of treating it as logged out', async () => {
+  const manager = createYunBootManager({
+    storage: { getItem: () => null, setItem: () => {} },
+  })
+  const loadPlaylists = manager.definitions.get('LOAD_PLAYLISTS').run
+
+  await assert.rejects(loadPlaylists({
+    getResult: () => undefined,
+    reportProgress: () => {},
+    signal: new AbortController().signal,
+  }), /网易云服务暂时不可用/)
 })
 
 test('a timed out task retries and can complete boot', async () => {

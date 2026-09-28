@@ -10,7 +10,7 @@ const bootManager = getYunBootManager()
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BootProvider manager={bootManager}>
-      {(bootState) => <App bootData={bootState.data} />}
+      {(bootState) => <App bootData={bootState.data} bootState={bootState} />}
     </BootProvider>
   </StrictMode>,
 )

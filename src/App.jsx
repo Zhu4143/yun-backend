@@ -546,9 +546,14 @@ function shouldIgnorePlaybackShortcut(target) {
   return Boolean(target.closest('input, textarea, select, button, [contenteditable="true"]'))
 }
 
-function App({ onVisualReady, bootData = {} }) {
+function App({ onVisualReady, bootData = {}, bootState = null }) {
   const bootLibrary = bootData.LOAD_LIBRARY || null
   const bootProvider = bootData.INIT_MUSIC_PROVIDER || null
+  const bootTasks = bootState?.tasks || []
+  const providerBootTask = bootTasks.find((task) => task.id === 'INIT_MUSIC_PROVIDER')
+  const playlistBootTask = bootTasks.find((task) => task.id === 'LOAD_PLAYLISTS')
+  const neteaseDegraded = providerBootTask?.status === 'warning' || playlistBootTask?.status === 'warning'
+  const backendIdentity = bootData.BACKEND_HEALTH || {}
   const bootPlaylists = bootData.LOAD_PLAYLISTS || (bootProvider ? {
     account: {
       ...bootProvider,
@@ -595,8 +600,22 @@ function App({ onVisualReady, bootData = {} }) {
   const [neteaseResults, setNeteaseResults] = useState([])
   const [neteaseStatus, setNeteaseStatus] = useState('idle')
   const [neteaseError, setNeteaseError] = useState('')
-  const [neteaseMe, setNeteaseMe] = useState(() => bootPlaylists?.account || null)
-  const [neteaseAccountStatus, setNeteaseAccountStatus] = useState(() => bootPlaylists ? 'ready' : 'idle')
+  const [neteaseMeState, setNeteaseMeState] = useState(() => bootPlaylists?.account || null)
+  const [neteaseMeOverridden, setNeteaseMeOverridden] = useState(false)
+  const [neteaseAccountStatusState, setNeteaseAccountStatusState] = useState(() => bootPlaylists ? 'ready' : 'idle')
+  const [neteaseAccountStatusOverridden, setNeteaseAccountStatusOverridden] = useState(false)
+  const neteaseMe = neteaseMeOverridden ? neteaseMeState : bootData.LOAD_PLAYLISTS?.account || neteaseMeState
+  const neteaseAccountStatus = neteaseAccountStatusOverridden
+    ? neteaseAccountStatusState
+    : bootPlaylists ? 'ready' : neteaseAccountStatusState
+  const setNeteaseMe = useCallback((value) => {
+    setNeteaseMeOverridden(true)
+    setNeteaseMeState(value)
+  }, [])
+  const setNeteaseAccountStatus = useCallback((value) => {
+    setNeteaseAccountStatusOverridden(true)
+    setNeteaseAccountStatusState(value)
+  }, [])
   const [neteaseLoginOpen, setNeteaseLoginOpen] = useState(false)
   const [neteaseLibraryView, setNeteaseLibraryView] = useState('songs')
   const [activeNeteasePlaylist, setActiveNeteasePlaylist] = useState(null)
@@ -607,12 +626,6 @@ function App({ onVisualReady, bootData = {} }) {
   const libraryScrollListRef = useRef(null)
   const neteaseRequestRef = useRef(0)
 
-  useEffect(() => {
-    const refreshedAccount = bootData.LOAD_PLAYLISTS?.account
-    if (!refreshedAccount) return
-    setNeteaseMe(refreshedAccount)
-    setNeteaseAccountStatus('ready')
-  }, [bootData.LOAD_PLAYLISTS])
   const [isAnalyzingLibrary, setIsAnalyzingLibrary] = useState(false)
   const [panelContentVisible, setPanelContentVisible] = useState(true)
   const [pendingMorph, setPendingMorph] = useState(null)
@@ -662,6 +675,7 @@ function App({ onVisualReady, bootData = {} }) {
   // in this component. A ref avoids a temporal-dead-zone crash during React's
   // first render while still always invoking the latest chat cancellation.
   const cancelActiveChatRequestRef = useRef(() => {})
+  const asrWakeWordControlRef = useRef(null)
   const wakeAcknowledgementEchoRef = useRef({ text: '', expiresAt: 0 })
   const [gestureCameraEnabled, setGestureCameraEnabled] = useState(false)
   const [gestureCameraStatus, setGestureCameraStatus] = useState('off')
@@ -857,6 +871,7 @@ function App({ onVisualReady, bootData = {} }) {
   // microphone hardware, or the existing conversation/MCP routes.
   const voiceSession = useVoiceSessionController()
   const voiceController = voiceSession.controller
+  const voiceSessionSnapshot = voiceSession.snapshot
   const handleVoiceCaptureStart = useCallback(() => {
     voiceController.userSpeechStarted()
     setVoiceCallStatus('listening')
@@ -943,8 +958,6 @@ function App({ onVisualReady, bootData = {} }) {
     // A fresh wake is an explicit new turn. Cancel anything that can still
     // talk or act from the prior turn before showing the listening state.
     voiceController.cancelResponse(undefined, 'new_wake')
-    cancelActiveChatRequestRef.current()
-    yunVoice.stopSpeaking()
     voiceController.wakeDetected()
     const previousIndex = previousWakeAcknowledgementRef.current
     let nextIndex = Math.floor(Math.random() * WAKE_ACKNOWLEDGEMENTS.length)
@@ -997,12 +1010,28 @@ function App({ onVisualReady, bootData = {} }) {
     }
 
     wakeAcknowledgementInFlightRef.current = true
-    // Begin browser capture on the wake event itself. The acknowledgement is a
-    // parallel cue only; it must never gate the user's next spoken words.
-    startCompanionCall({ listenImmediately: true })
-    setNativeCommandListening(false)
     setWakeAcknowledging(true)
-    setVoiceCallStatus('聆听中')
+    const browserCapture = asrWakeWordControlRef.current
+    const usingSharedBrowserCapture = browserCapture?.enabled
+      && browserCapture.diagnostics?.captureOwner === 'browser'
+      && browserCapture.beginCommandCapture()
+    if (usingSharedBrowserCapture) {
+      // The fallback already owns the microphone. Continue command capture
+      // from the same AudioCaptureManager frames instead of starting a second
+      // browser SpeechRecognition input.
+      setCompanionCallActive(false)
+      setVoiceInputActive(false)
+      setVoiceVisualActive(true)
+      setNativeCommandListening(false)
+      setNativeCommandTranscribing(false)
+      setVoiceCallStatus('聆听中')
+    } else {
+      // With native wake or legacy browser wake, their own input path remains
+      // authoritative and owns command capture for this turn.
+      startCompanionCall({ listenImmediately: true })
+      setNativeCommandListening(false)
+      setVoiceCallStatus('聆听中')
+    }
 
     try {
       // The acknowledgement itself is already fingerprint-filtered below. Use a
@@ -1022,28 +1051,81 @@ function App({ onVisualReady, bootData = {} }) {
     }
   }, [startCompanionCall, voiceController, yunVoice])
   const handleBargeInCandidate = useCallback(({ rms, aecMode }) => {
-    // PHASE 4 only proves that post-AEC capture can see a candidate while
-    // playback is active. The cancellation action is intentionally deferred
-    // to the dedicated barge-in phase.
     console.debug('[BARGE-IN] candidate detected', { rms, aecMode })
+    if (!yunVoice.isSpeaking || voiceInputActive) return
+    voiceController.cancelResponse(undefined, 'barge_in')
+    const browserCapture = asrWakeWordControlRef.current
+    if (browserCapture?.enabled && browserCapture.diagnostics?.captureOwner === 'browser'
+      && browserCapture.beginCommandCapture()) {
+      setCompanionCallActive(false)
+      setVoiceInputActive(false)
+      setNativeCommandListening(false)
+      setNativeCommandTranscribing(false)
+      setVoiceVisualActive(true)
+      setVoiceCallStatus('正在听你说')
+      return
+    }
     setVoiceCallStatus('检测到讲话')
-  }, [])
+  }, [voiceController, voiceInputActive, yunVoice.isSpeaking])
   const handleNativeBargeIn = useCallback(() => {
     if (!yunVoice.isSpeaking || voiceInputActive) return
     // The native engine has already opened an ASR turn from the first user
     // frame. Stop only Yun's output; never pause the user's music.
     voiceController.cancelResponse(undefined, 'barge_in')
-    cancelActiveChatRequestRef.current()
-    yunVoice.stopSpeaking()
     setCompanionCallActive(false)
     setVoiceInputActive(false)
     setNativeCommandListening(true)
     setNativeCommandTranscribing(false)
     setVoiceVisualActive(false)
     setVoiceCallStatus('正在听你说')
-  }, [voiceController, voiceInputActive, yunVoice])
+  }, [voiceController, voiceInputActive, yunVoice.isSpeaking])
+  const asrWakeWord = useAsrWakeWord({
+    // The shared capture stream stays alive while Yun speaks. This only skips
+    // wake-word compute during an explicit command turn, never microphone I/O.
+    suspended: voiceInputActive,
+    speaking: yunVoiceIsActive,
+    onWake: wakeVoiceInput,
+  })
+  const toggleCompanionCall = useCallback(() => {
+    if (asrWakeWord.commandCaptureActive) {
+      asrWakeWord.finishCommandCapture('listening')
+      voiceController.endSession('manual_companion_call_ended')
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('idle')
+      return
+    }
+    if (companionCallActive) {
+      setVoiceInputActive(false)
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('idle')
+      voiceController.cancelResponse(undefined, 'manual_companion_call_ended')
+      setCompanionCallActive(false)
+      return
+    }
+    if (asrWakeWord.enabled) {
+      if (asrWakeWord.diagnostics.captureOwner === 'browser' && asrWakeWord.beginCommandCapture()) {
+        voiceController.cancelResponse(undefined, 'manual_companion_call_started')
+        voiceController.wakeDetected()
+        setVoiceInputActive(false)
+        setVoiceVisualActive(true)
+        setVoiceCallStatus('正在听你说')
+      } else {
+        setVoiceCallStatus(asrWakeWord.diagnostics.captureOwner === 'none'
+          ? '主唤醒正在接管麦克风'
+          : '主唤醒正在使用麦克风，请说“小昀”')
+      }
+      return
+    }
+    startCompanionCall()
+  }, [asrWakeWord, companionCallActive, startCompanionCall, voiceController])
+  useLayoutEffect(() => {
+    asrWakeWordControlRef.current = asrWakeWord
+  }, [asrWakeWord])
   const bargeIn = useYunBargeIn({
-    enabled: yunVoice.isSpeaking && yunVoice.isSpeechInterruptible && !voiceInputActive,
+    enabled: asrWakeWord.diagnostics.captureOwner === 'browser'
+      && yunVoice.isSpeaking
+      && yunVoice.isSpeechInterruptible
+      && !voiceInputActive,
     onCandidate: handleBargeInCandidate,
   })
 
@@ -1057,23 +1139,6 @@ function App({ onVisualReady, bootData = {} }) {
     wasSpeakingRef.current = yunVoice.isSpeaking
   }, [yunVoice.isSpeaking])
 
-  useEffect(() => {
-    let responseId = voiceController.getSnapshot().responseId
-    if (yunVoice.isPreparingSpeech && !responseId) {
-      responseId = voiceController.startResponse()
-    }
-    if (yunVoice.isSpeaking) voiceController.outputStarted(responseId)
-    if (!yunVoice.isPreparingSpeech && !yunVoice.isSpeaking && responseId) {
-      voiceController.outputEnded(responseId)
-    }
-  }, [voiceController, yunVoice.isPreparingSpeech, yunVoice.isSpeaking])
-
-  const asrWakeWord = useAsrWakeWord({
-    // The shared capture stream stays alive while Yun speaks. This only skips
-    // wake-word compute during an explicit command turn, never microphone I/O.
-    suspended: voiceInputActive,
-    onWake: wakeVoiceInput,
-  })
   const wakeWord = useYunWakeWord({
     // Never open two independent microphone recognizers at once. Local/remote
     // ASR takes precedence whenever the user enables it.
@@ -1083,11 +1148,7 @@ function App({ onVisualReady, bootData = {} }) {
     // print enrollment or speaker verification is required.
     voiceprintEnabled: false,
   })
-  const audioCapture = usePersistentAudioCapture({
-    // Native engine already owns the physical mic while it is healthy. Do not
-    // open Chromium capture in parallel and steal/duplicate the same input.
-    enabled: (!asrWakeWord.nativeActive && asrWakeWord.enabled) || companionCallActive || yunVoiceIsActive,
-  })
+  const audioCapture = usePersistentAudioCapture()
   const duplexPhysicalTest = useFullDuplexPhysicalTest({ manager: audioCapture.manager })
   useEffect(() => {
     if (!import.meta.env.DEV) return undefined
@@ -1099,6 +1160,18 @@ function App({ onVisualReady, bootData = {} }) {
     settings: bootData.LOAD_SETTINGS,
     memory: bootData.LOAD_MEMORY,
   })
+  const {
+    setMemoryEnabled: persistMemoryEnabled,
+    setMemoryMode: persistMemoryMode,
+  } = yunMemory
+  const setMemoryEnabled = useCallback((enabled) => {
+    if (!enabled) voiceController.cancelResponse(undefined, 'memory_disabled')
+    persistMemoryEnabled(enabled)
+  }, [persistMemoryEnabled, voiceController])
+  const setMemoryMode = useCallback((mode) => {
+    if (mode === 'off') voiceController.cancelResponse(undefined, 'memory_disabled')
+    return persistMemoryMode(mode)
+  }, [persistMemoryMode, voiceController])
   const yunAgent = useYunAgent({
     player: playerCore,
     playerState,
@@ -1132,9 +1205,34 @@ function App({ onVisualReady, bootData = {} }) {
     memory: yunMemory,
     agent: yunAgent,
   })
+  useEffect(() => {
+    let responseId = voiceController.getSnapshot().responseId
+    if (yunVoice.isPreparingSpeech && !responseId) {
+      responseId = voiceController.startResponse()
+    }
+    if (yunVoice.isSpeaking) voiceController.outputStarted(responseId)
+    if (!chatIsThinking && !yunVoice.isPreparingSpeech && !yunVoice.isSpeaking && responseId) {
+      voiceController.outputEnded(responseId)
+    }
+  }, [chatIsThinking, voiceController, yunVoice.isPreparingSpeech, yunVoice.isSpeaking])
+  const sendConversationTurn = useCallback((text, options = {}) => {
+    voiceController.cancelResponse(undefined, 'new_user_turn')
+    const responseId = voiceController.startResponse()
+    const abortController = voiceController.createAbortController(responseId)
+    return sendChatMessage(text, { ...options, responseId, abortController })
+  }, [sendChatMessage, voiceController])
+  useEffect(() => {
+    const responseId = voiceSessionSnapshot.responseId
+    if (!responseId || chatIsThinking || yunVoiceIsActive) return undefined
+    const timer = window.setTimeout(() => {
+      if (voiceController.getSnapshot().responseId === responseId) voiceController.outputEnded(responseId)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [chatIsThinking, voiceController, voiceSessionSnapshot.responseId, yunVoiceIsActive])
   useLayoutEffect(() => {
     cancelActiveChatRequestRef.current = cancelActiveChatRequest
-  }, [cancelActiveChatRequest])
+    return voiceController.registerSessionCancellation((reason) => cancelActiveChatRequestRef.current(reason))
+  }, [cancelActiveChatRequest, voiceController])
   useCowAgentYunBridge({
     player: playerCore,
     voice: yunVoice,
@@ -1218,20 +1316,17 @@ function App({ onVisualReady, bootData = {} }) {
     }
     if (isCompanionCallEnd(text)) {
       setCompanionCallActive(false)
-      yunVoice.stopSpeaking()
+      voiceController.cancelResponse(undefined, 'call_ended')
       return
     }
     if (!text) return
     // The transcript itself is the authoritative start of a new user turn.
     // Do this even if a previous request was only generating and had not yet
     // started speaking, otherwise its late result can still win the UI race.
-    voiceController.cancelResponse(undefined, 'new_user_turn')
-    cancelActiveChatRequest()
     setVoiceCallStatus(chatIsThinking ? '已听到，优先处理这句' : '理解中')
-    voiceController.startResponse()
-    sendChatMessage(text, { inputMode: 'voice' })
+    sendConversationTurn(text, { inputMode: 'voice' })
     return 'submitted'
-  }, [cancelActiveChatRequest, chatIsThinking, sendChatMessage, voiceController, yunVoice])
+  }, [chatIsThinking, sendConversationTurn, voiceController, yunVoice])
 
   const handleVoiceInterimTranscript = useCallback((transcript) => {
     setChatDraft(transcript)
@@ -1278,12 +1373,49 @@ function App({ onVisualReady, bootData = {} }) {
       console.error('[NATIVE ASR] transcription failed', event.detail)
     }
     const handleNativeVoiceLevel = (event) => setNativeVoiceLevel(Number(event.detail?.level || 0))
+    const handleBrowserCommandSpeechStart = () => {
+      voiceController.userSpeechStarted()
+      setVoiceCallStatus('正在听')
+    }
+    const handleBrowserCommandTranscribing = () => {
+      voiceController.userSpeechEnded()
+      voiceController.transcriptionStarted()
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('正在转写')
+    }
+    const handleBrowserCommandFinal = (event) => {
+      const text = String(event.detail?.text || '').trim()
+      if (!text) return
+      const result = handleVoiceTranscript(text)
+      if (result === 'echo') {
+        const browserCapture = asrWakeWordControlRef.current
+        if (browserCapture?.beginCommandCapture()) {
+          setVoiceVisualActive(true)
+          setVoiceCallStatus('正在听')
+        }
+      }
+    }
+    const handleBrowserCommandTimeout = () => {
+      voiceController.endSession('browser_command_timeout')
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('没有听清，请重新唤醒')
+    }
+    const handleBrowserCommandCancelled = () => {
+      voiceController.endSession('browser_command_cancelled')
+      setVoiceVisualActive(false)
+      setVoiceCallStatus('idle')
+    }
     window.addEventListener('yun-native-asr-final', handleNativeTranscript)
     window.addEventListener('yun-browser-inline-command', handleNativeTranscript)
     window.addEventListener('yun-native-asr-transcribing', handleNativeTranscribing)
     window.addEventListener('yun-native-asr-error', handleNativeAsrError)
     window.addEventListener('yun-native-barge-in', handleNativeBargeIn)
     window.addEventListener('yun-native-voice-level', handleNativeVoiceLevel)
+    window.addEventListener('yun-browser-command-speech-start', handleBrowserCommandSpeechStart)
+    window.addEventListener('yun-browser-command-transcribing', handleBrowserCommandTranscribing)
+    window.addEventListener('yun-browser-command-final', handleBrowserCommandFinal)
+    window.addEventListener('yun-browser-command-timeout', handleBrowserCommandTimeout)
+    window.addEventListener('yun-browser-command-cancelled', handleBrowserCommandCancelled)
     return () => {
       window.removeEventListener('yun-native-asr-final', handleNativeTranscript)
       window.removeEventListener('yun-browser-inline-command', handleNativeTranscript)
@@ -1291,6 +1423,11 @@ function App({ onVisualReady, bootData = {} }) {
       window.removeEventListener('yun-native-asr-error', handleNativeAsrError)
       window.removeEventListener('yun-native-barge-in', handleNativeBargeIn)
       window.removeEventListener('yun-native-voice-level', handleNativeVoiceLevel)
+      window.removeEventListener('yun-browser-command-speech-start', handleBrowserCommandSpeechStart)
+      window.removeEventListener('yun-browser-command-transcribing', handleBrowserCommandTranscribing)
+      window.removeEventListener('yun-browser-command-final', handleBrowserCommandFinal)
+      window.removeEventListener('yun-browser-command-timeout', handleBrowserCommandTimeout)
+      window.removeEventListener('yun-browser-command-cancelled', handleBrowserCommandCancelled)
     }
   }, [handleNativeBargeIn, handleVoiceTranscript, nativeCommandListening, nativeCommandTranscribing, resetNativeWakeUi, voiceController])
 
@@ -1656,7 +1793,7 @@ function App({ onVisualReady, bootData = {} }) {
       setNeteaseMe(null)
       setNeteaseAccountStatus('error')
     }
-  }, [neteaseAccountStatus])
+  }, [neteaseAccountStatus, setNeteaseAccountStatus, setNeteaseMe])
 
   useEffect(() => {
     if (activePanel !== 'library' || neteaseAccountStatus !== 'idle') return undefined
@@ -1672,7 +1809,7 @@ function App({ onVisualReady, bootData = {} }) {
     }
     window.addEventListener('yun:login-submit', syncNeteaseAccount)
     return () => window.removeEventListener('yun:login-submit', syncNeteaseAccount)
-  }, [])
+  }, [setNeteaseAccountStatus, setNeteaseMe])
 
   useEffect(() => {
     if (!neteaseLoginOpen) return undefined
@@ -1692,12 +1829,12 @@ function App({ onVisualReady, bootData = {} }) {
     })
     setNeteaseAccountStatus('idle')
     setNeteaseLoginOpen(false)
-  }, [])
+  }, [setNeteaseAccountStatus, setNeteaseMe])
 
   const handleNeteaseLogout = useCallback(() => {
     setNeteaseMe(null)
     setNeteaseAccountStatus('idle')
-  }, [])
+  }, [setNeteaseAccountStatus, setNeteaseMe])
 
   const openNeteasePlaylist = useCallback(async (playlist) => {
     resetLibraryScroll()
@@ -2337,7 +2474,7 @@ function App({ onVisualReady, bootData = {} }) {
     if (chatImageInputRef.current) {
       chatImageInputRef.current.value = ''
     }
-    sendChatMessage(text, imageFile ? { imageFile } : undefined)
+    sendConversationTurn(text, imageFile ? { imageFile } : undefined)
   }
 
   useEffect(() => {
@@ -2457,6 +2594,16 @@ function App({ onVisualReady, bootData = {} }) {
       className={`app${uiMode === 'immersive' ? ' immersive-mode' : ' normal-mode'}${wallpaperMode ? ' wallpaper-mode' : ''}${isWebFullscreen ? ' web-fullscreen' : ''} quality-${visualQuality}${activePanel === 'library' ? ' library-open' : ''}${activePanel === 'memory' ? ' memory-settings-open' : ''}${activePanel === 'voice' ? ' voice-open' : ''}${activePanel === 'playMode' ? ' play-mode-open' : ''}${panelContentVisible ? '' : ' panel-content-hidden'}${morphLayer ? ' is-morphing' : ''}`}
       style={songThemeStyle}
     >
+      {neteaseDegraded && (
+        <aside className="boot-degraded-notice" role="status">
+          网易云暂不可用，本地音乐仍可继续播放
+        </aside>
+      )}
+      {backendIdentity.compatibilityNotice && (
+        <aside className="boot-degraded-notice boot-compatibility-notice" role="status">
+          {backendIdentity.compatibilityNotice}
+        </aside>
+      )}
       {visualBooted && (
         <AnimatedBackground
           active={playerState.isPlaying}
@@ -2935,6 +3082,7 @@ function App({ onVisualReady, bootData = {} }) {
               <button
                 className={`voice-toggle${asrWakeWord.enabled ? ' is-on' : ''}`}
                 type="button"
+                disabled={companionCallActive}
                 aria-pressed={asrWakeWord.enabled}
                 aria-label={asrWakeWord.enabled ? '关闭本地关键词唤醒' : '开启本地关键词唤醒'}
                 onClick={() => {
@@ -2946,7 +3094,7 @@ function App({ onVisualReady, bootData = {} }) {
                 {asrWakeWord.enabled ? '开' : '关'}
               </button>
               <span className="voice-value-asr-wrap">
-              <span className="voice-value">{({ 'native-listening': '原生引擎正在等“小昀”', listening: '正在等“小昀”', paused: '暂停', recognizing: '识别中', woken: '已唤醒', 'not-detected': '未听清“小昀”', denied: '麦克风未授权', unsupported: '环境不支持', unconfigured: '识别服务未就绪', off: '关闭' })[asrWakeWord.status] || '启动中'}</span>
+              <span className="voice-value">{({ 'native-listening': '原生引擎正在等“小昀”', listening: '正在等“小昀”', 'command-listening': '正在听你说', 'browser-fallback': '浏览器备用麦克风正在监听', 'native-reconnecting': '原生引擎重连中', 'native-recovering': '正在切回原生引擎', 'native-stop-unconfirmed': '无法确认原生麦克风已释放', paused: '暂停', recognizing: '识别中', woken: '已唤醒', 'not-detected': '未听清“小昀”', denied: '麦克风未授权', unsupported: '环境不支持', unconfigured: '识别服务未就绪', off: '关闭' })[asrWakeWord.status] || '启动中'}</span>
                 <button
                   className="voice-value-asr-set"
                   type="button"
@@ -2955,6 +3103,19 @@ function App({ onVisualReady, bootData = {} }) {
                   设置
                 </button>
               </span>
+            </div>
+            <div className="asr-diagnostic-panel" aria-label="唤醒诊断">
+              <span>来源：{asrWakeWord.diagnostics.source === 'native' ? '原生' : asrWakeWord.diagnostics.source === 'browser-fallback' ? '浏览器备用' : '无'} · 所有者：{asrWakeWord.diagnostics.captureOwner}</span>
+              <span>采样：{asrWakeWord.diagnostics.sampleRate ? `${asrWakeWord.diagnostics.sampleRate} Hz` : '未知'} · 帧：{asrWakeWord.diagnostics.frameSize} · 队列：{asrWakeWord.diagnostics.queueDepth} · 丢帧：{asrWakeWord.diagnostics.droppedFrames}</span>
+              <span>RMS：{asrWakeWord.diagnostics.vadRms.toFixed(4)} / {asrWakeWord.diagnostics.vadThreshold.toFixed(3)} · Wake：{asrWakeWord.diagnostics.wakeScore ?? '—'} · 置信度：{asrWakeWord.diagnostics.wakeConfidence ?? '—'}</span>
+              <span>漏唤醒：{asrWakeWord.diagnostics.missedWakeCount} · 有效唤醒：{asrWakeWord.diagnostics.validWakeCount} · 误唤醒：{asrWakeWord.diagnostics.falseWakeCount} · 冷却抑制：{asrWakeWord.diagnostics.cooldownSuppressions} · TTS 活跃监听帧：{asrWakeWord.diagnostics.ttsActiveFrames} · 命令抑制帧：{asrWakeWord.diagnostics.commandSuppressedFrames} · 重连：{asrWakeWord.diagnostics.reconnectAttempts}</span>
+              <span>TTS 期间原生端继续监听；浏览器备用端共用回声消除采集流，唤醒后直接转写指令。</span>
+              {asrWakeWord.diagnostics.lastWakeAt > 0 && (
+                <span className="asr-diagnostic-actions">
+                  <button type="button" disabled={asrWakeWord.diagnostics.lastWakeReportedAt === asrWakeWord.diagnostics.lastWakeAt} onClick={() => asrWakeWord.reportWakeOutcome('valid')}>标记有效</button>
+                  <button type="button" disabled={asrWakeWord.diagnostics.lastWakeReportedAt === asrWakeWord.diagnostics.lastWakeAt} onClick={() => asrWakeWord.reportWakeOutcome('false')}>标记误唤醒</button>
+                </span>
+              )}
             </div>
             {asrSettingsOpen && (
               <AsrSettingsPanel
@@ -2971,7 +3132,7 @@ function App({ onVisualReady, bootData = {} }) {
               <button
                 className="voice-toggle"
                 type="button"
-                disabled={duplexPhysicalTest.active}
+                disabled={duplexPhysicalTest.active || asrWakeWord.nativeActive}
                 onClick={() => duplexPhysicalTest.start((text) => yunVoice.speakText(text, { force: true, allowBargeIn: false }))}
               >
                 {duplexPhysicalTest.active ? '测试中' : '开始'}
@@ -2979,29 +3140,19 @@ function App({ onVisualReady, bootData = {} }) {
               {duplexPhysicalTest.report && (
                 <button className="voice-value-asr-set" type="button" onClick={duplexPhysicalTest.download}>下载结果</button>
               )}
-              <span className="voice-value">{({ baseline: '安静 3 秒', baseline_warning: '基线异常，继续测试', ai_only: '播放基线', user_prompt: '请说“等等，我正在测试打断”', complete: duplexPhysicalTest.report?.result || '完成', idle: '待命' })[duplexPhysicalTest.phase] || duplexPhysicalTest.phase}</span>
+              <span className="voice-value">{asrWakeWord.nativeActive ? '原生引擎持有麦克风；关闭主唤醒后可测备用采集' : ({ baseline: '安静 3 秒', baseline_warning: '基线异常，继续测试', ai_only: '播放基线', user_prompt: '请说“等等，我正在测试打断”', complete: duplexPhysicalTest.report?.result || '完成', idle: '待命' })[duplexPhysicalTest.phase] || duplexPhysicalTest.phase}</span>
             </div>
             <div className="voice-row">
               <span className="voice-row-label">陪伴通话</span>
               <button
-                className={`voice-toggle${companionCallActive ? ' is-on' : ''}`}
+                className={`voice-toggle${companionCallActive || asrWakeWord.commandCaptureActive ? ' is-on' : ''}`}
                 type="button"
-                aria-pressed={companionCallActive}
-                onClick={() => {
-                  if (companionCallActive) {
-                    setVoiceInputActive(false)
-                    setVoiceVisualActive(false)
-                    setVoiceCallStatus('idle')
-                    yunVoice.stopSpeaking()
-                    setCompanionCallActive(false)
-                    return
-                  }
-                  startCompanionCall()
-                }}
+                aria-pressed={companionCallActive || asrWakeWord.commandCaptureActive}
+                onClick={toggleCompanionCall}
               >
-                {companionCallActive ? '通话中' : '开始'}
+                {companionCallActive || asrWakeWord.commandCaptureActive ? '通话中' : '开始'}
               </button>
-              <span className="voice-value">{companionCallActive ? ({ listening: '正在听', '等待你说话': '等待你说话', '理解中': '正在理解', '回应中': '小昀正在回应' }[voiceCallStatus] || voiceCallStatus) : (voiceCallStatus === 'idle' ? '唤醒后自动开启' : voiceCallStatus)}</span>
+              <span className="voice-value">{companionCallActive || asrWakeWord.commandCaptureActive ? ({ listening: '正在听', '聆听中': '正在听', '等待你说话': '等待你说话', '理解中': '正在理解', '回应中': '小昀正在回应' }[voiceCallStatus] || voiceCallStatus) : (voiceCallStatus === 'idle' ? '唤醒后自动开启' : voiceCallStatus)}</span>
             </div>
             <div className="voice-row">
               <span className="voice-row-label">音色</span>
@@ -3125,6 +3276,11 @@ function App({ onVisualReady, bootData = {} }) {
             </button>
           </div>
 
+          <div className="memory-settings-row memory-settings-row--section">
+            <span>应用版本</span>
+            <span className="voice-value">v{backendIdentity.appVersion || '未知'} · API {backendIdentity.apiVersion ?? '未知'} · {backendIdentity.buildHash || 'build 未知'}</span>
+          </div>
+
           <div className="memory-settings-row">
             <span>允许使用本地记忆</span>
             <button
@@ -3132,7 +3288,7 @@ function App({ onVisualReady, bootData = {} }) {
               type="button"
               aria-label={`允许使用本地记忆：${yunMemory.memoryEnabled ? '开' : '关'}`}
               aria-pressed={yunMemory.memoryEnabled}
-              onClick={() => yunMemory.setMemoryEnabled(!yunMemory.memoryEnabled)}
+              onClick={() => setMemoryEnabled(!yunMemory.memoryEnabled)}
             />
           </div>
 
@@ -3304,7 +3460,7 @@ function App({ onVisualReady, bootData = {} }) {
                 type="button"
                 key={mode.id}
                 aria-pressed={yunMemory.memoryMode === mode.id}
-                onClick={() => yunMemory.setMemoryMode(mode.id)}
+                onClick={() => setMemoryMode(mode.id)}
               >
                 {mode.label}
               </button>

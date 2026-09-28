@@ -8,11 +8,18 @@ export async function requestSongReaction({
   recentAiReplies = [],
   previousSong = null,
   announcementLength = 'medium',
+  responseId = '',
+  signal,
 }) {
   const response = await fetch('/api/song-reaction', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(responseId ? { 'X-Yun-Response-Id': responseId } : {}),
+    },
+    signal,
     body: JSON.stringify({
+      responseId,
       id: song?.id || '',
       title: song?.title || '',
       artist: song?.artist || '',
@@ -40,6 +47,7 @@ export async function requestSongReaction({
   })
 
   const data = await response.json().catch(() => ({}))
+  if (signal?.aborted) throw signal.reason || new DOMException('Song reaction cancelled', 'AbortError')
 
   if (!response.ok || data.error) {
     throw new Error(data.error || '歌曲反应生成失败')

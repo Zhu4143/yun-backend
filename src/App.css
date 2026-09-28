@@ -1821,6 +1821,54 @@ body {
   white-space: nowrap;
 }
 
+.app .asr-diagnostic-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px solid rgba(255, 232, 199, 0.12);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.app .asr-diagnostic-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.app .asr-diagnostic-actions button {
+  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 10px;
+}
+
+.app .asr-diagnostic-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.boot-degraded-notice {
+  position: fixed;
+  z-index: 80;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 209, 144, 0.3);
+  border-radius: 999px;
+  background: rgba(20, 17, 14, 0.8);
+  color: rgba(255, 236, 207, 0.9);
+  font-size: 12px;
+  backdrop-filter: blur(14px);
+}
+
 .voice-value-asr-wrap {
   grid-column: 2 / 4;
   justify-self: end;

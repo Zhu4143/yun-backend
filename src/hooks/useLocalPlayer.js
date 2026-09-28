@@ -13,6 +13,7 @@ import {
 } from '../player/playback/playbackOrchestration.js'
 import { CROSSFADE_DURATION, CrossfadeController } from '../player/transition/CrossfadeController.js'
 import { createCrossfadeTimeline } from '../player/playback/crossfadeTimeline.js'
+import { UpNextQueueTransaction } from '../player/playback/UpNextQueueTransaction.js'
 import { prefetchSongLyrics } from '../services/songLyrics.js'
 
 const PLAYBACK_MODE_KEY = 'yun_playback_mode'
@@ -109,6 +110,8 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   const [audioEngine] = useState(() => new AudioEngine())
   const [crossfadeController] = useState(() => new CrossfadeController({ audioEngine }))
   const [activePlaybackRecovery] = useState(() => createActivePlaybackRecovery())
+  const upNextTransactionRef = useRef(null)
+  if (upNextTransactionRef.current == null) upNextTransactionRef.current = new UpNextQueueTransaction()
   const [restoreSnapshot] = useState(() => {
     const queue = Array.isArray(restoreState?.queue) ? restoreState.queue.filter((song) => song?.fileUrl) : []
     const currentTrackId = String(restoreState?.currentTrackId || '')
@@ -582,11 +585,10 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   }, [preloadTrack])
 
   const updateUpNextTracks = useCallback((updater) => {
-    setUpNextTracks((current) => {
-      const next = typeof updater === 'function' ? updater(current) : updater
-      upNextTracksRef.current = next
-      return next
-    })
+    const current = upNextTracksRef.current
+    const next = typeof updater === 'function' ? updater(current) : updater
+    upNextTracksRef.current = next
+    setUpNextTracks(next)
   }, [])
 
   const enqueueUpNext = useCallback((song) => {
@@ -662,18 +664,32 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       manualTracks: upNextTracksRef.current,
       automaticTracks: autoUpNextTracksRef.current,
     })
-    if (queuedTrack?.queue === 'manual') {
-      updateUpNextTracks((current) => current.slice(1))
-      return playSong(queuedTrack.song, { crossfade: true, fromRadioQueue: true, autoTransition: auto })
-    }
-
-    if (queuedTrack?.queue === 'automatic') {
-      setAutoUpNextTracks((current) => {
-        const next = current.slice(1)
-        autoUpNextTracksRef.current = next
-        return next
+    if (queuedTrack) {
+      const result = await upNextTransactionRef.current.run({
+        candidate: queuedTrack.song,
+        source: queuedTrack.queue,
+        play: (song) => playSong(song, { crossfade: true, fromRadioQueue: true, autoTransition: auto }),
+        commit: (song) => {
+          if (queuedTrack.queue === 'manual') {
+            updateUpNextTracks((current) => sameSong(current[0], song) ? current.slice(1) : current)
+            return
+          }
+          setAutoUpNextTracks((current) => {
+            if (!sameSong(current[0], song)) return current
+            const next = current.slice(1)
+            autoUpNextTracksRef.current = next
+            return next
+          })
+        },
       })
-      return playSong(queuedTrack.song, { crossfade: true, fromRadioQueue: true, autoTransition: auto })
+      console.info('[UP_NEXT]', {
+        source: queuedTrack.queue,
+        songId: getSongId(queuedTrack.song),
+        outcome: result.ok ? 'played' : 'failed',
+        committed: result.queueCommitted,
+        error: result.error || '',
+      })
+      return result
     }
 
     if (mode === 'shuffle') {

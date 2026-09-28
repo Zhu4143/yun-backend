@@ -12,7 +12,7 @@ const USER_MEMORY_KEY = 'yun_user_memory'
 const MEMORY_ENABLED_KEY = 'yun_memory_enabled'
 
 const memoryModeCopy = {
-  off: '安静模式：昀不会主动使用长期记忆。',
+  off: '记忆关闭：昀不会读取或记录长期、近期记忆；当前对话仍会用于本轮上下文。',
   smart: '自然记得：昀会在需要时想起长期记忆。',
   deep: '认真陪你：昀会更主动结合过往记忆陪你聊天。',
 }
@@ -53,8 +53,8 @@ function normalizeRecentMemory(memory = {}) {
   }
 }
 
-function compactUserMemory(userMemory, companionMemory, memoryEnabled) {
-  if (!memoryEnabled) return null
+function compactUserMemory(userMemory, companionMemory, memoryEnabled, memoryMode) {
+  if (!memoryEnabled || memoryMode === 'off') return null
 
   return {
     userProfile: userMemory?.userProfile || {},
@@ -70,7 +70,7 @@ function compactUserMemory(userMemory, companionMemory, memoryEnabled) {
 
 function buildSummary({ userMemory, companionMemory, memoryEnabled, memoryMode, status }) {
   if (status === 'loading') return '记忆摘要加载中...'
-  if (!memoryEnabled) return '本地记忆已关闭，AI 不会读取默认记忆和近期记忆。'
+  if (!memoryEnabled || memoryMode === 'off') return '记忆已关闭：AI 不会读取或记录长期、近期记忆；当前对话仍用于本轮上下文。'
 
   const name = userMemory?.userProfile?.preferredName || userMemory?.userProfile?.name || '未加载'
   const topics = (companionMemory.recentTalkTopics || []).slice(-2).join('、') || '暂无'
@@ -176,6 +176,7 @@ export function useYunMemory(initial = {}) {
   }, [reloadDefaultMemory])
 
   const updateCompanionMemory = useCallback((patch = {}, userText = '') => {
+    if (!memoryEnabled || memoryMode === 'off') return false
     const next = {
       ...createEmptyRecentMemory(),
       ...companionMemory,
@@ -201,11 +202,11 @@ export function useYunMemory(initial = {}) {
     }
 
     return saveCompanionMemory(next)
-  }, [companionMemory, saveCompanionMemory])
+  }, [companionMemory, memoryEnabled, memoryMode, saveCompanionMemory])
 
   const memoryContext = useMemo(
-    () => compactUserMemory(userMemory, companionMemory, memoryEnabled),
-    [companionMemory, memoryEnabled, userMemory],
+    () => compactUserMemory(userMemory, companionMemory, memoryEnabled, memoryMode),
+    [companionMemory, memoryEnabled, memoryMode, userMemory],
   )
 
   const summary = useMemo(

@@ -11,16 +11,27 @@ export async function fetchLocalApi(url, options = {}, {
 } = {}) {
   if (!hasAbortSignal()) return fetch(url, options)
 
+  const callerSignal = options.signal
+  if (callerSignal?.aborted) throw callerSignal.reason || new DOMException('Request aborted', 'AbortError')
+
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  let timedOut = false
+  const onCallerAbort = () => controller.abort(callerSignal?.reason)
+  callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
   try {
     return await fetch(url, { ...options, signal: controller.signal })
   } catch (error) {
-    if (error?.name === 'AbortError') {
+    if (callerSignal?.aborted) throw error
+    if (timedOut) {
       throw new Error('本地服务响应超时，请稍后重试', { cause: error })
     }
     throw new Error(unavailableMessage, { cause: error })
   } finally {
-    window.clearTimeout(timeout)
+    globalThis.clearTimeout(timeout)
+    callerSignal?.removeEventListener('abort', onCallerAbort)
   }
 }

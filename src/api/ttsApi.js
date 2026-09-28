@@ -5,6 +5,7 @@ export async function synthesizeSpeech({
   voice = 'zh_female_xiaohe_uranus_bigtts',
   speed = 1,
   volume = 1,
+  signal,
 }) {
   const response = await fetchLocalApi('/api/tts', {
     method: 'POST',
@@ -15,6 +16,7 @@ export async function synthesizeSpeech({
       speed,
       volume,
     }),
+    signal,
   }, {
     timeoutMs: 30000,
     unavailableMessage: '语音服务暂时不可用，已保留文字回复',

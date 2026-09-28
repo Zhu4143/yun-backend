@@ -93,7 +93,9 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
       {
         id: 'INIT_MUSIC_PROVIDER',
         label: '初始化音乐来源',
-        blocking: true,
+        // Remote provider auth and availability must not prevent local music
+        // from loading. Provider-only features continue in degraded mode.
+        blocking: false,
         weight: 10,
         dependencies: ['BACKEND_HEALTH'],
         retries: 2,
@@ -105,7 +107,7 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
         label: '加载本地音乐库',
         blocking: true,
         weight: 15,
-        dependencies: ['INIT_MUSIC_PROVIDER'],
+        dependencies: ['LOAD_SETTINGS'],
         retries: 1,
         timeoutMs: 30000,
         run: async ({ signal }) => {
@@ -129,6 +131,7 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
         timeoutMs: 45000,
         run: async ({ getResult, reportProgress, signal }) => {
           const firstPage = getResult('INIT_MUSIC_PROVIDER')
+          if (!firstPage) throw new Error('网易云服务暂时不可用')
           if (!firstPage?.loggedIn) {
             reportProgress(100, '未登录网易云')
             return { account: firstPage, playlists: [], complete: true, expectedCount: 0, loadedCount: 0 }

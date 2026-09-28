@@ -1,8 +1,7 @@
 import { app, BrowserWindow, session, shell } from 'electron'
-import { copyFile, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { acquireDesktopBackend } from './backendRuntime.js'
+import { acquireDesktopBackend, isCompatibleYunBackend } from './backendRuntime.js'
 
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
 app.commandLine.appendSwitch('enable-gpu-rasterization')
@@ -11,16 +10,20 @@ app.commandLine.appendSwitch('enable-zero-copy')
 let mainWindow = null
 let stopBackend = null
 
-async function isHealthyYunBackend(port) {
+async function getBackendHealth(port) {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
       signal: AbortSignal.timeout(2000),
     })
-    const payload = await response.json()
-    return response.ok && payload?.ok === true && payload?.service === 'yun-backend'
+    if (!response.ok) return null
+    return await response.json()
   } catch {
-    return false
+    return null
   }
+}
+
+async function isHealthyYunBackend(port) {
+  return isCompatibleYunBackend(await getBackendHealth(port))
 }
 
 async function hasYunAppShell(port) {
@@ -35,33 +38,30 @@ async function hasYunAppShell(port) {
   }
 }
 
-async function seedUserData(dataDir) {
-  await mkdir(dataDir, { recursive: true })
-  const seedDir = path.join(process.resourcesPath, 'default-data')
-  const files = ['manualMusicTags.json', 'musicLibrary.json', 'yunMemory.json', 'yunSettings.json']
-
-  await Promise.all(files.map(async (file) => {
-    const source = path.join(seedDir, file)
-    const destination = path.join(dataDir, file)
-    if (!existsSync(source) || existsSync(destination)) return
-    await copyFile(source, destination)
-  }))
-}
-
 async function startBackend() {
   const dataDir = path.join(app.getPath('userData'), 'data')
-  await seedUserData(dataDir)
+  await mkdir(dataDir, { recursive: true })
+
+  try {
+    const buildInfo = JSON.parse(await readFile(path.join(process.resourcesPath, 'build-info.json'), 'utf8'))
+    if (buildInfo?.buildHash) process.env.YUN_BUILD_HASH = String(buildInfo.buildHash)
+  } catch {
+    process.env.YUN_BUILD_HASH ||= 'unknown'
+  }
 
   process.env.YUN_PUBLIC_DIR = path.join(app.getAppPath(), 'dist')
   process.env.YUN_DATA_DIR = dataDir
+  process.env.YUN_APP_VERSION = app.getVersion()
 
   const backend = await import('../server.js')
   const runtime = await acquireDesktopBackend({
     startServer: backend.startServer,
     stopServer: backend.stopServer,
     isHealthyYunBackend,
+    getBackendHealth,
     hasYunAppShell,
   })
+  if (runtime.compatibilityNotice) process.env.YUN_DESKTOP_COMPATIBILITY_NOTICE = runtime.compatibilityNotice
   stopBackend = runtime.stop
   return runtime.port
 }

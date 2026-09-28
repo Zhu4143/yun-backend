@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { synthesizeSpeech } from '../api/ttsApi'
 import { cancelDucking, startDucking, stopDucking } from '../services/audioDucking'
 import { getSharedSpeakerReferenceBuffer } from '../voice/audio/EchoCanceller.js'
+import { PendingPlaybackController } from '../voice/PendingPlaybackController.mjs'
 import { fadePcm16WavTail } from '../services/speechFade'
 
 const TTS_ENABLED_KEY = 'yun_tts_enabled'
@@ -71,12 +72,14 @@ export function useYunVoice({
   const speechGainRef = useRef(null)
   const objectUrlRef = useRef('')
   const tokenRef = useRef(0)
+  const speechAbortControllerRef = useRef(null)
   const audioUnlockedRef = useRef(false)
   const musicVolumeBeforeSpeechRef = useRef(null)
   const referenceAnimationRef = useRef(0)
   const referenceAudioBufferRef = useRef(null)
-  const nativePlaybackTimerRef = useRef(0)
   const nativePlaybackEndListenerRef = useRef(null)
+  const pendingPlaybackRef = useRef(null)
+  if (pendingPlaybackRef.current == null) pendingPlaybackRef.current = new PendingPlaybackController()
   const activeDuckTokenRef = useRef('')
   const duckSequenceRef = useRef(0)
   const [settings, setSettingsState] = useState(getInitialVoiceSettings)
@@ -248,8 +251,9 @@ export function useYunVoice({
 
   const stopSpeaking = useCallback(() => {
     tokenRef.current += 1
-    window.clearTimeout(nativePlaybackTimerRef.current)
-    nativePlaybackTimerRef.current = 0
+    speechAbortControllerRef.current?.abort(new DOMException('Speech cancelled', 'AbortError'))
+    speechAbortControllerRef.current = null
+    pendingPlaybackRef.current?.stop()
     nativePlaybackEndListenerRef.current?.()
     nativePlaybackEndListenerRef.current = null
     fetch(`${NATIVE_VOICE_URL}/playback/stop`, { method: 'POST' }).catch(() => {})
@@ -291,6 +295,8 @@ export function useYunVoice({
     stopSpeaking()
     if (options.preDuck) acquireMusicDuck(options.duckingVolume || settings.duckingVolume)
     const token = tokenRef.current
+    const speechAbortController = new AbortController()
+    speechAbortControllerRef.current = speechAbortController
     setIsPreparingSpeech(true)
     setIsSpeechInterruptible(allowBargeIn)
     setRecentSpokenText(cleanText)
@@ -301,6 +307,7 @@ export function useYunVoice({
         voice: settings.voice || DEFAULT_VOICE,
         speed: settings.speed,
         volume: spokenVolume,
+        signal: speechAbortController.signal,
       })
 
       if (token !== tokenRef.current) {
@@ -312,8 +319,6 @@ export function useYunVoice({
       const finishSpeech = () => {
         if (speechFinished || token !== tokenRef.current) return
         speechFinished = true
-        window.clearTimeout(nativePlaybackTimerRef.current)
-        nativePlaybackTimerRef.current = 0
         nativePlaybackEndListenerRef.current?.()
         nativePlaybackEndListenerRef.current = null
         if (speechAudioRef.current) speechAudioRef.current.ontimeupdate = null
@@ -333,27 +338,34 @@ export function useYunVoice({
       // Native APM must receive the exact PCM that reaches the speaker. When
       // the sidecar is healthy, send the WAV to its full-duplex stream rather
       // than also playing it through Chromium.
-      const nativeHealth = await fetch(`${NATIVE_VOICE_URL}/health`).then((response) => response.ok ? response.json() : null).catch(() => null)
+      const nativeHealth = await fetch(`${NATIVE_VOICE_URL}/health`, { signal: speechAbortController.signal }).then((response) => response.ok ? response.json() : null).catch(() => null)
+      if (token !== tokenRef.current) return false
       if (nativeHealth?.apm?.loaded && nativeHealth?.mic?.captureRunning) {
         const fadedSpeech = new Blob([fadePcm16WavTail(encoded)], { type: 'audio/wav' })
-        const playback = await fetch(`${NATIVE_VOICE_URL}/playback`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: fadedSpeech })
+        const playback = await fetch(`${NATIVE_VOICE_URL}/playback`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: fadedSpeech, signal: speechAbortController.signal })
+        if (token !== tokenRef.current) return false
         if (playback.ok) {
+          if (speechAbortControllerRef.current === speechAbortController) speechAbortControllerRef.current = null
           if (!activeDuckTokenRef.current) acquireMusicDuck(options.duckingVolume || settings.duckingVolume)
           setIsPreparingSpeech(false)
           setIsSpeaking(true)
           const duration = Math.max(250, getWavDurationMs(encoded))
-          return new Promise((resolve) => {
-            const onNativePlaybackEnd = () => {
+          let removeListener = () => {}
+          const pending = pendingPlaybackRef.current.begin({
+            timeoutMs: duration + 800,
+            onSettle: () => {
+              removeListener()
+              if (nativePlaybackEndListenerRef.current === removeListener) {
+                nativePlaybackEndListenerRef.current = null
+              }
               finishSpeech()
-              resolve(true)
-            }
-            window.addEventListener('yun-native-playback-end', onNativePlaybackEnd, { once: true })
-            nativePlaybackEndListenerRef.current = () => window.removeEventListener('yun-native-playback-end', onNativePlaybackEnd)
-            nativePlaybackTimerRef.current = window.setTimeout(() => {
-              finishSpeech()
-              resolve(true)
-            }, duration + 800)
+            },
           })
+          const onNativePlaybackEnd = () => pending.finish(true)
+          window.addEventListener('yun-native-playback-end', onNativePlaybackEnd, { once: true })
+          removeListener = () => window.removeEventListener('yun-native-playback-end', onNativePlaybackEnd)
+          nativePlaybackEndListenerRef.current = removeListener
+          return pending.promise
         }
       }
 
@@ -384,26 +396,41 @@ export function useYunVoice({
       const decodeContext = speechAudioContextRef.current || new (window.AudioContext || window.webkitAudioContext)()
       referenceAudioBufferRef.current = await decodeContext.decodeAudioData(encoded.slice(0)).catch(() => null)
 
-      const done = new Promise((resolve) => {
-        speechAudio.onended = () => {
+      const durationMs = Number.isFinite(speechAudio.duration) && speechAudio.duration > 0
+        ? Math.ceil(speechAudio.duration * 1000)
+        : 120_000
+      let browserPlayback
+      browserPlayback = pendingPlaybackRef.current.begin({
+        timeoutMs: durationMs + 2_000,
+        timeoutResult: false,
+        onSettle: () => {
+          speechAudio.onended = null
+          speechAudio.onerror = null
+          speechAudio.onpause = null
           finishSpeech()
-          resolve(true)
-        }
-        speechAudio.onerror = () => {
-          finishSpeech()
-          resolve(false)
-        }
-        speechAudio.onpause = () => {
-          if (!speechAudio.ended) {
-            finishSpeech()
-            resolve(false)
-          }
-        }
+        },
       })
+      speechAudio.onended = () => browserPlayback.finish(true)
+      speechAudio.onerror = () => browserPlayback.finish(false)
+      speechAudio.onpause = () => {
+        if (!speechAudio.ended) browserPlayback.finish(false)
+      }
 
       if (!activeDuckTokenRef.current) acquireMusicDuck(options.duckingVolume || settings.duckingVolume)
 
-      await speechAudio.play()
+      const playStarted = await Promise.race([
+        speechAudio.play().then(() => true, () => false),
+        browserPlayback.promise.then(() => false),
+      ])
+      if (!playStarted) {
+        browserPlayback.finish(false)
+        return browserPlayback.promise
+      }
+      if (token !== tokenRef.current) {
+        browserPlayback.cancel()
+        return browserPlayback.promise
+      }
+      if (speechAbortControllerRef.current === speechAbortController) speechAbortControllerRef.current = null
       const referenceBuffer = getSharedSpeakerReferenceBuffer()
       const publishReference = () => {
         const decoded = referenceAudioBufferRef.current
@@ -416,8 +443,11 @@ export function useYunVoice({
       publishReference()
       setIsPreparingSpeech(false)
       setIsSpeaking(true)
-      return done
+      return browserPlayback.promise
     } catch {
+      if (token !== tokenRef.current) return false
+      if (speechAbortControllerRef.current === speechAbortController) speechAbortControllerRef.current = null
+      pendingPlaybackRef.current?.stop()
       setIsSpeaking(false)
       setIsPreparingSpeech(false)
       setIsSpeechInterruptible(false)

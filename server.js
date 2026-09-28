@@ -6,11 +6,15 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
+import {
+  legacyBackendDirectory,
+  runtimeDataDirectory,
+  runtimeEnvironmentPath,
+} from "./server/loadRuntimeEnvironment.js";
 import { parseFile } from "music-metadata";
 import neteaseCloudMusicApi from "NeteaseCloudMusicApi";
 import WebSocket from "ws";
 import multer from "multer";
-import dotenv from "dotenv";
 import { analyzeImageWithQwen } from "./server/qwenVision.js";
 import { createMossAgent } from "./server/agent/mossAgent.js";
 import { createMossDesktopAgentBridge } from "./server/agent/mossDesktopAgentBridge.js";
@@ -40,6 +44,10 @@ import {
 } from "./server/netease/capabilityService.js";
 import { describePlaylistTrackPage } from "./server/netease/playlistPagination.js";
 import { getRelevantNeteaseCapabilityTruth } from "./src/services/netease/capabilityTruth.js";
+import { createRequestLifecycle } from "./server/requestLifecycle.js";
+import { AtomicJsonStore } from "./server/atomicJsonStore.js";
+import { createMemoryPromptContext } from "./server/memoryPromptPolicy.js";
+import { createBackendIdentity } from "./server/backendIdentity.js";
 
 const {
   login_qr_key: neteaseLoginQrKey,
@@ -64,20 +72,26 @@ const {
 } = neteaseCloudMusicApi;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-loadDotEnv(path.join(__dirname, ".env"));
-
-const legacyBackendDir = path.resolve(
-  process.env.YUN_LEGACY_BACKEND_DIR || "C:\\Users\\zhudo\\Documents\\Codex\\2026-05-28\\claude-ai-api-doctype-html-html"
-);
+let packageVersion = "unknown";
+try {
+  packageVersion = JSON.parse(readFileSync(path.join(__dirname, "package.json"), "utf8")).version || packageVersion;
+} catch {
+  // Health remains available if packaging omits optional version metadata.
+}
+const backendIdentity = createBackendIdentity({
+  appVersion: process.env.YUN_APP_VERSION || packageVersion,
+  buildHash: process.env.YUN_BUILD_HASH || "unknown",
+});
+const legacyBackendDir = legacyBackendDirectory;
 const publicDir = path.resolve(process.env.YUN_PUBLIC_DIR || path.join(__dirname, "public"));
 const legacyPublicDir = path.join(legacyBackendDir, "public");
 const coversDir = path.join(publicDir, "covers");
-const dataDir = path.resolve(process.env.YUN_DATA_DIR || path.join(__dirname, "server", "data"));
+const dataDir = runtimeDataDirectory;
 const musicLibraryPath = path.join(dataDir, "musicLibrary.json");
 const musicAnalysisDir = path.join(dataDir, "music-analysis");
 const manualMusicTagsPath = path.join(dataDir, "manualMusicTags.json");
 const yunMemoryPath = path.join(dataDir, "yunMemory.json");
+const yunMemoryStore = new AtomicJsonStore(yunMemoryPath);
 const yunSettingsPath = path.join(dataDir, "yunSettings.json");
 const listeningProfilePath = path.join(dataDir, "yunListeningProfile.json");
 const neteaseCookiePath = path.join(dataDir, "netease-cookie.txt");
@@ -923,14 +937,7 @@ async function handleNeteaseLogout(req, res) {
   sendJson(res, 200, { ok: true });
 }
 
-loadDotEnv(path.join(legacyBackendDir, ".env"));
-loadDotEnv(path.join(__dirname, ".env"));
 const port = Number(process.env.PORT || 3030);
-
-function loadDotEnv(filePath) {
-  if (!existsSync(filePath)) return;
-  dotenv.config({ path: filePath, override: true, quiet: true });
-}
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -1725,7 +1732,7 @@ function normalizeLyricsUnderstanding(raw = {}) {
   };
 }
 
-async function analyzeLyricsUnderstanding(song = {}, lyrics) {
+async function analyzeLyricsUnderstanding(song = {}, lyrics, signal) {
   const systemPrompt = `你是私人音乐伴侣“昀”的歌词理解模块。
 你只根据用户提供的歌词文本做理解，不要联网，不要编造歌词以外的背景。
 只输出合法 JSON，不要 Markdown。
@@ -1749,11 +1756,12 @@ async function analyzeLyricsUnderstanding(song = {}, lyrics) {
     lyrics.text.slice(0, 4200),
   ].join("\n");
 
-  const parsed = await callDeepSeekJson({ systemPrompt, userPrompt, maxTokens: 900 });
+  const parsed = await callDeepSeekJson({ systemPrompt, userPrompt, maxTokens: 900, signal });
   return normalizeLyricsUnderstanding(parsed);
 }
 
-async function ensureLyricsUnderstandingForSong(song = {}) {
+async function ensureLyricsUnderstandingForSong(song = {}, signal) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   if (!song?.id) return null;
 
   const songs = await readMusicLibraryForServer();
@@ -1773,7 +1781,8 @@ async function ensureLyricsUnderstandingForSong(song = {}) {
     return target.lyricsUnderstanding || null;
   }
 
-  const understanding = await analyzeLyricsUnderstanding(target, lyrics);
+  const understanding = await analyzeLyricsUnderstanding(target, lyrics, signal);
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   const nextSongs = songs.map(item => item.id === target.id
     ? {
       ...item,
@@ -2866,7 +2875,9 @@ async function callDeepSeekJson({
   frequencyPenalty = 0,
   presencePenalty = 0,
   model = deepseekFlashModel,
+  signal,
 }) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   const { apiKey, baseUrl } = getDeepSeekRuntimeConfig(model);
   const runtimeModel = getDeepSeekRuntimeModel(model);
   if (!apiKey || apiKey.includes("把你的key放这里")) {
@@ -2874,6 +2885,7 @@ async function callDeepSeekJson({
   }
 
   async function requestJson(prompt, repair = false) {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
     const upstream = await fetch(getDeepSeekChatCompletionsUrl(baseUrl), {
       method: "POST",
       headers: {
@@ -2893,6 +2905,7 @@ async function callDeepSeekJson({
         stream: false,
         response_format: { type: "json_object" },
       }),
+      signal,
     });
 
     const data = await upstream.json().catch(() => ({}));
@@ -2903,6 +2916,7 @@ async function callDeepSeekJson({
   }
 
   const raw = await requestJson(userPrompt);
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   try {
     return JSON.parse(raw.replace(/```json|```/g, "").trim());
   } catch {
@@ -3056,7 +3070,9 @@ async function refreshRepeatedReply({
   recentAiReplies = [],
   purpose = "chat",
   context = "",
+  signal,
 } = {}) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   const text = String(reply || "").trim();
   if (!text || !isReplyTooSimilar(text, recentAiReplies)) return text;
   try {
@@ -3071,9 +3087,11 @@ async function refreshRepeatedReply({
       includePersona: false,
       frequencyPenalty: 0.55,
       presencePenalty: 0.2,
+      signal,
     });
     return String(rewritten?.reply || "").trim();
   } catch {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
     return text;
   }
 }
@@ -3209,6 +3227,10 @@ async function handleSongReaction(req, res) {
     });
   }
 
+  const lifecycle = createRequestLifecycle(req, res, {
+    responseId: req.headers?.["x-yun-response-id"],
+  });
+  const { signal } = lifecycle;
   try {
     const {
       id = "",
@@ -3230,6 +3252,20 @@ async function handleSongReaction(req, res) {
       previousSong = null,
       announcementLength = "medium",
     } = await readJson(req);
+    lifecycle.setResponseId(req.headers?.["x-yun-response-id"]);
+
+    // These modes never produce a song reaction. Return before reading the
+    // library, lyrics cache, or starting any model work.
+    if (responseMode === "silent" || (responseMode === "normal" && trigger === "auto_next")) {
+      return sendJson(res, 200, {
+        shouldSpeak: false,
+        displayMessage: false,
+        reply: "",
+        intent: responseMode === "silent" ? "no_reply" : "quiet",
+      });
+    }
+    if (signal.aborted || res.destroyed) return;
+
     const currentSongForLyrics = title || artist
       ? {
         id,
@@ -3245,28 +3281,13 @@ async function handleSongReaction(req, res) {
       }
       : null;
     const lyricsUnderstanding = currentSongForLyrics
-      ? await ensureLyricsUnderstandingForSong(currentSongForLyrics).catch(error => {
+      ? await ensureLyricsUnderstandingForSong(currentSongForLyrics, signal).catch(error => {
+        if (signal.aborted) throw error;
         console.error("[lyrics] song reaction understanding failed:", error instanceof Error ? error.message : error);
         return null;
       })
       : null;
-
-    if (responseMode === "silent") {
-      return sendJson(res, 200, {
-        shouldSpeak: false,
-        displayMessage: false,
-        reply: "",
-        intent: "no_reply",
-      });
-    }
-    if (responseMode === "normal" && trigger === "auto_next") {
-      return sendJson(res, 200, {
-        shouldSpeak: false,
-        displayMessage: false,
-        reply: "",
-        intent: "quiet",
-      });
-    }
+    if (signal.aborted || res.destroyed) return;
 
     const companionTransition = trigger === "companion_transition" && responseMode === "podcast";
     const lengthGuide = { short: "1 句，约 15 到 28 字", medium: "1 到 2 句，约 30 到 55 字", long: "2 到 3 句，约 60 到 95 字" }[announcementLength] || "1 到 2 句，约 30 到 55 字";
@@ -3348,9 +3369,11 @@ async function handleSongReaction(req, res) {
         stream: false,
         response_format: { type: "json_object" },
       }),
+      signal,
     });
 
     const data = await upstream.json().catch(() => ({}));
+    if (signal.aborted || res.destroyed) return;
 
     if (!upstream.ok) {
       return sendJson(res, upstream.status, {
@@ -3381,12 +3404,15 @@ async function handleSongReaction(req, res) {
       const sentences = reply.match(/[^。！？!?]+[。！？!?]?/g) || [];
       reply = sentences.slice(0, 2).join("").trim().slice(0, 56);
     }
-    reply = await refreshRepeatedReply({
-      reply,
-      recentAiReplies,
-      purpose: "song_reaction",
-      context: `trigger=${trigger}; title=${title}; artist=${artist}; angle=${parsed.angle || ""}; recentChat=${JSON.stringify(recentChat || []).slice(0, 500)}`,
-    });
+    if (responseMode !== "silent") {
+      reply = await refreshRepeatedReply({
+        reply,
+        recentAiReplies,
+        purpose: "song_reaction",
+        context: `trigger=${trigger}; title=${title}; artist=${artist}; angle=${parsed.angle || ""}; recentChat=${JSON.stringify(recentChat || []).slice(0, 500)}`,
+        signal,
+      });
+    }
     if (trigger === "auto_next" && isReplyTooSimilar(reply, recentAiReplies, 0.46)) reply = "";
     if (companionTransition && !reply && title) reply = `接下来听《${title}》，我们顺着这一段节奏走。`;
     if (companionTransition) reply = reply.slice(0, { short: 30, medium: 58, long: 100 }[announcementLength] || 58);
@@ -3403,9 +3429,12 @@ async function handleSongReaction(req, res) {
         : (responseMode === "podcast" ? "podcast_intro" : "short_ack"),
     });
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
     return sendJson(res, 500, {
       error: error instanceof Error ? error.message : "歌曲反应生成失败",
     });
+  } finally {
+    lifecycle.cleanup();
   }
 }
 function scoreSongForMood(song, analysis) {
@@ -4512,30 +4541,29 @@ function normalizeYunMemory(memory = {}) {
 }
 
 async function loadYunMemory() {
-  try {
-    const raw = await readFile(yunMemoryPath, "utf8");
-    return normalizeYunMemory(JSON.parse(raw));
-  } catch {
-    const memory = createDefaultYunMemory();
-    try {
-      await mkdir(dataDir, { recursive: true });
-      await writeFile(yunMemoryPath, JSON.stringify(memory, null, 2), "utf8");
-    } catch (writeError) {
-      console.error("[yun-memory] init failed:", writeError);
-    }
-    return memory;
-  }
+  return normalizeYunMemory(await yunMemoryStore.load(createDefaultYunMemory()));
 }
 
-async function saveYunMemory(memory) {
+async function saveYunMemory(memory, { signal } = {}) {
   const normalized = normalizeYunMemory(memory);
   try {
-    await mkdir(dataDir, { recursive: true });
-    await writeFile(yunMemoryPath, JSON.stringify(normalized, null, 2), "utf8");
+    await yunMemoryStore.write(normalized, { signal });
   } catch (error) {
     console.error("[yun-memory] save failed:", error);
+    throw error;
   }
   return normalized;
+}
+
+async function mutateYunMemory(mutator, { signal } = {}) {
+  let result;
+  const memory = await yunMemoryStore.update(async current => {
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
+    const normalized = normalizeYunMemory(current);
+    result = await mutator(normalized);
+    return normalized;
+  }, { signal, defaultValue: createDefaultYunMemory() });
+  return { memory: normalizeYunMemory(memory), result };
 }
 
 const readYunMemory = loadYunMemory;
@@ -4628,7 +4656,8 @@ async function shouldFetchLongTermMemory(userMessage = "") {
 
 async function resolveYunMemoryForPrompt(userMessage = "", options = {}) {
   const settings = await loadYunSettings();
-  const memoryMode = options.allowMemory === false ? "off" : (settings.memoryMode || "smart");
+  const requestedMemoryMode = YUN_MEMORY_MODES.has(options.memoryMode) ? options.memoryMode : settings.memoryMode;
+  const memoryMode = options.allowMemory === false ? "off" : (requestedMemoryMode || "smart");
   if (memoryMode === "off") {
     return { memoryMode, relevantMemory: "" };
   }
@@ -4640,7 +4669,8 @@ async function resolveYunMemoryForPrompt(userMessage = "", options = {}) {
   return { memoryMode, relevantMemory };
 }
 
-async function extractMemoryFromConversation(userMessage, aiReply) {
+async function extractMemoryFromConversation(userMessage, aiReply, { signal } = {}) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   const text = String(userMessage || "");
   if (!/记住|以后|长期|希望你|我喜欢|我讨厌|我不喜欢|别再|不要一直|我的项目|正在做|做一个|项目|毕业设计|作品集|音乐偏好|安慰|陪伴/.test(text)) {
     return { shouldRemember: false, memories: [], profileUpdates: {} };
@@ -4678,13 +4708,14 @@ AI 回复：${aiReply}
 }`;
 
   try {
-    const parsed = await callDeepSeekJson({ systemPrompt, userPrompt, maxTokens: 700 });
+    const parsed = await callDeepSeekJson({ systemPrompt, userPrompt, maxTokens: 700, signal });
     return {
       shouldRemember: Boolean(parsed.shouldRemember),
       memories: Array.isArray(parsed.memories) ? parsed.memories : [],
       profileUpdates: parsed.profileUpdates && typeof parsed.profileUpdates === "object" ? parsed.profileUpdates : {},
     };
   } catch (error) {
+    if (signal?.aborted) throw signal.reason || error;
     console.error("[yun-memory] extract failed:", error instanceof Error ? error.message : error);
     return { shouldRemember: false, memories: [], profileUpdates: {} };
   }
@@ -4712,31 +4743,31 @@ function trimEpisodicMemories(memories = []) {
   return [...high, ...low].slice(0, 200);
 }
 
-async function forgetYunMemory(userMessage = "") {
+async function forgetYunMemory(userMessage = "", { signal } = {}) {
   const text = String(userMessage || "");
   if (!/忘记|删掉记忆|不要记得|别记/.test(text)) return false;
   const target = text
     .replace(/请|帮我|你|把|关于|这件事|这些|的记忆|记忆|忘记|删掉|不要记得|别记/g, " ")
     .trim();
   if (!target || target.length < 2) return false;
-  const memory = await loadYunMemory();
-  for (const key of ["personality", "importantProjects", "musicPreferences", "comfortStyle"]) {
-    memory.userProfile[key] = (memory.userProfile[key] || []).filter(item => !memoryTextMatches(item, target));
-  }
-  memory.relationshipMemory.yunShouldRemember = (memory.relationshipMemory.yunShouldRemember || []).filter(item => !memoryTextMatches(item, target));
-  memory.episodicMemories = (memory.episodicMemories || []).filter(item => !memoryTextMatches(item.content, target));
-  await saveYunMemory(memory);
-  return true;
+  const { result } = await mutateYunMemory(memory => {
+    for (const key of ["personality", "importantProjects", "musicPreferences", "comfortStyle"]) {
+      memory.userProfile[key] = (memory.userProfile[key] || []).filter(item => !memoryTextMatches(item, target));
+    }
+    memory.relationshipMemory.yunShouldRemember = (memory.relationshipMemory.yunShouldRemember || []).filter(item => !memoryTextMatches(item, target));
+    memory.episodicMemories = (memory.episodicMemories || []).filter(item => !memoryTextMatches(item.content, target));
+    return true;
+  }, { signal });
+  return result;
 }
 
-async function updateYunMemory(userMessage, aiReply) {
+async function updateYunMemory(userMessage, aiReply, { signal } = {}) {
   try {
-    if (await forgetYunMemory(userMessage)) return;
-    const extraction = await extractMemoryFromConversation(userMessage, aiReply);
+    if (await forgetYunMemory(userMessage, { signal })) return;
+    const extraction = await extractMemoryFromConversation(userMessage, aiReply, { signal });
     if (!extraction.shouldRemember) return;
-    const memory = await loadYunMemory();
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
     const now = new Date().toISOString();
-    const existing = new Set((memory.episodicMemories || []).map(item => normalizeTagText(item.content)));
     const additions = (Array.isArray(extraction.memories) ? extraction.memories : [])
       .map(item => ({
         content: String(item?.content || "").trim().slice(0, 320),
@@ -4744,24 +4775,29 @@ async function updateYunMemory(userMessage, aiReply) {
         tags: uniqueStrings(item?.tags).slice(0, 8),
         time: now,
       }))
-      .filter(item => item.content && item.importance >= 1 && !existing.has(normalizeTagText(item.content)));
+      .filter(item => item.content && item.importance >= 1);
 
-    memory.episodicMemories = trimEpisodicMemories([...(memory.episodicMemories || []), ...additions]);
-    memory.userProfile = mergeProfileUpdates(memory.userProfile || createDefaultYunMemory().userProfile, extraction.profileUpdates);
-    await saveYunMemory(memory);
+    await mutateYunMemory(memory => {
+      const existing = new Set((memory.episodicMemories || []).map(item => normalizeTagText(item.content)));
+      memory.episodicMemories = trimEpisodicMemories([
+        ...(memory.episodicMemories || []),
+        ...additions.filter(item => !existing.has(normalizeTagText(item.content))),
+      ]);
+      memory.userProfile = mergeProfileUpdates(memory.userProfile || createDefaultYunMemory().userProfile, extraction.profileUpdates);
+    }, { signal });
   } catch (error) {
+    if (signal?.aborted) return;
     console.error("[yun-memory] update failed:", error instanceof Error ? error.message : error);
   }
 }
 
-async function updateYunMemoryIfNeeded(userMessage, aiReply) {
-  return updateYunMemory(userMessage, aiReply);
+async function updateYunMemoryIfNeeded(userMessage, aiReply, options = {}) {
+  return updateYunMemory(userMessage, aiReply, options);
 }
 
-async function applyYunMemoryUpdates(updates = []) {
+async function applyYunMemoryUpdates(updates = [], { signal } = {}) {
   const list = Array.isArray(updates) ? updates : [];
   if (!list.length) return [];
-  const memory = await loadYunMemory();
   const now = new Date().toISOString();
   const profileUpdates = { personality: [], importantProjects: [], musicPreferences: [], comfortStyle: [] };
   const episodic = [];
@@ -4785,14 +4821,15 @@ async function applyYunMemoryUpdates(updates = []) {
     }
   }
 
-  memory.userProfile = mergeProfileUpdates(memory.userProfile || createDefaultYunMemory().userProfile, profileUpdates);
-  memory.relationshipMemory.yunShouldRemember = uniqueStrings([...(memory.relationshipMemory?.yunShouldRemember || []), ...relationship]).slice(0, 80);
-  const existing = new Set((memory.episodicMemories || []).map(item => normalizeTagText(item.content)));
-  memory.episodicMemories = trimEpisodicMemories([
-    ...(memory.episodicMemories || []),
-    ...episodic.filter(item => !existing.has(normalizeTagText(item.content))),
-  ]);
-  await saveYunMemory(memory);
+  await mutateYunMemory(memory => {
+    memory.userProfile = mergeProfileUpdates(memory.userProfile || createDefaultYunMemory().userProfile, profileUpdates);
+    memory.relationshipMemory.yunShouldRemember = uniqueStrings([...(memory.relationshipMemory?.yunShouldRemember || []), ...relationship]).slice(0, 80);
+    const existing = new Set((memory.episodicMemories || []).map(item => normalizeTagText(item.content)));
+    memory.episodicMemories = trimEpisodicMemories([
+      ...(memory.episodicMemories || []),
+      ...episodic.filter(item => !existing.has(normalizeTagText(item.content))),
+    ]);
+  }, { signal });
   return [...Object.values(profileUpdates).flat(), ...relationship, ...episodic.map(item => item.content)];
 }
 
@@ -5346,6 +5383,7 @@ async function generateDesktopToolReply({
   persona,
   recentChat,
   recentAiReplies,
+  signal,
 }) {
   const prompt = `你刚刚代表昀调用了本地 Windows 桌面工具。工具已经执行完了。
 现在只生成给用户看的自然语言回复，不要再调用工具，不要输出 JSON 以外内容。
@@ -5379,6 +5417,7 @@ async function generateDesktopToolReply({
       `最近 5 条 AI 回复，避免重复：${JSON.stringify(recentAiReplies || []).slice(0, 1200)}`,
     ].join("\n"),
     maxTokens: 420,
+    signal,
   });
 }
 
@@ -5395,8 +5434,13 @@ function selectCompanionModel(userText, { relationshipSupportActive = false, rec
 }
 
 async function handleCompanionChat(req, res) {
+  const lifecycle = createRequestLifecycle(req, res, {
+    responseId: req.headers?.["x-yun-response-id"],
+  });
+  const { signal } = lifecycle;
   try {
     const {
+      responseId = "",
       userText = "",
       chatHistory = [],
       currentSong = null,
@@ -5405,6 +5449,7 @@ async function handleCompanionChat(req, res) {
       companionMemory = {},
       userMemory = null,
       memoryEnabled = true,
+      memoryMode = null,
       recentAiReplies = [],
       questionCountWindow = 0,
       localTime = "",
@@ -5415,8 +5460,9 @@ async function handleCompanionChat(req, res) {
       sourceContact = "",
       rawText = "",
     } = await readJson(req);
+    lifecycle.setResponseId(responseId || req.headers?.["x-yun-response-id"]);
+    if (signal.aborted) throw signal.reason;
 
-    const songs = await readMusicLibraryForServer();
     const recentChat = (Array.isArray(chatHistory) ? chatHistory : []).slice(-6);
     const lowerText = String(userText).toLowerCase();
     const explicitNoQuestions = /别问了|不想说|别追问|不要问|先别问/.test(userText);
@@ -5424,22 +5470,37 @@ async function handleCompanionChat(req, res) {
     const explicitPickSong = detectAutoPlayRequest(userText);
     const explicitNext = /换一首|下一首|切歌|换歌/.test(userText);
     const explicitPause = /暂停|停一下|先停/.test(userText);
+    const explicitMemoryIntent = /记住|以后|长期|别忘|忘记|删掉记忆|不要记得|别记/.test(userText);
+    const asksLyrics = /歌词|歌词意思|唱的什么|唱了什么/.test(userText);
+    const needsSongContext = explicitPickSong || explicitNext || asksLyrics || Boolean(currentSong && responseMode !== "silent");
+    const songs = needsSongContext ? await readMusicLibraryForServer() : [];
+    if (signal.aborted) throw signal.reason;
     const relationshipSupportActive = shouldUseRelationshipSupport(userText);
-    const memoryContextInfo = await resolveYunMemoryForPrompt(userText, { allowMemory: memoryEnabled });
+    const memoryContextInfo = await resolveYunMemoryForPrompt(userText, { allowMemory: memoryEnabled, memoryMode });
     const effectiveMemoryMode = memoryContextInfo.memoryMode;
-    const yunMemory = effectiveMemoryMode !== "off" ? await readYunMemory() : createDefaultYunMemory();
-    const yunMemoryContext = effectiveMemoryMode !== "off"
+    const memoryPromptContext = createMemoryPromptContext({
+      memoryMode: effectiveMemoryMode,
+      memoryEnabled,
+      userMemory,
+      companionMemory,
+    });
+    const memoryActive = memoryPromptContext.enabled;
+    const yunMemory = memoryActive ? await readYunMemory() : createDefaultYunMemory();
+    const yunMemoryContext = memoryActive
       ? summarizeYunMemoryForPrompt(yunMemory, userText, currentSong, responseMode)
       : "长期记忆未启用。";
-    const relevantYunMemory = memoryContextInfo.relevantMemory;
-    const currentLyricsUnderstanding = currentSong
-      ? await ensureLyricsUnderstandingForSong(currentSong).catch(error => {
+    const relevantYunMemory = memoryActive ? memoryContextInfo.relevantMemory : "";
+    const currentLyricsUnderstanding = currentSong && (responseMode !== "silent" || asksLyrics)
+      ? await ensureLyricsUnderstandingForSong(currentSong, signal).catch(error => {
+        if (signal.aborted) throw error;
         console.error("[lyrics] companion understanding failed:", error instanceof Error ? error.message : error);
         return currentSong.lyricsUnderstanding || null;
       })
       : null;
     const companionModel = selectCompanionModel(userText, { relationshipSupportActive, recentChat });
-    const capabilityTruth = getRelevantNeteaseCapabilityTruth({ message: userText, currentTrack: currentSong });
+    const capabilityTruth = responseMode === "silent" && !needsSongContext
+      ? null
+      : getRelevantNeteaseCapabilityTruth({ message: userText, currentTrack: currentSong });
 
     const systemPrompt = `你正在陪用户听歌聊天。
 你不是客服，不是心理医生，不是功能说明，也不是音乐播客主持人。你也不要主动承认自己只是代码、程序或工具。
@@ -5515,9 +5576,8 @@ async function handleCompanionChat(req, res) {
 - 先在 replyStrategy 中选一种表达方式；连续两轮不要沿用相同开头、相同比喻或相同收尾。
 - 最近聊天有明确落点时用 follow_previous 接着上一点说，不要重新概括用户刚说的话。
 ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
-    const memoryContext = effectiveMemoryMode !== "off" && memoryEnabled && userMemory
-      ? JSON.stringify(userMemory).slice(0, 5000)
-      : "本地记忆未启用。";
+    const memoryContext = memoryPromptContext.userMemory;
+    const companionMemoryContext = memoryPromptContext.companionMemory;
 
     const decision = await callDeepSeekJson({
       systemPrompt: `${buildServerModeReplyPolicy(responseMode, "companion_chat")}\n${buildPersonaModePrompt(persona)}\n${systemPrompt}`,
@@ -5538,7 +5598,7 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
         relevantYunMemory
           ? `以下是你关于用户东宇的长期记忆，请自然使用，不要生硬复述：\n${relevantYunMemory}`
           : "",
-        `兼容近期记忆：${JSON.stringify(companionMemory).slice(0, 1000)}`,
+        `兼容近期记忆：${companionMemoryContext}`,
         `最近三次回复已问问题次数：${questionCountWindow}`,
         `硬约束：explicitNoQuestions=${explicitNoQuestions}; explicitNoChange=${explicitNoChange}; explicitPickSong=${explicitPickSong}; explicitNext=${explicitNext}; explicitPause=${explicitPause}; textHint=${lowerText.slice(0, 80)}`,
         capabilityTruth?.capabilities?.length
@@ -5548,10 +5608,13 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
         "使用记忆时要自然，不要说“根据记忆库”。不要突然提起敏感过去，只在用户主动提到相关话题时轻轻接住。",
       ].filter(Boolean).join("\n"),
       maxTokens: 900,
+      signal,
     });
+    if (signal.aborted) throw signal.reason;
 
     const desktopToolCall = normalizeDesktopToolCall(decision) || detectDesktopToolIntent(userText);
     if (desktopToolCall) {
+      if (signal.aborted) throw signal.reason;
       let desktopToolResult = null;
       let desktopToolError = null;
       try {
@@ -5570,19 +5633,22 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
         persona,
         recentChat,
         recentAiReplies,
+        signal,
       });
+      if (signal.aborted) throw signal.reason;
       const emotion = normalizeYunEmotion(toolReplyDecision.emotion || decision.emotion);
       const animation = animationForYunEmotion(emotion, toolReplyDecision.animation || decision.animation);
       const rawToolReply = String(toolReplyDecision.reply || decision.reply || "嗯，我处理好了。").trim();
       const finalReply = persona === "zhudongyu"
         ? rawToolReply
         : shapeYunIdentityReply(userText, rawToolReply);
-      const memoryUpdates = effectiveMemoryMode !== "off"
-        ? await applyYunMemoryUpdates(toolReplyDecision.memoryUpdates || decision.memoryUpdates || [])
+      const memoryUpdates = memoryActive
+        ? await applyYunMemoryUpdates(toolReplyDecision.memoryUpdates || decision.memoryUpdates || [], { signal })
         : [];
 
-      if (effectiveMemoryMode !== "off" && userText && finalReply) {
-        updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
+      if (signal.aborted) throw signal.reason;
+      if (memoryActive && userText && finalReply) {
+        updateYunMemoryIfNeeded(userText, finalReply, { signal }).catch(error => {
           console.error("[yun-memory] companion background update failed:", error);
         });
         await recordWechatConversationMemory({
@@ -5597,7 +5663,7 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
             companionState: decision.companionState || "soft_reply",
           },
           memoryPatch: toolReplyDecision.memoryPatch || decision.memoryPatch || {},
-        }).catch(error => {
+        }, { signal }).catch(error => {
           console.error("[yun-memory] wechat record failed:", error instanceof Error ? error.message : error);
         });
       }
@@ -5657,9 +5723,11 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
     const animation = animationForYunEmotion(emotion, decision.animation);
     decision.emotion = emotion;
     decision.animation = animation;
-    const memoryUpdates = effectiveMemoryMode !== "off"
-      ? await applyYunMemoryUpdates(decision.memoryUpdates || [])
+    const memoryWriteActive = memoryActive && (responseMode !== "silent" || explicitMemoryIntent);
+    const memoryUpdates = memoryWriteActive
+      ? await applyYunMemoryUpdates(decision.memoryUpdates || [], { signal })
       : [];
+    if (signal.aborted) throw signal.reason;
 
     let recommendations = [];
     if ((decision.shouldSuggestSong || ["suggest_song", "next_song"].includes(musicAction)) && songs.length) {
@@ -5686,28 +5754,34 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
     let finalReply = persona === "zhudongyu"
       ? rawFinalReply
       : shapeYunIdentityReply(userText, rawFinalReply);
-    const refreshedReply = await refreshRepeatedReply({
-      reply: finalReply,
-      recentAiReplies,
-      purpose: "chat",
-      context: `用户：${String(userText).slice(0, 300)}；策略：${decision.replyStrategy || ""}；最近聊天：${JSON.stringify(recentChat).slice(0, 700)}`,
-    });
-    if (refreshedReply) finalReply = refreshedReply;
-    if (effectiveMemoryMode !== "off" && userText && finalReply) {
-      updateYunMemoryIfNeeded(userText, finalReply).catch(error => {
-        console.error("[yun-memory] companion background update failed:", error);
-      });
-      await recordWechatConversationMemory({
-        source,
-        from: sourceContact,
-        rawText,
-        command: userText,
+    if (responseMode !== "silent") {
+      const refreshedReply = await refreshRepeatedReply({
         reply: finalReply,
-        decision,
-        memoryPatch: decision.memoryPatch || {},
-      }).catch(error => {
-        console.error("[yun-memory] wechat record failed:", error instanceof Error ? error.message : error);
+        recentAiReplies,
+        purpose: "chat",
+        context: `用户：${String(userText).slice(0, 300)}；策略：${decision.replyStrategy || ""}；最近聊天：${JSON.stringify(recentChat).slice(0, 700)}`,
+        signal,
       });
+      if (refreshedReply) finalReply = refreshedReply;
+    }
+    if (signal.aborted) throw signal.reason;
+    if (memoryWriteActive && userText && finalReply) {
+      await Promise.all([
+        updateYunMemoryIfNeeded(userText, finalReply, { signal }),
+        recordWechatConversationMemory({
+          source,
+          from: sourceContact,
+          rawText,
+          command: userText,
+          reply: finalReply,
+          decision,
+          memoryPatch: decision.memoryPatch || {},
+        }, { signal }).catch(error => {
+          if (signal.aborted) throw error;
+          console.error("[yun-memory] wechat record failed:", error instanceof Error ? error.message : error);
+        }),
+      ]);
+      if (signal.aborted) throw signal.reason;
     }
 
     return sendJson(res, 200, {
@@ -5736,9 +5810,12 @@ ${relationshipSupportActive ? `\n${RELATIONSHIP_SUPPORT_GUIDE}` : ""}`;
       memoryPatch: decision.memoryPatch || {},
     });
   } catch (error) {
+    if (signal.aborted || res.destroyed) return;
     return sendJson(res, 500, {
       error: error instanceof Error ? error.message : "陪伴聊天暂时失败",
     });
+  } finally {
+    lifecycle.cleanup();
   }
 }
 
@@ -5799,53 +5876,57 @@ async function recordWechatConversationMemory({
   reply = "",
   decision = {},
   memoryPatch = {},
-}) {
+}, { signal } = {}) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
   if (source !== "wechat") return null;
   const cleanCommand = String(command || rawText || "").trim();
   const cleanReply = String(reply || "").trim();
   if (!cleanCommand && !cleanReply) return null;
 
-  const memory = await loadYunMemory();
   const now = new Date().toISOString();
-  const topic = String(memoryPatch?.recentTopic || memoryPatch?.keyMemory || inferRealtimeMemoryTopic(cleanCommand, decision)).trim().slice(0, 80);
-  const emotion = String(memoryPatch?.recentEmotion || inferRealtimeEmotionSignal(cleanCommand, decision)).trim().slice(0, 40);
-  const contact = String(from || memory.userProfile?.name || "东宇").trim().slice(0, 40);
-  const turn = {
-    source: "wechat",
-    from: contact,
-    rawText: String(rawText || cleanCommand).trim().slice(0, 500),
-    command: cleanCommand.slice(0, 500),
-    reply: cleanReply.slice(0, 500),
-    emotion,
-    topic,
-    time: now,
-  };
+  let contact = "东宇";
+  let topic = "日常聊天";
+  let emotion = "平稳";
+  const { result: turn } = await mutateYunMemory(memory => {
+    topic = String(memoryPatch?.recentTopic || memoryPatch?.keyMemory || inferRealtimeMemoryTopic(cleanCommand, decision)).trim().slice(0, 80);
+    emotion = String(memoryPatch?.recentEmotion || inferRealtimeEmotionSignal(cleanCommand, decision)).trim().slice(0, 40);
+    contact = String(from || memory.userProfile?.name || "东宇").trim().slice(0, 40);
+    const nextTurn = {
+      source: "wechat",
+      from: contact,
+      rawText: String(rawText || cleanCommand).trim().slice(0, 500),
+      command: cleanCommand.slice(0, 500),
+      reply: cleanReply.slice(0, 500),
+      emotion,
+      topic,
+      time: now,
+    };
 
-  const turnKey = normalizeTagText(`${turn.from}|${turn.command}|${turn.reply}`);
-  const existing = new Set((memory.wechatChatHistory || []).map(item => normalizeTagText(`${item.from}|${item.command}|${item.reply}`)));
-  if (!existing.has(turnKey)) {
-    memory.wechatChatHistory = [...(memory.wechatChatHistory || []), turn].slice(-80);
-  }
-
-  memory.yunPersonalityState = {
-    ...(memory.yunPersonalityState || {}),
-    lastUpdatedAt: now,
-    activeRelationshipTone: "昀会把微信里的东宇当作同一个东宇来回应，记得最近微信里发生的事，语气自然、熟悉、短一点。",
-    recentWechatTopics: uniqueStrings([...(memory.yunPersonalityState?.recentWechatTopics || []), topic]).slice(-20),
-    recentEmotionalSignals: uniqueStrings([...(memory.yunPersonalityState?.recentEmotionalSignals || []), emotion]).slice(-20),
-  };
-
-  if (memoryPatch?.keyMemory) {
-    const keyMemory = String(memoryPatch.keyMemory).trim().slice(0, 240);
-    if (keyMemory) {
-      memory.relationshipMemory.yunShouldRemember = uniqueStrings([
-        ...(memory.relationshipMemory?.yunShouldRemember || []),
-        `微信里要记得：${keyMemory}`,
-      ]).slice(0, 80);
+    const turnKey = normalizeTagText(`${nextTurn.from}|${nextTurn.command}|${nextTurn.reply}`);
+    const existing = new Set((memory.wechatChatHistory || []).map(item => normalizeTagText(`${item.from}|${item.command}|${item.reply}`)));
+    if (!existing.has(turnKey)) {
+      memory.wechatChatHistory = [...(memory.wechatChatHistory || []), nextTurn].slice(-80);
     }
-  }
 
-  await saveYunMemory(memory);
+    memory.yunPersonalityState = {
+      ...(memory.yunPersonalityState || {}),
+      lastUpdatedAt: now,
+      activeRelationshipTone: "昀会把微信里的东宇当作同一个东宇来回应，记得最近微信里发生的事，语气自然、熟悉、短一点。",
+      recentWechatTopics: uniqueStrings([...(memory.yunPersonalityState?.recentWechatTopics || []), topic]).slice(-20),
+      recentEmotionalSignals: uniqueStrings([...(memory.yunPersonalityState?.recentEmotionalSignals || []), emotion]).slice(-20),
+    };
+
+    if (memoryPatch?.keyMemory) {
+      const keyMemory = String(memoryPatch.keyMemory).trim().slice(0, 240);
+      if (keyMemory) {
+        memory.relationshipMemory.yunShouldRemember = uniqueStrings([
+          ...(memory.relationshipMemory?.yunShouldRemember || []),
+          `微信里要记得：${keyMemory}`,
+        ]).slice(0, 80);
+      }
+    }
+    return nextTurn;
+  }, { signal });
   console.log(`[yun-memory] recorded wechat turn from ${contact}: ${topic}/${emotion}`);
   return turn;
 }
@@ -5887,18 +5968,17 @@ async function handleAddYunMemory(req, res) {
     if (!cleanContent) {
       return sendJson(res, 400, { error: "记忆内容不能为空" });
     }
-    const memory = await loadYunMemory();
     const item = {
       content: cleanContent.slice(0, 320),
       importance: clampNumber(importance, 1, 10, 7),
       tags: uniqueStrings(tags).slice(0, 8),
       time: new Date().toISOString(),
     };
-    const exists = (memory.episodicMemories || []).some(existing => normalizeTagText(existing.content) === normalizeTagText(item.content));
-    if (!exists) {
-      memory.episodicMemories = trimEpisodicMemories([...(memory.episodicMemories || []), item]);
-      await saveYunMemory(memory);
-    }
+    let exists = false;
+    const { memory } = await mutateYunMemory(current => {
+      exists = (current.episodicMemories || []).some(existing => normalizeTagText(existing.content) === normalizeTagText(item.content));
+      if (!exists) current.episodicMemories = trimEpisodicMemories([...(current.episodicMemories || []), item]);
+    });
     return sendJson(res, 200, { ok: true, memory, added: !exists, item });
   } catch (error) {
     return sendJson(res, 500, {
@@ -5973,7 +6053,12 @@ async function handleNativeVoiceProxy(req, res, pathname) {
     res.writeHead(upstream.response.status, { "Content-Type": upstream.contentType, "Cache-Control": "no-store" });
     res.end(upstream.body);
   } catch (error) {
-    sendJson(res, 503, { ok: false, engine: "browser_aec_fallback", error: error instanceof Error ? error.message : "Native voice engine unavailable" });
+    sendJson(res, 503, {
+      ok: false,
+      engine: "browser_aec_fallback",
+      code: error?.cause?.code || error?.code || "NATIVE_VOICE_UNAVAILABLE",
+      error: error instanceof Error ? error.message : "Native voice engine unavailable",
+    });
   }
 }
 
@@ -6836,14 +6921,13 @@ async function persistDeepSeekProConfig({ apiKey, baseUrl, model }) {
   if (/[\r\n]/.test(apiKey) || /[\r\n]/.test(baseUrl) || /[\r\n]/.test(model)) {
     throw new Error("模型配置不能包含换行符。");
   }
-  const envPath = path.join(__dirname, ".env");
   const lineEnding = "\r\n";
   const nextValues = new Map([
     ["DEEPSEEK_API_KEY", apiKey],
     ["DEEPSEEK_BASE_URL", baseUrl],
     ["DEEPSEEK_PRO_MODEL", model],
   ]);
-  const current = await readFile(envPath, "utf8").catch(() => "");
+  const current = await readFile(runtimeEnvironmentPath, "utf8").catch(() => "");
   const lines = current.split(/\r?\n/);
   const seen = new Set();
   const updated = lines.map((line) => {
@@ -6856,7 +6940,8 @@ async function persistDeepSeekProConfig({ apiKey, baseUrl, model }) {
   for (const [name, value] of nextValues) {
     if (!seen.has(name)) updated.push(`${name}=${value}`);
   }
-  await writeFile(envPath, updated.join(lineEnding).replace(/(?:\r?\n)+$/, "") + lineEnding, "utf8");
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(runtimeEnvironmentPath, updated.join(lineEnding).replace(/(?:\r?\n)+$/, "") + lineEnding, "utf8");
   process.env.DEEPSEEK_API_KEY = apiKey;
   process.env.DEEPSEEK_BASE_URL = baseUrl;
   process.env.DEEPSEEK_PRO_MODEL = model;
@@ -6962,7 +7047,12 @@ const server = http.createServer(async (req, res) => {
   const cowAgentOutcomeMatch = requestPath.match(/^\/api\/yun\/cowagent\/jobs\/([^/]+)\/outcome$/);
   const cowAgentJobMatch = requestPath.match(/^\/api\/yun\/cowagent\/jobs\/([^/]+)$/);
   if (req.method === "GET" && requestPath === "/api/health") {
-    return sendJson(res, 200, { ok: true, service: "yun-backend", timestamp: Date.now() });
+    return sendJson(res, 200, {
+      ok: true,
+      ...backendIdentity,
+      timestamp: Date.now(),
+      compatibilityNotice: process.env.YUN_DESKTOP_COMPATIBILITY_NOTICE || "",
+    });
   }
   if (req.method === "GET" && req.url === "/api/asr/status") {
     return handleAsrStatus(req, res);

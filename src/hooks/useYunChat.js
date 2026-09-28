@@ -158,6 +158,7 @@ export function useYunChat({
   const lastPodcastAutoAnnouncementAtRef = useRef(0)
   const requestEpochRef = useRef(0)
   const requestBusyRef = useRef(false)
+  const requestAbortControllerRef = useRef(null)
   const queuedLatestMessageRef = useRef(null)
   const pendingPlaylistSelectionRef = useRef(null)
 
@@ -184,8 +185,10 @@ export function useYunChat({
   // A spoken turn is always latest-wins. Network work may continue in the
   // background, but its result must lose the right to update UI, execute a
   // music action, or start TTS as soon as the user speaks again.
-  const cancelActiveRequest = useCallback(() => {
+  const cancelActiveRequest = useCallback((reason = 'interrupted') => {
     requestEpochRef.current += 1
+    requestAbortControllerRef.current?.abort(new DOMException(`Conversation turn cancelled: ${reason}`, 'AbortError'))
+    requestAbortControllerRef.current = null
     queuedLatestMessageRef.current = null
     requestBusyRef.current = false
     setIsThinking(false)
@@ -203,6 +206,7 @@ export function useYunChat({
       // Keep one latest turn only.  A new spoken command supersedes the
       // previous pending interpretation; it must never disappear silently.
       requestEpochRef.current += 1
+      requestAbortControllerRef.current?.abort(new DOMException('Superseded by a newer conversation turn', 'AbortError'))
       queuedLatestMessageRef.current = { text: userText, options: { ...options, imageFile, _alreadyQueued: true } }
       voice?.stopSpeaking?.()
       setMessages((current) => [...current, createMessage('user', imageFile ? `${userText}\n[图片：${imageFile.name}]` : userText)])
@@ -210,6 +214,9 @@ export function useYunChat({
     }
 
     const requestEpoch = ++requestEpochRef.current
+    const requestId = String(options.responseId || `yun-turn-${requestEpoch}`)
+    const requestController = options.abortController || new AbortController()
+    requestAbortControllerRef.current = requestController
     const isCurrentRequest = () => requestEpoch === requestEpochRef.current
     requestBusyRef.current = true
 
@@ -236,7 +243,10 @@ export function useYunChat({
 
     try {
       if (imageFile) {
-        const visionAnswer = await sendVisionMessage(imageFile, displayText)
+        const visionAnswer = await sendVisionMessage(imageFile, displayText, {
+          signal: requestController.signal,
+          responseId: requestId,
+        })
         const visionUserText = [
           `用户发来一张图片，并说：${displayText}`,
           '下面是视觉模型对图片的客观识别结果。请你作为昀来回复用户：自然、温柔、清楚，不要说“视觉模型说”，不要暴露中间流程，也不要编造图片里没有的内容。',
@@ -251,12 +261,15 @@ export function useYunChat({
           companionMemory: memory?.companionMemory || {},
           userMemory: memory?.memoryContext || null,
           memoryEnabled: memory?.memoryEnabled !== false,
+          memoryMode: memory?.memoryMode || 'smart',
           recentAiReplies,
           questionCountWindow,
           localTime: new Date().toLocaleString('zh-CN'),
           playHistory,
           rejectedTracks: [],
           recentRecommendations,
+          responseId: requestId,
+          signal: requestController.signal,
         })
         if (!isCurrentRequest()) return false
         const decision = response.decision || {}
@@ -291,6 +304,8 @@ export function useYunChat({
         recentRecommendations,
         pendingPlaylistSelection: pendingPlaylistSelectionRef.current,
         inputMode,
+        signal: requestController.signal,
+        responseId: requestId,
       })
       if (!isCurrentRequest()) return false
 
@@ -307,7 +322,11 @@ export function useYunChat({
         }
 
         if (responseMode === 'podcast' && routed.songReactionTrigger && routed.song) {
-          const reacted = await reactToSongChange(routed.song, routed.songReactionTrigger)
+          const reacted = await reactToSongChange(routed.song, routed.songReactionTrigger, null, {
+            responseId: requestId,
+            signal: requestController.signal,
+          })
+          if (!isCurrentRequest()) return false
 
           if (reacted) {
             return
@@ -343,13 +362,18 @@ export function useYunChat({
           void voice?.speakText?.(reply, { allowBargeIn: true })
         }
       }
-      const agentResult = await agent.run(displayText, { isCurrentRequest, inputMode })
+      const agentResult = await agent.run(displayText, {
+        isCurrentRequest,
+        inputMode,
+        signal: requestController.signal,
+        responseId: requestId,
+      })
       if (!isCurrentRequest()) return false
       if (agentResult?.ok && (agentResult.actions?.length || agentResult.source === 'skill')) {
         announceAgentReply(agentResult)
         if (agentResult.analysisQueued && agent.waitForSkillCandidate) {
           void agent.waitForSkillCandidate(agentResult.startedAt).then((candidate) => {
-            if (!candidate) return
+            if (!candidate || !isCurrentRequest()) return
             setMessages((current) => [...current, createMessage(
               'assistant',
               '我发现这类请求可以在下次更快完成，先给你做成一个候选快捷方式。',
@@ -370,12 +394,15 @@ export function useYunChat({
         companionMemory: memory?.companionMemory || {},
         userMemory: memory?.memoryContext || null,
         memoryEnabled: memory?.memoryEnabled !== false,
+        memoryMode: memory?.memoryMode || 'smart',
         recentAiReplies,
         questionCountWindow,
         localTime: new Date().toLocaleString('zh-CN'),
         playHistory,
         rejectedTracks: [],
         recentRecommendations,
+        responseId: requestId,
+        signal: requestController.signal,
       })
       if (!isCurrentRequest()) return false
 
@@ -429,16 +456,19 @@ export function useYunChat({
       ])
     } finally {
       if (isCurrentRequest()) setIsThinking(false)
-      const queued = queuedLatestMessageRef.current
-      requestBusyRef.current = false
-      if (queued && requestEpoch !== requestEpochRef.current) {
-        queuedLatestMessageRef.current = null
-        window.setTimeout(() => sendMessage(queued.text, queued.options), 0)
+      if (requestAbortControllerRef.current === requestController) {
+        requestAbortControllerRef.current = null
+        const queued = queuedLatestMessageRef.current
+        requestBusyRef.current = false
+        if (queued && requestEpoch !== requestEpochRef.current) {
+          queuedLatestMessageRef.current = null
+          window.setTimeout(() => sendMessage(queued.text, queued.options), 0)
+        }
       }
     }
   }
 
-  const reactToSongChange = useCallback(async (song, trigger = 'play', previousSong = null) => {
+  const reactToSongChange = useCallback(async (song, trigger = 'play', previousSong = null, options = {}) => {
     const companionTransition = trigger === 'companion_transition' && playbackMode === 'companion_continue'
     const reactionMode = companionTransition ? 'podcast' : responseMode
     if (!song || reactionMode !== 'podcast') {
@@ -467,7 +497,10 @@ export function useYunChat({
         personaMode,
         recentChat: chatHistory.slice(-6),
         recentAiReplies,
+        responseId: options.responseId,
+        signal: options.signal,
       })
+      if (options.signal?.aborted) return false
       const reply = String(response.reply || '').trim()
 
       if (!reply || response.displayMessage === false) {

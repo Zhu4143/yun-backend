@@ -1,3 +1,19 @@
+## 2026-09-28 Core stability / wake pipeline repair checkpoint
+
+Branch: feature/netease-capability-p2.
+
+This checkpoint covers the boot dependency chain and degraded-provider behavior; response/session cancellation across chat, TTS, and HTTP requests; single-owner native/browser microphone fallback and command capture; memory prompt-off semantics and serialized atomic persistence; transactional Up Next queue consumption; and Electron backend identity, runtime environment, and per-user data setup.
+
+- npm.cmd run verify passed on 2026-09-28, including lint, the full configured unit/integration suites, conversation E2E, and production build.
+- npm.cmd run desktop:dist passed and produced a local 1.0.10 Windows installer. The installer is a local build artifact, not part of this source checkpoint.
+- Wake thresholds were compared against the recorded historical implementations and left unchanged. Automated state and ownership checks passed; physical microphone sensitivity and false-wake rates still require a same-device test.
+- Electron packages code and build metadata without bundling the repository's personal server/data files; runtime data and environment settings use Electron userData.
+- Detailed continuation notes: [YUN_HANDOFF_2026-09-28.md](./YUN_HANDOFF_2026-09-28.md).
+
+The verification section below records the earlier 2026-09-25 checkpoint and its then-current lint state; this 2026-09-28 checkpoint supersedes that state.
+
+---
+
 # Yun Music Project Progress — 2026-09-25
 
 This is the public, repository-safe entry point for reviewing the current React/Vite and Electron music app.

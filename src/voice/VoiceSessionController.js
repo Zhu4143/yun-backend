@@ -12,6 +12,7 @@ export class VoiceSessionController {
     this.state = createInitialVoiceState()
     this.idSequence = 0
     this.cancellations = new Map()
+    this.sessionCancellations = new Set()
   }
 
   dispatch(type, payload = {}) {
@@ -38,7 +39,7 @@ export class VoiceSessionController {
   }
 
   endSession(reason = 'ended') {
-    if (this.state.responseId) this.cancelResponse(this.state.responseId, reason)
+    this.cancelResponse(undefined, reason)
     this.dispatch(VOICE_EVENT.SESSION_ENDED, { reason })
   }
 
@@ -73,9 +74,19 @@ export class VoiceSessionController {
     return () => operations.delete(cancel)
   }
 
+  registerSessionCancellation(cancel) {
+    if (typeof cancel !== 'function') return () => {}
+    this.sessionCancellations.add(cancel)
+    return () => this.sessionCancellations.delete(cancel)
+  }
+
   createAbortController(responseId) {
     const controller = new AbortController()
-    this.registerCancellation(responseId, () => controller.abort())
+    this.registerCancellation(responseId, (reason) => {
+      if (!controller.signal.aborted) {
+        controller.abort(new DOMException(`Conversation turn cancelled: ${reason || 'interrupted'}`, 'AbortError'))
+      }
+    })
     return controller
   }
 
@@ -94,15 +105,33 @@ export class VoiceSessionController {
   }
 
   cancelResponse(responseId = this.state.responseId, reason = 'interrupted') {
-    if (!responseId) return false
-    const operations = this.cancellations.get(responseId)
-    operations?.forEach((cancel) => {
-      try { cancel(reason) } catch { /* cancellation must not block the state transition */ }
-    })
-    this.cancellations.delete(responseId)
-    this.telemetry.mark(`response:${responseId}:cancelled`, { reason })
-    if (responseId === this.state.responseId) this.dispatch(VOICE_EVENT.INTERRUPTED, { responseId, reason })
-    return true
+    const activeResponseId = responseId || this.state.responseId
+    const shouldCancelSession = !activeResponseId || activeResponseId === this.state.responseId
+    let didCancel = false
+    if (activeResponseId) {
+      const operations = this.cancellations.get(activeResponseId)
+      operations?.forEach((cancel) => {
+        try { cancel(reason) } catch { /* cancellation must not block the state transition */ }
+      })
+      this.cancellations.delete(activeResponseId)
+      this.telemetry.mark(`response:${activeResponseId}:cancelled`, { reason })
+      didCancel = Boolean(operations?.size)
+      if (activeResponseId === this.state.responseId) {
+        this.dispatch(VOICE_EVENT.INTERRUPTED, { responseId: activeResponseId, reason })
+        didCancel = true
+      }
+    }
+
+    // The conversation hook can still own fetch/model work after TTS has
+    // ended and the response state has been cleared. Invalidate that work at
+    // the session boundary even when there is no active audio response.
+    if (shouldCancelSession) {
+      this.sessionCancellations.forEach((cancel) => {
+        try { cancel(reason) } catch { /* cancellation must not block the state transition */ }
+      })
+      didCancel ||= this.sessionCancellations.size > 0
+    }
+    return didCancel
   }
 
   timeout() {

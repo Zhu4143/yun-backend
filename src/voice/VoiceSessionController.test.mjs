@@ -47,3 +47,37 @@ test('a new user turn cancels an in-flight response and enters transcribing', ()
   assert.equal(controller.getSnapshot().input, 'transcribing')
   assert.equal(controller.getSnapshot().output, 'idle')
 })
+
+test('session cancellation invalidates late conversation work after audio output has ended', () => {
+  const controller = new VoiceSessionController()
+  let reason = ''
+  controller.registerSessionCancellation((value) => { reason = value })
+  const responseId = controller.startResponse()
+  controller.outputEnded(responseId)
+
+  assert.equal(controller.getSnapshot().responseId, null)
+  assert.equal(controller.cancelResponse(undefined, 'new_wake'), true)
+  assert.equal(reason, 'new_wake')
+})
+
+test('cancelling the active response runs session-level cancellation', () => {
+  const controller = new VoiceSessionController()
+  let reason = ''
+  controller.registerSessionCancellation((value) => { reason = value })
+  const responseId = controller.startResponse()
+
+  assert.equal(controller.cancelResponse(responseId, 'barge_in'), true)
+  assert.equal(reason, 'barge_in')
+})
+
+test('response abort controllers keep the lifecycle cancellation reason', () => {
+  const controller = new VoiceSessionController()
+  const responseId = controller.startResponse()
+  const request = controller.createAbortController(responseId)
+
+  controller.cancelResponse(responseId, 'new_user_turn')
+
+  assert.equal(request.signal.aborted, true)
+  assert.equal(request.signal.reason.name, 'AbortError')
+  assert.match(request.signal.reason.message, /new_user_turn/)
+})
