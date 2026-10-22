@@ -75,7 +75,10 @@ test('caller cancellation reaches the fetch and is not retried', async () => {
   assert.equal(attempts, 1)
 })
 
-test('timeout is combined with rather than substituted for the caller signal', async () => {
+test('timeout is combined with rather than substituted for the caller signal', async t => {
+  // The mock has no socket to keep Node alive; AbortSignal.timeout is unref'd.
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
   let downstreamSignal
   const pending = fetchWithRetry('https://example.test/audio', { signal: new AbortController().signal }, {
     attempts: 1,
