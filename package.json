@@ -1,7 +1,7 @@
 {
   "name": "yun-liquid-ui-react",
   "private": true,
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "昀 - 沉浸式智能音乐助手",
   "author": "zhudo",
   "main": "electron/main.js",
@@ -20,16 +20,19 @@
     "test:feedback": "node --test server/discovery/feedbackLoop.test.js",
     "test:core": "node --test server/yun-agent/core/toolRegistry.test.js server/yun-agent/core/permission.test.js server/yun-agent/core/stateStore.test.js server/yun-agent/core/memoryStore.test.js server/yun-agent/core/index.test.js server/yun-agent/agentLoop.test.js server/yun-agent/skillMining.test.js",
     "test:boot": "node --test src/boot/BootGate.test.js src/boot/YunBootManager.test.js src/boot/playlistLoader.test.js",
+    "test:app": "node --test src/app/musicAppPolicy.test.mjs src/app/voiceCaptureLifecycle.test.mjs src/app/continuousVoiceCall.test.mjs src/api/neteaseAuthApi.test.js src/app/coverCrossfade.test.js src/app/recordArtwork.test.js src/app/immersivePalette.test.js src/app/appearance.test.js src/app/glassInteraction.test.js src/app/liquidGlassPass.test.js src/app/commentAutoScroll.test.js src/app/trackChorus.test.js server/netease/songChorus.test.js server/immersiveBackgroundStore.test.js src/app/lyricEffects.test.js src/app/lyricFontMatching.test.js server/lyricEffectsStore.test.js src/app/timelinePainter.test.js src/app/recordLayout.test.js",
+    "test:security": "node --test server/requestBoundary.test.js",
     "test:desktop": "node --test electron/backendRuntime.test.js electron/desktopLauncher.test.js electron/packageManifest.test.js server/runtimeEnvironment.test.js server/backendIdentity.test.js",
     "test:player": "node --test src/player/playerTypes.test.js src/player/audio/AudioEngine.test.js src/player/playback/playbackOrchestration.test.js src/player/playback/UpNextQueueTransaction.test.js src/player/transition/CrossfadeController.test.js src/player/adapters/yunLegacyPlayerAdapter.test.js src/player/react/usePlayer.test.js",
     "test:visual": "node --test src/components/particleVinylCoverTextureLifecycle.test.js",
     "test:gesture": "node --test src/gestures/HandGestureController.test.js",
     "test:voice": "node --test src/voice/VoiceSessionController.test.mjs src/voice/PendingPlaybackController.test.mjs src/voice/MicrophoneOwnerStateMachine.test.js src/voice/BrowserRecognitionQueue.test.js src/voice/audio/AudioCaptureManager.test.js src/voice/audio/EchoCanceller.test.mjs src/api/requestApi.test.js src/api/companionApi.test.js server/asr/asrService.test.mjs",
-    "test:services": "node --test server/agent/modelProvider.test.js server/requestLifecycle.test.js server/atomicJsonStore.test.js server/memoryPromptPolicy.test.js server/conversationMemoryWrites.test.js server/netRequest.test.js server/ttsRuntimeHealth.test.js src/api/memoryApi.test.js server/cowagentBridge.test.js server/music-intelligence/transitionPlanner.test.js server/netease/capabilityService.test.js src/api/neteaseApi.test.js src/api/smartMusicApi.test.js src/services/netease/capabilityArchitecture.test.js src/services/netease/capabilityTruth.test.js src/services/chatIntentRouter.test.js src/services/radioEngine.test.js src/services/yunAgentActions.test.js src/services/yunAgentReply.test.js",
+    "test:avatar": "node --test src/avatar/portraitMotion.test.js src/avatar/portraitSpeech.test.js src/avatar/portraitFrameProcessing.test.js src/voice/audio/voiceMeter.test.js",
+    "test:services": "node --test server/agent/modelProvider.test.js server/requestLifecycle.test.js server/atomicJsonStore.test.js server/memoryPromptPolicy.test.js server/conversationMemoryWrites.test.js server/netRequest.test.js server/ttsRuntimeHealth.test.js src/api/memoryApi.test.js server/cowagentBridge.test.js server/music-intelligence/transitionPlanner.test.js server/netease/capabilityService.test.js src/api/neteaseApi.test.js src/api/smartMusicApi.test.js src/services/netease/likeController.test.js src/services/netease/capabilityArchitecture.test.js src/services/netease/capabilityTruth.test.js src/services/chatIntentRouter.test.js src/services/radioEngine.test.js src/services/yunAgentActions.test.js src/services/yunAgentReply.test.js",
     "test:e2e:conversation": "node scripts/yun-conversation-e2e.mjs",
     "test:e2e:netease": "node scripts/yun-conversation-e2e.mjs --real",
     "lint": "eslint .",
-    "verify": "npm run lint && npm run test:boot && npm run test:desktop && npm run test:player && npm run test:visual && npm run test:gesture && npm run test:voice && npm run test:telemetry && npm run test:services && npm run test:e2e:conversation && npm run test:discovery && npm run test:feedback && npm run test:core && npm run test:moss && npm run build",
+    "verify": "npm run lint && npm run test:boot && npm run test:app && npm run test:security && npm run test:desktop && npm run test:player && npm run test:visual && npm run test:gesture && npm run test:voice && npm run test:avatar && npm run test:telemetry && npm run test:services && npm run test:e2e:conversation && npm run test:discovery && npm run test:feedback && npm run test:core && npm run test:moss && npm run build",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
     "desktop:pack": "npm run build && node scripts/write-build-info.mjs && electron-builder --dir",
@@ -89,7 +92,10 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "build/build-info.json", "to": "build-info.json" }
+      {
+        "from": "build/build-info.json",
+        "to": "build-info.json"
+      }
     ],
     "win": {
       "icon": "build/icon.png",

@@ -3,6 +3,31 @@ import test from 'node:test'
 
 import { PendingPlaybackController } from './PendingPlaybackController.mjs'
 
+test('browser timers keep their required global receiver', async () => {
+  const originalSchedule = globalThis.setTimeout
+  const originalCancel = globalThis.clearTimeout
+  let cancelled = false
+  let pending
+  try {
+    globalThis.setTimeout = function () {
+      assert.equal(this, globalThis)
+      return 41
+    }
+    globalThis.clearTimeout = function (id) {
+      assert.equal(this, globalThis)
+      assert.equal(id, 41)
+      cancelled = true
+    }
+    pending = new PendingPlaybackController().begin({ timeoutMs: 100 })
+    pending.finish(true)
+  } finally {
+    globalThis.setTimeout = originalSchedule
+    globalThis.clearTimeout = originalCancel
+  }
+  assert.equal(cancelled, true)
+  assert.equal(await pending.promise, true)
+})
+
 test('native playback settles successfully when the end event arrives', async () => {
   const playback = new PendingPlaybackController()
   const pending = playback.begin({ timeoutMs: 60_000 })

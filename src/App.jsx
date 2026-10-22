@@ -22,7 +22,12 @@ import { usesAutomaticNextQueue } from './player/playback/playbackOrchestration'
 import { PlayerProvider } from './player/react/PlayerProvider'
 import { usePlayerObserver } from './telemetry/playerObserver'
 import { useTtsObserver } from './telemetry/ttsObserver'
+import { AVATAR_PHASE, AVATAR_TRANSITION_MS, resolveAvatarPhase, resolveAvatarRenderPhase } from './avatar/portraitMotion.js'
 import FloatingLyrics from './components/FloatingLyrics'
+import NeteaseLikeButton from './components/NeteaseLikeButton'
+import YunLayoutEditor from './components/YunLayoutEditor'
+import { useRecordSkinTransition } from './skins/useRecordSkinTransition'
+
 import {
   LYRIC_3D_CONTROLS,
   LYRIC_3D_DEFAULTS,
@@ -53,9 +58,12 @@ import YunLoginPanel from './intro/YunLoginPanel'
 import './App.css'
 
 const ParticleVinylBackground = lazy(() => import('./components/ParticleVinylBackground'))
+const CdCaseBackground = lazy(() => import('./skins/cd-case/CdCaseBackground'))
+const CdCaseLyrics = lazy(() => import('./skins/cd-case/CdCaseLyrics'))
 const MOUNTAIN_SETTINGS_STORAGE_KEY = 'yun-particle-vinyl-mountain-settings'
 const MOUNTAIN_SETTINGS_LOCK_KEY = 'yun-particle-vinyl-settings-locked'
 const VISUAL_QUALITY_STORAGE_KEY = 'yun-visual-quality'
+const RECORD_SKIN_STORAGE_KEY = 'yun-record-skin'
 const DEFAULT_MOUNTAIN_CONTROLS = { edge: 0.68, height: 0.36, peaks: 0.42, speed: 0.006 }
 // Keep large NetEase playlists inexpensive. A row is 54px high with a 9px
 // gap; the extra pixels prevent a blank edge from small layout differences.
@@ -477,11 +485,72 @@ function getWallpaperRuntime() {
   return { wallpaperMode, quality }
 }
 
-function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', preloadCoverUrls = [], getFrequencyData, mountainControls, backgroundBrightness, topFogStrength, topBlurStrength, viewLocked, voiceOrbVisible, voiceOrbLevel = 0, gestureControlRef, onReady, quality = 'high', liquidMetalSettings }) {
+function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', preloadCoverUrls = [], getFrequencyData, mountainControls, backgroundBrightness, topFogStrength, topBlurStrength, viewLocked, voiceOrbVisible, voiceOrbLevel = 0, gestureControlRef, onReady, quality = 'high', liquidMetalSettings, avatarPhase = AVATAR_PHASE.VINYL_IDLE, avatarTurnId = 0, voiceMeterRef, recordPresentation }) {
+  const progressRef = useRef(0)
+  const [portraitProgress, setPortraitProgress] = useState(0)
+  const [debugPhase, setDebugPhase] = useState(null)
+  const [wakeMotionComplete, setWakeMotionComplete] = useState(false)
+  const avatarDebugEnabled = import.meta.env.DEV && new URLSearchParams(window.location.search).get('avatarDebug') === '1'
+  const effectiveAvatarPhase = avatarPhase === AVATAR_PHASE.SPEAKING
+    ? avatarPhase
+    : avatarDebugEnabled && debugPhase ? debugPhase : avatarPhase
+  const portraitActive = effectiveAvatarPhase !== AVATAR_PHASE.VINYL_IDLE
+  const previousAvatarStateRef = useRef({ active: false, turnId: avatarTurnId })
+  const renderAvatarPhase = resolveAvatarRenderPhase({
+    phase: effectiveAvatarPhase,
+    progress: portraitProgress,
+    wakeMotionComplete,
+  })
+
+  useEffect(() => {
+    const previous = previousAvatarStateRef.current
+    if (portraitActive && (!previous.active || previous.turnId !== avatarTurnId)) setWakeMotionComplete(false)
+    previousAvatarStateRef.current = { active: portraitActive, turnId: avatarTurnId }
+  }, [avatarTurnId, portraitActive])
+
+  useEffect(() => {
+    const handleWakeMotionEnded = (event) => {
+      if (event.detail?.turnId === avatarTurnId) {
+        setWakeMotionComplete(true)
+      }
+    }
+    const handleSpeechStarted = () => setWakeMotionComplete(true)
+    window.addEventListener('yun:avatar-wake-motion-ended', handleWakeMotionEnded)
+    window.addEventListener('yun:tts-playback-started', handleSpeechStarted)
+    return () => {
+      window.removeEventListener('yun:avatar-wake-motion-ended', handleWakeMotionEnded)
+      window.removeEventListener('yun:tts-playback-started', handleSpeechStarted)
+    }
+  }, [avatarTurnId])
+
+  useEffect(() => {
+    const from = progressRef.current
+    const to = portraitActive ? 1 : 0
+    if (Math.abs(from - to) < 0.001) return undefined
+    let frameId = 0
+    let lastPublishedAt = 0
+    const startedAt = performance.now()
+    const durationMs = AVATAR_TRANSITION_MS
+    const animate = (now) => {
+      const linear = Math.min(1, (now - startedAt) / durationMs)
+      const eased = linear * linear * linear * (linear * (linear * 6 - 15) + 10)
+      const next = from + (to - from) * eased
+      progressRef.current = linear >= 1 ? to : next
+      if (now - lastPublishedAt >= 48 || linear >= 1) {
+        lastPublishedAt = now
+        setPortraitProgress(progressRef.current)
+      }
+      if (linear < 1) frameId = window.requestAnimationFrame(animate)
+    }
+    frameId = window.requestAnimationFrame(animate)
+    return () => window.cancelAnimationFrame(frameId)
+  }, [portraitActive])
+
   return (
-    <div className="bg-image">
+    <div className="bg-image yun-avatar-scene">
       <Suspense fallback={null}>
         <ParticleVinylBackground
+          recordPresentation={recordPresentation}
           active={active}
           coverUrl={coverUrl}
           trackKey={trackKey}
@@ -498,8 +567,36 @@ function AnimatedBackground({ active = false, coverUrl = '', trackKey = '', prel
           onReady={onReady}
           quality={quality}
           liquidMetalSettings={liquidMetalSettings}
+          portraitTransition={portraitProgress}
+          portraitProgressRef={progressRef}
+          avatarPhase={renderAvatarPhase}
+          avatarTurnId={avatarTurnId}
+          voiceMeterRef={voiceMeterRef}
         />
       </Suspense>
+      {avatarDebugEnabled && (
+        <aside className="yun-avatar-debug" aria-label="昀粒子人像状态预览">
+          <strong>AVATAR MOTION</strong>
+          {[
+            [AVATAR_PHASE.VINYL_IDLE, '唱片'],
+            [AVATAR_PHASE.WAKE_MOTION, '唤醒'],
+            [AVATAR_PHASE.LISTENING, '聆听'],
+            [AVATAR_PHASE.THINKING, '思考'],
+            [AVATAR_PHASE.SPEAKING, '说话'],
+          ].map(([phase, label]) => (
+            <button
+              key={phase}
+              type="button"
+              aria-pressed={effectiveAvatarPhase === phase}
+              className={effectiveAvatarPhase === phase ? 'is-active' : ''}
+              onClick={() => setDebugPhase(phase)}
+            >
+              {label}
+            </button>
+          ))}
+          <small>{renderAvatarPhase}</small>
+        </aside>
+      )}
     </div>
   )
 }
@@ -561,6 +658,24 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     },
   } : null)
   const [{ wallpaperMode, quality: initialVisualQuality }] = useState(getWallpaperRuntime)
+  const [cdCaseSkin, setCdCaseSkin] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get('skin')
+    if (requested) return requested === 'cd-case'
+    try { return window.localStorage.getItem(RECORD_SKIN_STORAGE_KEY) === 'cd-case' }
+    catch { return false }
+  })
+  const [cdLibraryOpen, setCdLibraryOpen] = useState(false)
+  const applyRecordSkin = useCallback(next => {
+    setCdCaseSkin(next)
+    const skin = next ? 'cd-case' : 'particle'
+    try { window.localStorage.setItem(RECORD_SKIN_STORAGE_KEY, skin) }
+    catch { /* Switching remains available when storage is unavailable. */ }
+    const url = new URL(window.location.href)
+    url.searchParams.set('skin', skin)
+    window.history.replaceState(window.history.state, '', url)
+  }, [])
+  const { motion: recordPresentation, transition: recordTransition, particleLayer, cdLayer, begin: beginRecordTransition } = useRecordSkinTransition(applyRecordSkin)
+  const closeCdLibrary = useCallback(() => setCdLibraryOpen(false), [])
   const [visualQuality, setVisualQuality] = useState(initialVisualQuality)
   const [liquidOreSettings, setLiquidOreSettings] = useState(loadLiquidOreGlassSettings)
   const [liquidOreSettingsStatus, setLiquidOreSettingsStatus] = useState('已加载本机保存值')
@@ -646,6 +761,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
   }, [])
   const personaMode = 'warm'
   const [uiMode, setUiMode] = useState('immersive')
+  const [layoutEditing, setLayoutEditing] = useState(false)
   const [mountainPanelOpen, setMountainPanelOpen] = useState(false)
   const [initialMountainSettings] = useState(getInitialMountainSettings)
   const [mountainControls, setMountainControls] = useState(initialMountainSettings.mountainControls)
@@ -655,6 +771,8 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
   const [mountainSettingsLocked, setMountainSettingsLocked] = useState(() => window.localStorage.getItem(MOUNTAIN_SETTINGS_LOCK_KEY) === 'true')
   const [viewLocked, setViewLocked] = useState(() => window.localStorage.getItem('yun-particle-vinyl-view-locked') === 'true')
   const [voiceInputActive, setVoiceInputActive] = useState(false)
+  const [wakePortraitActive, setWakePortraitActive] = useState(false)
+  const [wakePortraitTurnId, setWakePortraitTurnId] = useState(0)
   const [nativeCommandListening, setNativeCommandListening] = useState(false)
   const [nativeCommandTranscribing, setNativeCommandTranscribing] = useState(false)
   const [voiceVisualActive, setVoiceVisualActive] = useState(false)
@@ -761,14 +879,6 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
       window.removeEventListener('keydown', keepOpen)
     }
   }, [immersivePlayerVisible, revealImmersivePlayer, uiMode])
-
-  useEffect(() => {
-    if (uiMode !== 'immersive' || activePanel !== 'playMode') return
-    // The mode chooser grows out of the player button. Do not let the
-    // immersive auto-hide timer remove its source while the chooser is open.
-    window.clearTimeout(immersivePlayerTimerRef.current)
-    setImmersivePlayerVisible(true)
-  }, [activePanel, uiMode])
 
   useEffect(() => () => window.clearTimeout(immersivePlayerTimerRef.current), [])
 
@@ -959,6 +1069,8 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     // talk or act from the prior turn before showing the listening state.
     voiceController.cancelResponse(undefined, 'new_wake')
     voiceController.wakeDetected()
+    setWakePortraitActive(true)
+    setWakePortraitTurnId((current) => current + 1)
     const previousIndex = previousWakeAcknowledgementRef.current
     let nextIndex = Math.floor(Math.random() * WAKE_ACKNOWLEDGEMENTS.length)
     if (WAKE_ACKNOWLEDGEMENTS.length > 1 && nextIndex === previousIndex) {
@@ -1049,7 +1161,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
       wakeAcknowledgementInFlightRef.current = false
       setWakeAcknowledging(false)
     }
-  }, [startCompanionCall, voiceController, yunVoice])
+  }, [setWakePortraitActive, setWakePortraitTurnId, startCompanionCall, voiceController, yunVoice])
   const handleBargeInCandidate = useCallback(({ rms, aecMode }) => {
     console.debug('[BARGE-IN] candidate detected', { rms, aecMode })
     if (!yunVoice.isSpeaking || voiceInputActive) return
@@ -1205,6 +1317,26 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     memory: yunMemory,
     agent: yunAgent,
   })
+  const avatarPhase = useMemo(() => {
+    const listening = nativeCommandListening
+      || voiceInputActive
+      || asrWakeWord.commandCaptureActive
+      || companionCallActive
+    const thinking = nativeCommandTranscribing
+      || chatIsThinking
+      || wakeAcknowledging
+      || yunVoice.isPreparingSpeech
+    const speaking = yunVoice.isSpeaking
+    return resolveAvatarPhase({
+      responseMode,
+      active: wakePortraitActive || listening || thinking || speaking,
+      speaking,
+      thinking,
+      // With no new input, remain quietly attentive after the reply rather
+      // than restarting the greeting animation during the return delay.
+      listening: listening || wakePortraitActive,
+    })
+  }, [asrWakeWord.commandCaptureActive, chatIsThinking, companionCallActive, nativeCommandListening, nativeCommandTranscribing, responseMode, voiceInputActive, wakeAcknowledging, wakePortraitActive, yunVoice.isPreparingSpeech, yunVoice.isSpeaking])
   useEffect(() => {
     let responseId = voiceController.getSnapshot().responseId
     if (yunVoice.isPreparingSpeech && !responseId) {
@@ -1229,6 +1361,19 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     }, 250)
     return () => window.clearTimeout(timer)
   }, [chatIsThinking, voiceController, voiceSessionSnapshot.responseId, yunVoiceIsActive])
+  useEffect(() => {
+    if (!wakePortraitActive) return undefined
+    const turnIsActive = nativeCommandListening
+      || nativeCommandTranscribing
+      || voiceInputActive
+      || asrWakeWord.commandCaptureActive
+      || companionCallActive
+      || chatIsThinking
+      || yunVoiceIsActive
+    if (turnIsActive) return undefined
+    const timer = window.setTimeout(() => setWakePortraitActive(false), 1400)
+    return () => window.clearTimeout(timer)
+  }, [asrWakeWord.commandCaptureActive, chatIsThinking, companionCallActive, nativeCommandListening, nativeCommandTranscribing, voiceInputActive, wakePortraitActive, wakePortraitTurnId, yunVoiceIsActive])
   useLayoutEffect(() => {
     cancelActiveChatRequestRef.current = cancelActiveChatRequest
     return voiceController.registerSessionCancellation((reason) => cancelActiveChatRequestRef.current(reason))
@@ -1508,7 +1653,31 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     return () => window.clearTimeout(resumeTimer)
   }, [chatIsThinking, companionCallActive, nativeCommandListening, nativeCommandTranscribing, voiceInputActive, voiceResumeDelayMs, wakeAcknowledging, yunVoiceIsActive])
 
+  const switchRecordSkin = () => {
+    if (recordPresentation.state.active) {
+      beginRecordTransition()
+      return
+    }
+    const next = !cdCaseSkin
+    // Only the visual tree changes. The player, queue, account and song remain
+    // mounted in App; finish outgoing visual shells before replacing their renderer.
+    setCdLibraryOpen(false)
+    setActivePanel(null)
+    setLibraryEdgeOpen(false)
+    setMountainPanelOpen(false)
+    setPendingMorph(null)
+    setMorphLayer(null)
+    setTopControlsMorph(null)
+    setPlayerMorph(null)
+    setPanelContentVisible(true)
+    setTopControlsMorphContentVisible(true)
+    setPlayerMorphContentVisible(true)
+    window.clearTimeout(libraryEdgeTimerRef.current)
+    beginRecordTransition(cdCaseSkin ? 'cd-case' : 'particle', next ? 'cd-case' : 'particle')
+  }
+
   const openLibraryFromEdge = useCallback(() => {
+    if (cdCaseSkin) { setCdLibraryOpen(true); return }
     window.clearTimeout(libraryEdgeTimerRef.current)
     if (activePanel && activePanel !== 'library') return
     if (activePanel === 'library') {
@@ -1522,7 +1691,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     setMountainPanelOpen(false)
     setLibraryEdgeOpen(true)
     setActivePanel('library')
-  }, [activePanel])
+  }, [activePanel, cdCaseSkin])
 
   const keepEdgeLibraryOpen = useCallback(() => {
     window.clearTimeout(libraryEdgeTimerRef.current)
@@ -1579,11 +1748,12 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
 
   useEffect(() => {
     const detectRightEdge = (event) => {
+      if (cdCaseSkin) return
       if (window.innerWidth - event.clientX <= 14) openLibraryFromEdge()
     }
     window.addEventListener('pointermove', detectRightEdge, { passive: true })
     return () => window.removeEventListener('pointermove', detectRightEdge)
-  }, [openLibraryFromEdge])
+  }, [openLibraryFromEdge, cdCaseSkin])
 
   const openTopControls = useCallback(() => {
     window.clearTimeout(topControlsTimerRef.current)
@@ -1796,10 +1966,10 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
   }, [neteaseAccountStatus, setNeteaseAccountStatus, setNeteaseMe])
 
   useEffect(() => {
-    if (activePanel !== 'library' || neteaseAccountStatus !== 'idle') return undefined
+    if ((activePanel !== 'library' && !cdLibraryOpen) || neteaseAccountStatus !== 'idle') return undefined
     const timer = window.setTimeout(loadNeteaseAccount, 0)
     return () => window.clearTimeout(timer)
-  }, [activePanel, loadNeteaseAccount, neteaseAccountStatus])
+  }, [activePanel, cdLibraryOpen, loadNeteaseAccount, neteaseAccountStatus])
 
   useEffect(() => {
     const syncNeteaseAccount = (event) => {
@@ -2193,6 +2363,11 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
       return
     }
 
+    if (panel === 'playMode' && uiMode === 'immersive') {
+      // Keep the player trigger visible while its attached mode chooser opens.
+      window.clearTimeout(immersivePlayerTimerRef.current)
+      setImmersivePlayerVisible(true)
+    }
     openPanel(panel)
   }
 
@@ -2220,15 +2395,16 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     }
 
     const triggerRect = getRect(trigger)
-    setMorphLayer({
+    const transition = {
       panel,
       direction: 'open',
       from: triggerRect,
       to: getRect(panelElement),
       fromRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
       toRadius: panelRadii[panel],
-    })
-    return undefined
+    }
+    const frame = window.requestAnimationFrame(() => setMorphLayer(transition))
+    return () => window.cancelAnimationFrame(frame)
   }, [activePanel, getRect, mountainPanelOpen, panelRadii, panelSelectors, pendingMorph, triggerRefs])
 
   useLayoutEffect(() => {
@@ -2265,11 +2441,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
   }, [getRect, topControlsOpen])
 
   useLayoutEffect(() => {
-    if (uiMode !== 'immersive') {
-      setPlayerMorph(null)
-      setPlayerMorphContentVisible(true)
-      return undefined
-    }
+    if (uiMode !== 'immersive') return undefined
 
     const trigger = playerHandleRef.current
     const panel = playerCardRef.current
@@ -2291,12 +2463,13 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
     }
 
     if (playerOpenRectRef.current) {
+      const panelRect = getRect(panel)
       setPlayerMorph({
         panel: 'player',
         direction: 'close',
-        from: playerOpenRectRef.current,
+        from: panelRect,
         to: triggerRect,
-        fromRadius: Math.min(playerOpenRectRef.current.width, playerOpenRectRef.current.height) * 0.5,
+        fromRadius: Math.min(panelRect.width, panelRect.height) * 0.5,
         toRadius: Math.min(triggerRect.width, triggerRect.height) * 0.5,
       })
     }
@@ -2415,6 +2588,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
           '.voice-popover',
           '.ai-mode-expanded',
           '.library-trigger',
+          '.library-edge-trigger',
           '.ai-play-button',
           '.floating-actions',
         ].join(', '),
@@ -2569,6 +2743,20 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
   const progressPercent = playerState.duration ? Math.min(100, (playerState.currentTime / playerState.duration) * 100) : 0
   const backgroundCoverUrl = getSongCoverUrl(currentSong, sceneCoverItems[0]?.coverUrl || sceneTestCovers[0])
   const songThemeStyle = useSongTheme(backgroundCoverUrl)
+  const cdLibrary = useMemo(() => ({
+    source: librarySource,
+    view: neteaseLibraryView,
+    tracks: librarySource === 'local' ? libraryTracks : neteaseResults,
+    playlists: neteaseMe?.playlists || [],
+    activePlaylist: librarySource === 'netease' ? activeNeteasePlaylist : null,
+    loggedIn: Boolean(neteaseMe?.loggedIn),
+    status: librarySource === 'local' ? libraryStatus : neteaseLibraryView === 'playlists' ? neteaseAccountStatus : neteaseStatus,
+    error: librarySource === 'local' ? libraryError : neteaseError,
+    onLocal: () => { ++neteaseRequestRef.current; setLibrarySource('local'); setActiveNeteasePlaylist(null) },
+    onPlaylists: openNeteasePlaylists,
+    onPlaylist: openNeteasePlaylist,
+    onLogin: () => setNeteaseLoginOpen(true),
+  }), [librarySource, neteaseLibraryView, libraryTracks, neteaseResults, neteaseMe, activeNeteasePlaylist, libraryStatus, neteaseAccountStatus, neteaseStatus, libraryError, neteaseError, openNeteasePlaylists, openNeteasePlaylist])
   const volumePercent = Math.round((Number.isFinite(playerState.volume) ? playerState.volume : 1) * 100)
 
   const applyProModelConfig = useCallback(async (event) => {
@@ -2591,7 +2779,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
   return (
     <PlayerProvider core={playerCore}>
     <main
-      className={`app${uiMode === 'immersive' ? ' immersive-mode' : ' normal-mode'}${wallpaperMode ? ' wallpaper-mode' : ''}${isWebFullscreen ? ' web-fullscreen' : ''} quality-${visualQuality}${activePanel === 'library' ? ' library-open' : ''}${activePanel === 'memory' ? ' memory-settings-open' : ''}${activePanel === 'voice' ? ' voice-open' : ''}${activePanel === 'playMode' ? ' play-mode-open' : ''}${panelContentVisible ? '' : ' panel-content-hidden'}${morphLayer ? ' is-morphing' : ''}`}
+      className={`app${cdCaseSkin ? ' skin-cd-case' : ''}${uiMode === 'immersive' ? ' immersive-mode' : ' normal-mode'}${wallpaperMode ? ' wallpaper-mode' : ''}${isWebFullscreen ? ' web-fullscreen' : ''} quality-${visualQuality}${activePanel === 'library' ? ' library-open' : ''}${activePanel === 'memory' ? ' memory-settings-open' : ''}${activePanel === 'voice' ? ' voice-open' : ''}${activePanel === 'playMode' ? ' play-mode-open' : ''}${panelContentVisible ? '' : ' panel-content-hidden'}${morphLayer ? ' is-morphing' : ''}${layoutEditing ? ' ui-layout-editing' : ''}`}
       style={songThemeStyle}
     >
       {neteaseDegraded && (
@@ -2604,8 +2792,31 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
           {backendIdentity.compatibilityNotice}
         </aside>
       )}
-      {visualBooted && (
+      {visualBooted && (cdCaseSkin || recordTransition) && <div ref={cdLayer} className="record-skin-layer"
+        inert={Boolean(recordTransition)} style={{ opacity: recordTransition?.to === 'cd-case' ? recordPresentation.state.mix : 1, zIndex: recordTransition?.to === 'cd-case' ? 1 : 0 }}>
+        <Suspense fallback={null}>
+          <CdCaseBackground
+            recordPresentation={recordPresentation}
+            coverUrl={backgroundCoverUrl}
+            backgroundBrightness={backgroundBrightness}
+            quality={visualQuality}
+            liquidMetalSettings={liquidMetalSettings}
+            getFrequencyData={readAudioFrequencyData}
+            trackKey={String(currentSong?.id || currentSong?.fileUrl || '')}
+            isPlaying={playerState.isPlaying}
+            onReady={onVisualReady}
+            libraryOpen={cdLibraryOpen}
+            library={cdLibrary}
+            onCloseLibrary={closeCdLibrary}
+            onPlayTrack={playSongWithPodcastReaction}
+            readPlaybackState={playerCore.getState}
+          />
+        </Suspense>
+      </div>}
+      {visualBooted && (!cdCaseSkin || recordTransition) && <div ref={particleLayer} className="record-skin-layer"
+        inert={Boolean(recordTransition)} style={{ opacity: recordTransition?.to === 'particle' ? recordPresentation.state.mix : 1, zIndex: recordTransition?.to === 'particle' ? 1 : 0 }}>
         <AnimatedBackground
+          recordPresentation={recordPresentation}
           active={playerState.isPlaying}
           coverUrl={backgroundCoverUrl}
           trackKey={playerState.currentTrack?.id || playerState.currentTrack?.url || playerState.currentTrack?.path || `${playerState.currentTrack?.title || ''}-${playerState.currentTrack?.artist || ''}`}
@@ -2622,8 +2833,11 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
           onReady={onVisualReady}
           quality={visualQuality}
           liquidMetalSettings={liquidMetalSettings}
+          avatarPhase={avatarPhase}
+          avatarTurnId={wakePortraitTurnId}
+          voiceMeterRef={yunVoice.voiceMeterRef}
         />
-      )}
+      </div>}
       <div
         className={`yun-awakening-optics${voiceVisualVisible ? ' is-active' : ''}`}
         aria-hidden="true"
@@ -2636,14 +2850,15 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
         <span className="yun-speaking-optics__ring" />
         <span className="yun-speaking-optics__tint" />
       </div>
-      <div
+      {cdCaseSkin ? <button type="button" className="library-edge-trigger" aria-label="展开圆柱唱片墙"
+        onClick={openLibraryFromEdge} /> : <div
         ref={libraryTriggerRef}
         className={`library-edge-trigger${libraryEdgeOpen ? ' is-active' : ''}`}
         data-liquid-ore-surface="true"
         aria-hidden="true"
         onPointerEnter={openLibraryFromEdge}
         onPointerMove={keepEdgeLibraryOpen}
-      ><span /></div>
+      ><span /></div>}
       <div
         className={`top-controls-edge-trigger${topControlsOpen ? ' is-active' : ''}`}
         aria-hidden="true"
@@ -2653,9 +2868,11 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
       >
         <span ref={topControlsTriggerRef} data-liquid-ore-surface="true" />
       </div>
-      <FloatingLyrics settings={lyric3DSettings} theme={songThemeStyle} />
-      {visualQuality === 'high' && <LyricForegroundFog quality={visualQuality} />}
-      <div className="scene-cover-overlay">
+      <Suspense fallback={null}>
+        <FloatingLyrics settings={lyric3DSettings} theme={songThemeStyle} textRenderer={cdCaseSkin ? CdCaseLyrics : undefined} />
+      </Suspense>
+      {!cdCaseSkin && visualQuality === 'high' && <LyricForegroundFog quality={visualQuality} />}
+      {!cdCaseSkin && <div className="scene-cover-overlay">
         <div className="scene-cover-stage">
           {sceneCoverItems.map((item, index) => (
             <div
@@ -2686,7 +2903,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
             </div>
           ))}
         </div>
-      </div>
+      </div>}
       <div
         className={`immersive-player-handle${immersivePlayerVisible ? ' is-expanded' : ''}`}
         aria-hidden="true"
@@ -2763,6 +2980,10 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
               aria-pressed={uiMode === 'immersive'}
               onClick={() => setUiMode((mode) => {
                 setImmersivePlayerVisible(false)
+                if (mode === 'immersive') {
+                  setPlayerMorph(null)
+                  setPlayerMorphContentVisible(true)
+                }
                 window.clearTimeout(immersivePlayerTimerRef.current)
                 return mode === 'immersive' ? 'normal' : 'immersive'
               })}
@@ -2780,7 +3001,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
             </button>
             <button className={`action-button${pressedPanel === 'voice' ? ' is-pressed' : ''}`} type="button" aria-label="声音" aria-expanded={activePanel === 'voice'} ref={voiceTriggerRef} onClick={() => togglePanel('voice')}>声</button>
             <button className={`action-button${pressedPanel === 'memory' ? ' is-pressed' : ''}`} type="button" aria-label="设置" aria-expanded={activePanel === 'memory'} ref={memoryTriggerRef} onClick={() => togglePanel('memory')}>设</button>
-            <button className={`action-button${mountainPanelOpen ? ' is-pressed' : ''}`} type="button" aria-label="山脉调节" aria-expanded={mountainPanelOpen} ref={mountainTriggerRef} onClick={() => togglePanel('mountain')}>山</button>
+            {!cdCaseSkin && <button className={`action-button${mountainPanelOpen ? ' is-pressed' : ''}`} type="button" aria-label="山脉调节" aria-expanded={mountainPanelOpen} ref={mountainTriggerRef} onClick={() => togglePanel('mountain')}>山</button>}
             <button
               className={`action-button gesture-camera-toggle${gestureCameraStatus === 'active' || gestureCameraStatus === 'starting' ? ' is-on' : ''}${gestureCameraStatus === 'error' ? ' is-error' : ''}`}
               type="button"
@@ -2810,7 +3031,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
         />
       )}
 
-      <div
+      {!cdCaseSkin && <div
         className={`mountain-tuning-panel${mountainPanelOpen ? ' is-open' : ''}`}
       >
         <span className="glass-edge-highlight" aria-hidden="true" />
@@ -3011,7 +3232,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
           />
           <span className="voice-value">{mountainSettingsLocked ? '已锁' : '可调'}</span>
         </div>
-      </div>
+      </div>}
 
       <VoicePickupGlass
         headless
@@ -3725,7 +3946,11 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
               {playerState.isPlaying ? 'Ⅱ' : '▶'}
             </button>
             <button className="control-button" type="button" aria-label="Next" onClick={playNextWithPodcastReaction}>›</button>
-            <button className="control-button" aria-label="Repeat">↻</button>
+            <NeteaseLikeButton
+              song={currentSong}
+              accountKey={`${neteaseMe?.userId || neteaseMe?.nickname || ''}:${Boolean(neteaseMe?.loggedIn)}`}
+              onLoginRequested={() => setNeteaseLoginOpen(true)}
+            />
           </div>
 
           <div className="player-progress" aria-label="Playback progress">
@@ -3805,7 +4030,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
         </div>
       </div>
 
-      <div
+      {!cdCaseSkin && <div
         className={`local-library-drawer${activePanel === 'library' ? ' is-open' : ''}${libraryListReady ? ' is-content-ready' : ''}`}
         onPointerEnter={keepEdgeLibraryOpen}
         onPointerMove={keepEdgeLibraryOpen}
@@ -4150,7 +4375,7 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
             </span>
           </button>
         </div>
-      </div>
+      </div>}
 
       <div
         className={`ai-mode-expanded${activePanel === 'playMode' ? ' is-open' : ''}`}
@@ -4254,21 +4479,39 @@ function App({ onVisualReady, bootData = {}, bootState = null }) {
         </div>
       )}
       <LiquidMorphTransition
+        realTime={cdCaseSkin}
         transition={morphLayer}
         onReveal={revealLiquidMorphContent}
         onComplete={finishLiquidMorph}
       />
       <LiquidMorphTransition
+        realTime={cdCaseSkin}
         transition={topControlsMorph}
         onReveal={revealTopControlsMorph}
         onComplete={finishTopControlsMorph}
       />
       <LiquidMorphTransition
+        realTime={cdCaseSkin}
         transition={playerMorph}
         onReveal={revealPlayerMorph}
         onComplete={finishPlayerMorph}
       />
+      <YunLayoutEditor onEditingChange={setLayoutEditing}/>
     </main>
+    <button
+      className="record-skin-switch"
+      type="button"
+      aria-label={(recordTransition ? recordTransition.destination === 'cd-case' : cdCaseSkin) ? '切换到粒子唱片' : '切换到实体唱片'}
+      title={`当前：${cdCaseSkin ? '实体唱片' : '粒子唱片'}，点击切换`}
+      onClick={switchRecordSkin}
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.5" strokeDasharray={cdCaseSkin ? '1 3' : undefined} />
+        <circle cx="12" cy="12" r="2.5" />
+      </svg>
+      <span>{(recordTransition ? recordTransition.destination === 'cd-case' : cdCaseSkin) ? '粒子唱片' : '实体唱片'}</span>
+      <span aria-hidden="true">⇄</span>
+    </button>
     </PlayerProvider>
   )
 }

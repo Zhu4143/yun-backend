@@ -9,12 +9,14 @@ lerna-debug.log*
 
 node_modules
 .env
+.env.bak-*
 server/data/moss_model_config.local.json
 server/data/moss_doubao_tts_config.local.json
 tools/moss-tts-service/model/*.pth
 tools/moss-tts-service/outputs/
 *.wav
 server/data/netease-cookie.txt
+server/data/public/
 
 # Yun Telemetry runtime data (append-only event log + aggregator snapshot).
 server/data/yun_telemetry.ndjson
@@ -50,6 +52,7 @@ server/data/moss_memory.json
 server/data/moss_runtime_state.json
 server/data/moss_scene_memory.json
 server/data/yunListeningProfile.json
+server/data/immersive-background.json*
 
 # OmniVoice runtime, model weights, and personal voice samples stay local.
 yun-desktop-agent/omni-voice-service/.venv/
@@ -69,6 +72,7 @@ yun-desktop-agent/local-speech-service/models/
 yun-desktop-agent/local-speech-service/cache/
 
 # Editor directories and files
+server/data/lyric-effects.json*
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -78,3 +82,15 @@ yun-desktop-agent/local-speech-service/cache/
 *.njsproj
 *.sln
 *.sw?
+
+# Machine-private runtime state and listening-library exports.
+/server/data/
+/public/user_memory.json
+/public/covers/*
+!/public/covers/default-cover.jpg
+/歌词/
+# Local QA captures can contain account avatars and private playlists.
+/docs/design/
+/build/build-info.json
+/yun-core/
+/asr-*.mjs

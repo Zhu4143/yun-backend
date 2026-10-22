@@ -104,6 +104,40 @@ body {
   font-family: Inter, system-ui, sans-serif;
 }
 
+/* This persistent control sits outside either renderer's optical registry. */
+.record-skin-switch {
+  position: fixed;
+  z-index: 200;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(18px, env(safe-area-inset-right));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: auto;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 15px;
+  flex-shrink: 0;
+  border: 1px solid rgba(238, 244, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(24, 32, 45, 0.83);
+  color: #f1f4fc;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 4px 16px rgba(0, 0, 0, 0.12);
+  font: 500 12px/1.2 system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, transform 100ms ease;
+}
+.record-skin-switch:hover { background: rgba(45, 57, 75, 0.94); }
+.record-skin-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+.record-skin-layer[inert] { pointer-events: none; }
+.record-skin-switch:active { transform: scale(0.97); }
+.record-skin-switch:focus-visible { outline: 2px solid #b9dbff; outline-offset: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .record-skin-switch { transition: none; }
+}
+
 /* UI mode switch: keep logic mounted, only change visibility. */
 .app.immersive-mode .scene-cover-overlay,
 .app.immersive-mode .status-card {
@@ -447,6 +481,48 @@ body {
   z-index: 0;
   overflow: hidden;
   background: #01030a;
+}
+
+.yun-avatar-debug {
+  position: fixed;
+  z-index: 120;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  color: rgba(255, 255, 255, 0.92);
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: rgba(5, 8, 14, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  pointer-events: auto;
+}
+
+.yun-avatar-debug strong {
+  margin: 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.yun-avatar-debug button {
+  padding: 5px 8px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.yun-avatar-debug button.is-active {
+  color: #071219;
+  background: #afefff;
+}
+
+.yun-avatar-debug small {
+  margin: 0 4px;
+  opacity: 0.7;
 }
 
 .bg-image::after {
@@ -3361,6 +3437,29 @@ button {
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.22),
     0 5px 10px rgba(33, 18, 8, 0.05);
+}
+
+.player-like-button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  transition: fill 180ms ease, stroke 180ms ease;
+}
+
+.player-controls .control-button.player-like-button.is-liked {
+  color: #ff4d6b;
+}
+
+.player-like-button.is-liked svg {
+  fill: currentColor;
+}
+
+.player-controls .player-like-button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .player-controls .control-button--primary {

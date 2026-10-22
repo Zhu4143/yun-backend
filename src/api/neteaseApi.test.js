@@ -27,9 +27,27 @@ import {
   resolveNeteaseSongFromLyrics,
   resolveNeteaseStreamQuality,
   searchNeteaseSongs,
+  setNeteaseSongLiked,
 } from './neteaseApi.js'
 
 const rawSong = { id: '123', title: '真实歌曲', artist: '真实歌手', album: '真实专辑', coverUrl: 'https://img.example/cover.jpg', duration: 123000 }
+
+test('heart writes use an explicit boolean and canonical NetEase ID', async () => {
+  for (const liked of [true, false]) {
+    const result = await captureRequest({ ok: true, providerId: '123', liked }, () => setNeteaseSongLiked('netease-123', liked))
+    assert.equal(result.request().url, '/api/netease/library/liked')
+    assert.equal(result.request().options.method, 'POST')
+    assert.deepEqual(JSON.parse(result.request().options.body), { id: '123', liked })
+  }
+})
+
+test('heart writes cannot silently target an invalid song ID or lost login', async () => {
+  await assert.rejects(() => setNeteaseSongLiked('local-file', true), (error) => error.code === 'unsupported')
+  await assert.rejects(
+    () => captureRequest({ ok: false, code: 'not_logged_in', error: '请先登录网易云' }, () => setNeteaseSongLiked('123', true), { ok: false, status: 401 }),
+    (error) => error instanceof NeteaseApiError && error.code === 'not_logged_in',
+  )
+})
 
 async function captureRequest(payload, callback, { ok = true, status = 200 } = {}) {
   const originalFetch = globalThis.fetch

@@ -106,7 +106,7 @@ function getInitialTailSilenceCache() {
   }
 }
 
-export function useLocalPlayer(playlist, { restoreState = null } = {}) {
+export function useLocalPlayer(playlist, { restoreState = null, onPlaybackError } = {}) {
   const [audioEngine] = useState(() => new AudioEngine())
   const [crossfadeController] = useState(() => new CrossfadeController({ audioEngine }))
   const [activePlaybackRecovery] = useState(() => createActivePlaybackRecovery())
@@ -145,6 +145,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   const [crossfadeTimeline] = useState(() => createCrossfadeTimeline({
     onTime: setCurrentTime,
     onDuration: setDuration,
+    readActiveMedia: () => audioEngine.getActiveDeck(),
   }))
   const [volume, setVolumeState] = useState(1)
   const [playbackMode, setPlaybackModeState] = useState(initialPlaybackMode)
@@ -240,6 +241,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
   }, [crossfadeController])
 
   const cancelCrossfade = useCallback(() => {
+    activePlaybackRecovery.cancel()
     crossfadeTimeline.clear()
     const result = crossfadeController.cancel()
     if (result.shouldRefreshActiveDeck) setAudioVersion((version) => version + 1)
@@ -249,7 +251,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       setDuration(getSafeDuration(activeDeck))
     }
     return result
-  }, [audioEngine, crossfadeController, crossfadeTimeline])
+  }, [activePlaybackRecovery, audioEngine, crossfadeController, crossfadeTimeline])
 
   const setVolume = useCallback((nextVolume) => {
     const safeVolume = clampVolume(nextVolume)
@@ -782,6 +784,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       }
 
       activePlaybackRecovery.observeProgress(audio)
+      if (activePlaybackRecovery.getDiagnostics().phase === 'loading') return
       setCurrentTime(audio.currentTime || 0)
       const safeDuration = getSafeDuration(audio)
       setDuration(safeDuration)
@@ -856,10 +859,10 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     const recoverActivePlayback = ({ force = false, delayMs } = {}) => (
       activePlaybackRecovery.schedule({
         audio,
-        isActive: (candidate) => candidate === audioEngine.getActiveDeck(),
+        isActive: (candidate) => candidate === audioEngine.getActiveDeck() && !crossfadeController.isCrossfading(),
         resumeOutput: resumeMusicOutput,
         onPlaying: () => setIsPlaying(true),
-        onFailed: () => setIsPlaying(false),
+        onFailed: () => { setIsPlaying(false); onPlaybackError?.('音频连接暂时中断，点击播放重试。') },
         force,
         delayMs,
       })
@@ -885,7 +888,25 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
     audio.addEventListener('stalled', handlePlaybackStall)
     audio.addEventListener('error', handleError)
 
+    // Some decoders stop their media clock without another waiting event.
+    // Poll at 1Hz; never recover a user-paused Deck or a transition source.
+    let observedPosition = audio.currentTime || 0
+    let frozenTicks = 0
+    const progressWatch = setInterval(() => {
+      if (audio !== audioEngine.getActiveDeck() || audio.paused || audio.ended || crossfadeController.isCrossfading() || audio.seeking) {
+        frozenTicks = 0
+        observedPosition = audio.currentTime || 0
+        return
+      }
+      const position = audio.currentTime || 0
+      frozenTicks = Math.abs(position - observedPosition) > 0.05 ? 0 : frozenTicks + 1
+      observedPosition = position
+      if (frozenTicks >= 4) recoverActivePlayback()
+    }, 1000)
+
     return () => {
+      clearInterval(progressWatch)
+      activePlaybackRecovery.cancel()
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
       audio.removeEventListener('play', handlePlay)
@@ -895,7 +916,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
       audio.removeEventListener('stalled', handlePlaybackStall)
       audio.removeEventListener('error', handleError)
     }
-  }, [activePlaybackRecovery, audioEngine, crossfadeController, crossfadeTimeline, playNext, currentSong, audioVersion, rememberTailSilence, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
+  }, [activePlaybackRecovery, audioEngine, crossfadeController, crossfadeTimeline, playNext, currentSong, audioVersion, onPlaybackError, rememberTailSilence, resetSilenceDetection, resumeMusicOutput, shouldStartAudibleEndCrossfade, shouldStartSilenceCrossfade])
 
   useEffect(() => {
     const duckTokens = duckTokensRef.current
@@ -916,6 +937,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
 
   return {
     audioRef: audioEngine.getActiveDeckRef(),
+    getTimelineMedia: crossfadeTimeline.getMedia,
     currentSong,
     isPlaying,
     currentTime,
@@ -949,6 +971,7 @@ export function useLocalPlayer(playlist, { restoreState = null } = {}) {
         duckingFactor: resources.duckingFactor,
         audioContextState: resources.audioContextState,
         effectiveVolume: getEffectiveVolume(),
+        recovery: activePlaybackRecovery.getDiagnostics(),
         currentTrackId: getSongId(currentSongRef.current),
         requestedTrackId: getSongId(requestedSongRef.current),
         activeSource: resources.activeSource,

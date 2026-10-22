@@ -211,6 +211,9 @@ export async function addSongToNeteaseCollection({ song, target = 'liked', playl
     error.code = data.code || ''
     throw error
   }
+  if (target === 'liked' && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('yun:netease-liked-changed', { detail: { providerId: String(data.song?.id || '') } }))
+  }
   return data
 }
 
@@ -351,9 +354,21 @@ export async function resolveNeteaseStreamQuality(song, level = 'exhigh') {
   }
 }
 
-export async function fetchNeteaseLikedStatus(ids) {
+export async function fetchNeteaseLikedStatus(ids, { signal } = {}) {
   const value = (Array.isArray(ids) ? ids : [ids]).map((id) => String(id || '').replace(/^netease-/, '')).filter(Boolean).join(',')
-  return requestNeteaseJson(`/api/netease/library/liked-status?${queryString({ ids: value })}`, { cache: 'no-store' }, '网易云喜欢状态读取失败')
+  return requestNeteaseJson(`/api/netease/library/liked-status?${queryString({ ids: value })}`, { cache: 'no-store', signal }, '网易云喜欢状态读取失败')
+}
+
+export async function setNeteaseSongLiked(songId, liked) {
+  const id = String(songId || '').replace(/^netease-/, '').trim()
+  if (!/^\d+$/.test(id) || typeof liked !== 'boolean') {
+    throw new NeteaseApiError('unsupported', '当前歌曲没有有效的网易云歌曲 ID')
+  }
+  return requestNeteaseJson('/api/netease/library/liked', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, liked }),
+  }, '网易云红心更新失败')
 }
 
 export async function fetchNeteaseSubscriptionCounts() {

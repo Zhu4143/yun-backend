@@ -1,0 +1,53 @@
+/* Host geometry overrides must beat Yun's existing glass visibility rules. */
+.app.app.app [data-ui-layout][data-ui-layout][data-ui-layout] {
+  position: fixed !important; left: var(--ui-layout-x) !important; top: var(--ui-layout-y) !important;
+  right: auto !important; bottom: auto !important; width: var(--ui-layout-width) !important; height: var(--ui-layout-height) !important;
+  transform: none !important; max-height: none !important; max-width: none !important; margin: 0 !important;
+}
+.app.ui-layout-editing .player-card, .app.ui-layout-editing .chat-panel, .app.ui-layout-editing .voice-popover, .app.ui-layout-editing .local-library-drawer {
+  opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; transition: none !important;
+  filter: none !important; z-index: 92 !important;
+}
+.app.ui-layout-editing [data-ui-layout-selected] { z-index: 94 !important; }
+.app.ui-layout-editing.ui-layout-editing [data-ui-layout][data-ui-layout][data-ui-layout] {
+  opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; filter: none !important;
+}
+.app.ui-layout-editing .chat-panel { transform: none !important; }
+.app.ui-layout-editing .voice-popover.glass-popover { display: block !important; transform: none !important; }
+.app.ui-layout-editing.ui-layout-editing .local-library-drawer { display: block !important; }
+.app.ui-layout-editing.ui-layout-editing .local-library-drawer .library-content { opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; }
+.app.ui-layout-editing.ui-layout-editing [data-ui-layout][data-ui-layout][data-ui-layout][data-ui-layout-focus="false"] { display: none !important; }
+.app.ui-layout-editing .player-content, .app.ui-layout-editing .voice-popover > * { opacity: 1 !important; visibility: visible !important; }
+.app.ui-layout-editing .chat-panel + span, .app.ui-layout-editing .chat-panel + span + span { opacity: 1 !important; visibility: visible !important; }
+.app.ui-layout-editing .liquid-morph-layer { display: none !important; }
+.app [data-ui-layout="voice"] { overflow: auto !important; container-type: inline-size; }
+.app [data-ui-layout="player"] { container-type: inline-size; }
+.app [data-ui-layout="player"] .player-content { min-width: 0; height: 100%; }
+.app [data-ui-layout="player"] .player-meta { min-width: 0; }
+.app [data-ui-layout="player"] .player-controls button { margin: 0; }
+@container (max-width: 900px) {
+  .app [data-ui-layout="player"] .player-content { gap: 12px; }
+  .app [data-ui-layout="player"] .player-meta { flex: 0 1 220px; gap: 10px; }
+  .app [data-ui-layout="player"] .cover { width: 56px; height: 56px; flex: 0 0 56px; }
+  .app [data-ui-layout="player"] .player-volume, .app [data-ui-layout="player"] .ai-play-button { display: none; }
+}
+@container (max-width: 650px) {
+  .app [data-ui-layout="player"] .player-content { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-content: center; }
+  .app [data-ui-layout="player"] .player-meta { display: flex; min-width: 0; width: auto; grid-column: 1; grid-row: 1; }
+  .app [data-ui-layout="player"] .track-info { min-width: 0; height: auto; max-width: none; grid-column: auto; grid-row: auto; grid-template-rows: auto auto auto; }
+  .app [data-ui-layout="player"] .track-info h2 { font-size: 15px; height: auto; max-height: 34px; }
+  .app [data-ui-layout="player"] .track-info p:not(.sub) { font-size: 12px; }
+  .app [data-ui-layout="player"] .player-controls { display: flex; min-width: max-content; gap: 3px; margin: 0; grid-column: 2; grid-row: 1; }
+  .app [data-ui-layout="player"] .player-controls button { width: 30px; height: 30px; flex: 0 0 30px; }
+  .app [data-ui-layout="player"] .player-controls .control-button--primary { width: 38px; height: 38px; flex: 0 0 38px; }
+  .app [data-ui-layout="player"] .player-progress { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; }
+}
+@container (max-width: 420px) {
+  .app [data-ui-layout="voice"] .voice-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 420px) {
+  .app [data-ui-layout="player"] .cover { display: none; }
+  .app [data-ui-layout="player"] .track-info h2 { font-size: 13px; line-height: 1.2; }
+  .app [data-ui-layout="player"] .track-info p:not(.sub) { font-size: 10px; }
+  .app [data-ui-layout="player"] .track-info .sub { display: none; }
+}

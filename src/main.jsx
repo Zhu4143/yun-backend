@@ -1,11 +1,13 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
+import App from './app/MusicApp.jsx'
 import { BootProvider } from './boot/BootProvider.jsx'
 import { getYunBootManager } from './boot/createYunBootManager.js'
+import { getMusicAppearanceStore } from './app/appearance.js'
 
-const bootManager = getYunBootManager()
+getMusicAppearanceStore()
+const bootManager = getYunBootManager({ preloadPlaylistTracks: false })
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

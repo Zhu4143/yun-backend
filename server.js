@@ -1,4 +1,5 @@
 import http from "node:http";
+import { getPodcastLengthPolicy, finishPodcastReply } from "./server/podcastReactionPolicy.js";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -19,6 +20,7 @@ import { analyzeImageWithQwen } from "./server/qwenVision.js";
 import { createMossAgent } from "./server/agent/mossAgent.js";
 import { createMossDesktopAgentBridge } from "./server/agent/mossDesktopAgentBridge.js";
 import { createMusicIntelligenceService } from "./server/music-intelligence/musicIntelligenceService.js";
+import { createSongChorusLoader } from "./server/netease/songChorus.js";
 import { analyzeRhythmWindow, createSeamlessTransitionPlan } from "./server/music-intelligence/transitionPlanner.js";
 import {
   handleAsrStatus,
@@ -46,12 +48,15 @@ import { describePlaylistTrackPage } from "./server/netease/playlistPagination.j
 import { getRelevantNeteaseCapabilityTruth } from "./src/services/netease/capabilityTruth.js";
 import { createRequestLifecycle } from "./server/requestLifecycle.js";
 import { AtomicJsonStore } from "./server/atomicJsonStore.js";
+import { createImmersiveBackgroundStore } from "./server/immersiveBackgroundStore.js";
+import { createLyricEffectsStore } from "./server/lyricEffectsStore.js";
 import { createMemoryPromptContext } from "./server/memoryPromptPolicy.js";
 import { resolveYunMemoryPolicy } from "./server/memoryPromptPolicy.js";
 import { awaitConversationMemoryWrites } from "./server/conversationMemoryWrites.js";
 import { fetchWithRetry } from "./server/netRequest.js";
 import { getTtsRuntimeHealth } from "./server/ttsRuntimeHealth.js";
 import { createBackendIdentity } from "./server/backendIdentity.js";
+import { createRequestBoundary, parseTrustedOrigins } from "./server/requestBoundary.js";
 
 const {
   login_qr_key: neteaseLoginQrKey,
@@ -73,6 +78,7 @@ const {
   record_recent_song: neteaseRecordRecentSong,
   user_record: neteaseUserRecord,
   comment_music: neteaseCommentMusic,
+  song_chorus: neteaseSongChorus,
 } = neteaseCloudMusicApi;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -89,8 +95,9 @@ const backendIdentity = createBackendIdentity({
 const legacyBackendDir = legacyBackendDirectory;
 const publicDir = path.resolve(process.env.YUN_PUBLIC_DIR || path.join(__dirname, "public"));
 const legacyPublicDir = path.join(legacyBackendDir, "public");
-const coversDir = path.join(publicDir, "covers");
 const dataDir = runtimeDataDirectory;
+const runtimePublicDir = path.join(dataDir, "public");
+const coversDir = path.join(runtimePublicDir, "covers");
 const musicLibraryPath = path.join(dataDir, "musicLibrary.json");
 const musicAnalysisDir = path.join(dataDir, "music-analysis");
 const manualMusicTagsPath = path.join(dataDir, "manualMusicTags.json");
@@ -98,6 +105,8 @@ const yunMemoryPath = path.join(dataDir, "yunMemory.json");
 const yunMemoryStore = new AtomicJsonStore(yunMemoryPath);
 const yunSettingsPath = path.join(dataDir, "yunSettings.json");
 const yunSettingsStore = new AtomicJsonStore(yunSettingsPath);
+const immersiveBackgroundStore = createImmersiveBackgroundStore(path.join(dataDir, "immersive-background.json"));
+const lyricEffectsStore = createLyricEffectsStore(path.join(dataDir, "lyric-effects.json"));
 let memoryPolicyWriteQueue = Promise.resolve();
 function serializeMemoryPolicyOperation(operation) {
   const result = memoryPolicyWriteQueue.then(operation, operation);
@@ -224,9 +233,9 @@ function waitFor(ms) {
 // NetEase/CDN connections occasionally reset or time out. Keep that transient
 // failure inside the provider boundary instead of returning Node's opaque
 // "fetch failed" to the UI.
-async function fetchNeteaseWithRetry(url, options = {}, { attempts = neteaseRequestAttempts, timeoutMs = neteaseRequestTimeoutMs } = {}) {
+async function fetchNeteaseWithRetry(url, options = {}, { attempts = neteaseRequestAttempts, timeoutMs = neteaseRequestTimeoutMs, timeoutScope = 'body' } = {}) {
   try {
-    return await fetchWithRetry(url, options, { attempts, timeoutMs, retryDelayMs: attempt => 300 * attempt });
+    return await fetchWithRetry(url, options, { attempts, timeoutMs, timeoutScope, retryDelayMs: attempt => 300 * attempt });
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason || error;
     const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
@@ -888,6 +897,19 @@ async function handleNeteaseCapabilityRead(req, res, operation) {
       error: normalized.message,
       ...(normalized.details ? { details: normalized.details } : {}),
     });
+  }
+}
+
+async function handleNeteaseLikedUpdate(req, res) {
+  try {
+    const body = await readJson(req);
+    if (!/^\d+$/.test(String(body?.id || "").replace(/^netease-/, "")) || typeof body?.liked !== "boolean") {
+      return sendJson(res, 400, { ok: false, code: "unsupported", error: "缺少有效的网易云歌曲 ID 或喜欢状态" });
+    }
+    return sendJson(res, 200, { ok: true, ...(await neteaseCapabilityService.setLiked(body)) });
+  } catch (error) {
+    const normalized = normalizeNeteaseCapabilityError(error);
+    return sendJson(res, neteaseErrorHttpStatus(normalized.code), { ok: false, code: normalized.code, error: normalized.message });
   }
 }
 
@@ -2305,6 +2327,24 @@ async function handleNeteaseSongComments(req, res) {
   }
 }
 
+const loadNeteaseChorus = createSongChorusLoader(id => neteaseSongChorus({ id, cookie: neteaseUserCookie, timestamp: Date.now() }));
+
+async function handleNeteaseSongChorus(req, res) {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!/^\d+$/.test(id)) return sendJson(res, 400, { ok: false, error: "Invalid song id" });
+  let timer;
+  try {
+    const chorus = await Promise.race([
+      loadNeteaseChorus(id),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Chorus lookup timed out")), 7000); }),
+    ]);
+    return sendJson(res, 200, { ok: true, chorus });
+  } catch {
+    return sendJson(res, 502, { ok: false, error: "副歌时间暂时不可用" });
+  } finally { clearTimeout(timer); }
+}
+
 async function handleNeteaseUrl(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
@@ -2344,14 +2384,14 @@ async function handleNeteaseAudio(req, res) {
     let playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level), signal });
     if (!playableUrl) return sendJson(res, 404, { ok: false, code: "not_found", error: "No playable url for this song and requested level" });
 
-    let audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers, signal });
+    let audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers, signal }, { timeoutScope: 'headers' });
     // CDN stream URLs can expire while a song is playing. Do not keep serving
     // a cached, expired address on the next Range request: evict it and obtain
     // one fresh URL before the browser turns the player into a silent state.
     if (!audioResponse.ok && audioResponse.status !== 206) {
       neteasePlayableUrlCache.delete(cacheKey);
       playableUrl = await getNeteasePlayableUrl(id, { level, strictLevel: Boolean(level), signal });
-      if (playableUrl) audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers, signal });
+      if (playableUrl) audioResponse = await fetchNeteaseWithRetry(playableUrl, { headers, signal }, { timeoutScope: 'headers' });
     }
     if (!audioResponse.ok && audioResponse.status !== 206) {
       return sendJson(res, audioResponse.status || 502, { ok: false, error: "网易云音频地址已失效，请重试" });
@@ -3031,9 +3071,9 @@ function buildServerModeReplyPolicy(responseMode = "companion", purpose = "chat"
       "音乐动作只需要一句话，不展开乐评；普通聊天不要强行推荐歌。"
     ],
     podcast: [
-      "当前是播客模式：它只是播放时偶尔插一句，不是主持节目。默认 0 到 1 句，只有用户明确追问或首播辨认时才最多 2 句。",
-      "像熟人顺口说的观察，不用铺垫、总结、煽情、比喻或报幕；没有可靠依据就保持安静。",
-      "每次只选择一个具体角度：节奏变化、音色细节、歌词事实、前后曲衔接或此刻场景；自动切歌通常不说话。"
+      "当前是播客模式：像私人电台主持人，在换歌时给出有内容、有节奏的口语段落，按本次指定长度安排长短。",
+      "从可信的歌曲信息或前后曲衔接展开观察，再自然接到听歌场景；不要只报歌名，不要编造歌词或背景。",
+      "每次围绕一个具体角度展开，自动切歌也需要自然承接，不输出空回复。"
     ],
     silent: [
       "当前是安静模式：不生成长回复，不朗读；若必须给状态，只给极短文本。"
@@ -3105,19 +3145,19 @@ async function refreshRepeatedReply({
   if (!text || !isReplyTooSimilar(text, recentAiReplies)) return text;
   try {
     const rewritten = await callDeepSeekJson({
-      systemPrompt: `你是自然口语改写器。只输出 JSON：{"reply":"..."}。保留原意和事实，不增加未经提供的歌曲、歌词或人物背景。避开最近回复的开头、句型、比喻和结尾。不要使用客服腔、总结腔或“我陪你听”类固定句。${purpose === "song_reaction" ? "这是音乐播客过场：只保留一个具体观察，最多两句；没内容可以输出空字符串。" : "这是熟人聊天：口语、短句，直接接续上一点。"}`,
+      systemPrompt: `你是自然口语改写器。只输出 JSON：{"reply":"..."}。保留原意和事实，不增加未经提供的歌曲、歌词或人物背景。避开最近回复的开头、句型、比喻和结尾。不要使用客服腔、总结腔或“我陪你听”类固定句。${purpose === "song_reaction" ? "这是音乐播客过场：保留原段落长度和具体观察，不能改成报幕或空字符串。" : "这是熟人聊天：口语、短句，直接接续上一点。"}`,
       userPrompt: [
         `待改写：${text}`,
         `上下文：${String(context || "").slice(0, 800)}`,
         `最近回复：${JSON.stringify(recentAiReplies || []).slice(0, 1400)}`,
       ].join("\n"),
-      maxTokens: purpose === "song_reaction" ? 180 : 320,
+      maxTokens: purpose === "song_reaction" ? 4096 : 320,
       includePersona: false,
       frequencyPenalty: 0.55,
       presencePenalty: 0.2,
       signal,
     });
-    return String(rewritten?.reply || "").trim();
+    return String(rewritten?.reply || "").trim() || (purpose === "song_reaction" ? text : "");
   } catch {
     if (signal?.aborted) throw signal.reason || Object.assign(new Error("Request aborted"), { name: "AbortError" });
     return text;
@@ -3325,8 +3365,8 @@ async function handleSongReaction(req, res) {
       : null;
     if (signal.aborted || res.destroyed) return;
 
-    const companionTransition = trigger === "companion_transition" && responseMode === "podcast";
-    const lengthGuide = { short: "1 句，约 15 到 28 字", medium: "1 到 2 句，约 30 到 55 字", long: "2 到 3 句，约 60 到 95 字" }[announcementLength] || "1 到 2 句，约 30 到 55 字";
+    const podcastPolicy = getPodcastLengthPolicy(announcementLength);
+    const lengthGuide = podcastPolicy.guide;
     const systemPrompt = `你正在回应本地曲库的播放/切歌事件。
 你不是乐评人，不写百科，不做功能说明。你要像一个熟悉用户的人，顺手接住这首歌和当前气氛。
 必须只输出合法 JSON，不要 Markdown，不要额外解释。
@@ -3342,12 +3382,12 @@ async function handleSongReaction(req, res) {
 
 模式规则：
 - normal：1 句短确认，轻、自然，不长篇介绍歌曲。
-- podcast：2 到 4 句，像真正会编排节目节奏的私人电台主持人。只有首播、用户点名询问、或确实需要辨认歌曲时才提歌名；自动续播绝不能每首都用“现在是《歌名》——歌手”开场。
+- podcast：本次长度为${lengthGuide}，像真正会编排节目节奏的私人电台主持人。需要完整展开一个观察，不能只报歌曲信息。只有首播、用户点名询问、或确实需要辨认歌曲时才提歌名；自动续播绝不能每首都用“现在是《歌名》——歌手”开场。
 - companion_transition：陪伴续播的曲间播报，必须回应前后两首歌的听感衔接。这次长度为${lengthGuide}，只讲一个有依据的角度，不要每次使用相同句式。
 - silent：shouldSpeak=false，displayMessage=false，reply=""，intent="no_reply"。
 
 触发规则：
-- auto_next：自动下一首。normal/silent 默认不说话；podcast 用上一首与这一首之间的情绪、节奏或听感做自然承接，可以安静，也可以只说一两句，不要逐首讲解、报幕或复述歌名。
+- auto_next：自动下一首。normal/silent 默认不说话；podcast 按指定长度，用上一首与这一首之间的可信信息做自然承接，必须给出非空回复，不要报幕或复述歌名。
 - companion_transition：AI 歌单中的自动换歌。需要播报，用前后歌曲的真实标签和听感信息自然过渡，不编造歌词或背景。
 - ai_next：用户明确让你换歌。normal 短回应；podcast 可以多一点。
 - user_next/user_prev/user_play：用户手动操作。按当前模式回应。
@@ -3401,7 +3441,9 @@ async function handleSongReaction(req, res) {
         temperature: responseMode === "podcast" ? 0.68 : 0.88,
         frequency_penalty: responseMode === "podcast" ? 0.2 : 0.45,
         presence_penalty: responseMode === "podcast" ? 0.05 : 0.2,
-        max_tokens: companionTransition ? 210 : responseMode === "podcast" ? 140 : 180,
+        // Pro includes reasoning in this budget. 140 tokens previously left
+        // no final content at all (finish_reason=length, reasoning_tokens=140).
+        max_tokens: responseMode === "podcast" ? podcastPolicy.maxTokens : 180,
         stream: false,
         response_format: { type: "json_object" },
       }),
@@ -3418,6 +3460,9 @@ async function handleSongReaction(req, res) {
     }
 
     const rawText = data.choices?.[0]?.message?.content?.trim() || "";
+    if (!rawText || data.choices?.[0]?.finish_reason === "length") throw new Error(data.choices?.[0]?.finish_reason === "length"
+      ? "播客生成达到模型输出上限，请稍后重试"
+      : "DeepSeek 没有返回播客正文，请稍后重试");
     let parsed = {};
     try {
       parsed = JSON.parse(rawText.replace(/```json|```/g, "").trim());
@@ -3431,15 +3476,7 @@ async function handleSongReaction(req, res) {
     }
 
     let reply = String(parsed.reply || "").trim();
-    if (companionTransition) {
-      const limit = { short: 30, medium: 58, long: 100 }[announcementLength] || 58;
-      const sentenceLimit = announcementLength === "long" ? 3 : announcementLength === "short" ? 1 : 2;
-      reply = (reply.match(/[^。！？!?]+[。！？!?]?/g) || []).slice(0, sentenceLimit).join("").trim().slice(0, limit);
-    } else if (responseMode === "podcast") {
-      // Podcast is an occasional aside, never a host monologue.
-      const sentences = reply.match(/[^。！？!?]+[。！？!?]?/g) || [];
-      reply = sentences.slice(0, 2).join("").trim().slice(0, 56);
-    }
+    if (responseMode === "podcast") reply = finishPodcastReply(reply, announcementLength);
     if (responseMode !== "silent") {
       reply = await refreshRepeatedReply({
         reply,
@@ -3449,11 +3486,9 @@ async function handleSongReaction(req, res) {
         signal,
       });
     }
-    if (trigger === "auto_next" && isReplyTooSimilar(reply, recentAiReplies, 0.46)) reply = "";
-    if (companionTransition && !reply && title) reply = `接下来听《${title}》，我们顺着这一段节奏走。`;
-    if (companionTransition) reply = reply.slice(0, { short: 30, medium: 58, long: 100 }[announcementLength] || 58);
-    if (responseMode === "podcast" && trigger !== "auto_next" && !reply && title && artist) {
-      reply = `这次先放《${title}${version ? `（${version}）` : ""}》，${artist}。`;
+    if (responseMode === "podcast") {
+      reply = finishPodcastReply(reply, announcementLength);
+      if (!reply) throw new Error("DeepSeek 返回了空播客，请稍后重试");
     }
 
     return sendJson(res, 200, {
@@ -6110,7 +6145,7 @@ function nativeVoiceBaseUrl() {
 async function proxyNativeVoice(pathname, options = {}) {
   const response = await fetch(`${nativeVoiceBaseUrl()}${pathname}`, {
     ...options,
-    signal: AbortSignal.timeout(options.timeoutMs || 8_000),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs || 8_000)]) : AbortSignal.timeout(options.timeoutMs || 8_000),
   });
   const contentType = response.headers.get("content-type") || "application/json";
   const body = Buffer.from(await response.arrayBuffer());
@@ -6118,13 +6153,26 @@ async function proxyNativeVoice(pathname, options = {}) {
 }
 
 async function handleNativeVoiceProxy(req, res, pathname) {
+  const lifecycle = createRequestLifecycle(req, res);
   try {
     const method = req.method || "GET";
-    const payload = method === "POST" ? await readJson(req).catch(() => ({})) : undefined;
+    let body;
+    const binary = pathname === "/playback";
+    if (method === "POST" && binary) {
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 12 * 1024 * 1024) return sendJson(res, 413, { ok: false, error: "语音音频过大" });
+        chunks.push(chunk);
+      }
+      body = Buffer.concat(chunks);
+    } else if (method === "POST") body = JSON.stringify(await readJson(req).catch(() => ({})));
     const upstream = await proxyNativeVoice(pathname, {
       method,
-      headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
-      body: method === "POST" ? JSON.stringify(payload) : undefined,
+      headers: method === "POST" ? { "Content-Type": binary ? "audio/wav" : "application/json" } : undefined,
+      body,
+      signal: lifecycle.signal,
     });
     res.writeHead(upstream.response.status, { "Content-Type": upstream.contentType, "Cache-Control": "no-store" });
     res.end(upstream.body);
@@ -6135,7 +6183,7 @@ async function handleNativeVoiceProxy(req, res, pathname) {
       code: error?.cause?.code || error?.code || "NATIVE_VOICE_UNAVAILABLE",
       error: error instanceof Error ? error.message : "Native voice engine unavailable",
     });
-  }
+  } finally { lifecycle.cleanup(); }
 }
 
 async function handleTts(req, res) {
@@ -6793,7 +6841,7 @@ async function serveStatic(req, res) {
   if (requestedPath === "user_memory.json") return handleGetDefaultUserMemory(req, res);
   const requested = requestedPath || "index.html";
   const roots = requested.startsWith("covers/")
-    ? uniqueStrings([publicDir, legacyPublicDir])
+    ? uniqueStrings([runtimePublicDir, publicDir, legacyPublicDir])
     : [publicDir];
   let blocked = false;
 
@@ -6818,9 +6866,15 @@ async function serveStatic(req, res) {
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".woff2": "font/woff2",
       }[ext] || "application/octet-stream";
 
-      res.writeHead(200, { "Content-Type": type });
+      res.writeHead(200, {
+        "Content-Type": type,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": requested.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+      });
       return res.end(file);
     } catch {
       // Try the next static root, if any.
@@ -7141,7 +7195,7 @@ async function handleMossModelConfig(req, res) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer(createRequestBoundary(async (req, res) => {
   const requestPath = new URL(req.url, "http://127.0.0.1").pathname;
   const cowAgentOutcomeMatch = requestPath.match(/^\/api\/yun\/cowagent\/jobs\/([^/]+)\/outcome$/);
   const cowAgentJobMatch = requestPath.match(/^\/api\/yun\/cowagent\/jobs\/([^/]+)$/);
@@ -7258,6 +7312,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/api/netease/collection/add") {
     return handleNeteaseCollectionAdd(req, res);
   }
+  if (req.method === "POST" && req.url === "/api/netease/library/liked") {
+    return handleNeteaseLikedUpdate(req, res);
+  }
   if (req.method === "GET" && req.url?.startsWith("/api/netease/artist/songs")) {
     return handleNeteaseArtistSongs(req, res);
   }
@@ -7326,6 +7383,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/api/native-voice/health") {
     return handleNativeVoiceProxy(req, res, "/health");
   }
+  if (req.method === "POST" && req.url === "/api/native-voice/playback") {
+    return handleNativeVoiceProxy(req, res, "/playback");
+  }
+  if (req.method === "POST" && req.url === "/api/native-voice/playback/stop") {
+    return handleNativeVoiceProxy(req, res, "/playback/stop");
+  }
   if (req.method === "POST" && req.url === "/api/native-voice/start") {
     return handleNativeVoiceProxy(req, res, "/start");
   }
@@ -7346,6 +7409,26 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && req.url === "/api/yun-settings") {
     return handleGetYunSettings(req, res);
+  }
+  if (req.url === "/api/visuals/immersive-background" && ["GET", "POST"].includes(req.method)) {
+    try {
+      const profile = req.method === "POST"
+        ? await immersiveBackgroundStore.save((await readJson(req)).settings)
+        : await immersiveBackgroundStore.read();
+      return sendJson(res, 200, { ok: true, ...profile });
+    } catch (error) {
+      return sendJson(res, error instanceof TypeError ? 400 : 500, { ok: false, error: error instanceof TypeError ? error.message : "背景效果读写失败，请重试" });
+    }
+  }
+  if (req.url === "/api/visuals/lyric-effects" && ["GET", "POST"].includes(req.method)) {
+    try {
+      const profile = req.method === "POST"
+        ? await lyricEffectsStore.save((await readJson(req)).settings)
+        : await lyricEffectsStore.read();
+      return sendJson(res, 200, { ok: true, ...profile });
+    } catch (error) {
+      return sendJson(res, error instanceof TypeError ? 400 : 500, { ok: false, error: error instanceof TypeError ? error.message : "歌词效果读写失败，请重试" });
+    }
   }
   if (req.method === "POST" && req.url === "/api/yun-settings") {
     return handlePostYunSettings(req, res);
@@ -7401,6 +7484,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url?.startsWith("/api/netease/cover")) {
     return handleNeteaseCover(req, res);
   }
+  if (req.method === "GET" && req.url?.startsWith("/api/netease/chorus?")) {
+    return handleNeteaseSongChorus(req, res);
+  }
   if (req.method === "GET" && req.url?.startsWith("/api/netease/audio")) {
     return handleNeteaseAudio(req, res);
   }
@@ -7419,7 +7505,7 @@ const server = http.createServer(async (req, res) => {
     return yunTelemetry.handleTelemetry(req, res);
   }
   return serveStatic(req, res);
-});
+}, { trustedOrigins: parseTrustedOrigins(process.env.YUN_TRUSTED_ORIGINS) }));
 
 export function startServer(requestedPort = port) {
   if (server.listening) {

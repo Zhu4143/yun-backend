@@ -104,8 +104,8 @@ function encodeWavBlob(chunks, sampleRate) {
   return new Blob([buffer], { type: 'audio/wav' })
 }
 
-export function useAsrWakeWord({ suspended = false, speaking = false, onWake } = {}) {
-  const [enabled, setEnabledState] = useState(getInitialEnabled)
+export function useAsrWakeWord({ suspended = false, speaking = false, onWake, initialEnabled } = {}) {
+  const [enabled, setEnabledState] = useState(() => typeof initialEnabled === 'boolean' ? initialEnabled : getInitialEnabled())
   const [runtimeStatus, setRuntimeStatus] = useState('starting')
   const [nativeActive, setNativeActive] = useState(false)
   const [commandCaptureActive, setCommandCaptureActive] = useState(false)

@@ -370,6 +370,7 @@ export default function PixelRhythmPortrait({
   revealProgress = 1,
   sampleStep = 3,
   pointSize = 1,
+  active = true,
   crop = { x: 0, y: 0, width: 1, height: 1 },
 }) {
   const wrapRef = useRef(null)
@@ -377,6 +378,16 @@ export default function PixelRhythmPortrait({
   const materialsRef = useRef(null)
   const sequenceFpsRef = useRef(sequenceFps)
   const revealProgressRef = useRef(revealProgress)
+  const activeRef = useRef(active)
+  const animateRef = useRef(null)
+  const animationFrameRef = useRef(0)
+
+  useEffect(() => {
+    activeRef.current = active
+    if (active && animateRef.current && !animationFrameRef.current) {
+      animationFrameRef.current = requestAnimationFrame(animateRef.current)
+    }
+  }, [active])
 
   useEffect(() => {
     sequenceFpsRef.current = sequenceFps
@@ -390,7 +401,6 @@ export default function PixelRhythmPortrait({
   useEffect(() => {
     if (!imageUrl) return undefined
     let destroyed = false
-    let frameId = 0
     let sequenceFrames = null
     let renderedSequenceIndex = -1
     let portrait = null
@@ -450,6 +460,10 @@ export default function PixelRhythmPortrait({
     const clock = new THREE.Clock()
     const animate = () => {
       if (destroyed) return
+      if (!activeRef.current) {
+        animationFrameRef.current = 0
+        return
+      }
       const time = clock.getElapsedTime()
       fillMaterial.uniforms.uTime.value = time
       edgeMaterial.uniforms.uTime.value = time
@@ -472,13 +486,16 @@ export default function PixelRhythmPortrait({
         }
       }
       renderer.render(scene, camera)
-      frameId = requestAnimationFrame(animate)
+      animationFrameRef.current = requestAnimationFrame(animate)
     }
-    animate()
+    animateRef.current = animate
+    if (activeRef.current) animationFrameRef.current = requestAnimationFrame(animate)
 
     return () => {
       destroyed = true
-      cancelAnimationFrame(frameId)
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = 0
+      animateRef.current = null
       window.removeEventListener('resize', resize)
       scene.traverse((object) => {
         object.geometry?.dispose()

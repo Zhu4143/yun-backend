@@ -15,7 +15,7 @@ function findActiveLyricIndex(lines, currentTime) {
   return activeIndex
 }
 
-function FloatingLyrics({ settings = LYRIC_3D_DEFAULTS, theme }) {
+function FloatingLyrics({ settings = LYRIC_3D_DEFAULTS, theme, textRenderer: TextRenderer = ThreeLyricText }) {
   const { currentTrack: currentSong, currentTime, isPlaying } = usePlayer()
   const songId = currentSong?.id || ''
   const [lyricState, setLyricState] = useState({ songId: '', lines: [], outgoing: null, transitionId: 0 })
@@ -141,7 +141,7 @@ function FloatingLyrics({ settings = LYRIC_3D_DEFAULTS, theme }) {
       aria-label="滚动歌词"
     >
       <div className="floating-lyrics__viewport" aria-hidden="true">
-        <ThreeLyricText
+        <TextRenderer
           lines={lines}
           songId={lyricState.songId}
           activeIndex={activeIndex}

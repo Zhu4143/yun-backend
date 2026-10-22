@@ -399,6 +399,21 @@ export function createNeteaseCapabilityService({ api, getCookie = () => '', getL
     return { statuses: requested.map((providerId) => ({ providerId, liked: likedIds.has(providerId) })), likedCount: likedIds.size }
   }
 
+  async function setLiked({ id, liked } = {}) {
+    await requireLogin()
+    const providerId = stringValue(id).replace(/^netease-/, '').trim()
+    if (!/^\d+$/.test(providerId) || typeof liked !== 'boolean') {
+      throw new NeteaseCapabilityError('unsupported', '请提供有效的网易云歌曲 ID 和喜欢状态')
+    }
+    // This provider version checks query.like == 'false'; a boolean false
+    // would incorrectly add the heart instead of removing it.
+    const body = await call('like', { id: providerId, like: liked ? 'true' : 'false' })
+    if (Number(body.code) !== 200) {
+      throw new NeteaseCapabilityError('provider_error', '网易云没有确认红心更新成功', { method: 'like' })
+    }
+    return { providerId, liked }
+  }
+
   async function subscriptionCounts() {
     await requireLogin()
     const body = await call('user_subcount')
@@ -495,6 +510,7 @@ export function createNeteaseCapabilityService({ api, getCookie = () => '', getL
     checkPlayable,
     resolveStream,
     likedStatus,
+    setLiked,
     subscriptionCounts,
     subscribedAlbums,
     subscribedArtists,

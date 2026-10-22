@@ -185,11 +185,22 @@ export default function VinylPortraitBridge({
   imageUrl,
   crop = { x: 0, y: 0, width: 1, height: 1 },
   progress = 1,
+  active = true,
   pointCount = 56000,
 }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const progressRef = useRef(progress)
+  const activeRef = useRef(active)
+  const animateRef = useRef(null)
+  const frameIdRef = useRef(0)
+
+  useEffect(() => {
+    activeRef.current = active
+    if (active && animateRef.current && !frameIdRef.current) {
+      frameIdRef.current = requestAnimationFrame(animateRef.current)
+    }
+  }, [active])
 
   useEffect(() => {
     progressRef.current = progress
@@ -198,7 +209,6 @@ export default function VinylPortraitBridge({
   useEffect(() => {
     if (!imageUrl) return undefined
     let destroyed = false
-    let frameId = 0
     let geometry = null
     const wrap = wrapRef.current
     const renderer = new THREE.WebGLRenderer({
@@ -262,16 +272,23 @@ export default function VinylPortraitBridge({
     const clock = new THREE.Clock()
     const animate = () => {
       if (destroyed) return
+      if (!activeRef.current) {
+        frameIdRef.current = 0
+        return
+      }
       material.uniforms.uProgress.value = progressRef.current
       material.uniforms.uTime.value = clock.getElapsedTime()
       renderer.render(scene, camera)
-      frameId = requestAnimationFrame(animate)
+      frameIdRef.current = requestAnimationFrame(animate)
     }
-    animate()
+    animateRef.current = animate
+    if (activeRef.current) frameIdRef.current = requestAnimationFrame(animate)
 
     return () => {
       destroyed = true
-      cancelAnimationFrame(frameId)
+      cancelAnimationFrame(frameIdRef.current)
+      frameIdRef.current = 0
+      animateRef.current = null
       window.removeEventListener('resize', onResize)
       geometry?.dispose()
       material.dispose()

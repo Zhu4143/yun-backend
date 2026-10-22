@@ -1,5 +1,8 @@
 export class PendingPlaybackController {
-  constructor({ schedule = setTimeout, cancel = clearTimeout } = {}) {
+  constructor({
+    schedule = (callback, delay) => globalThis.setTimeout(callback, delay),
+    cancel = (id) => globalThis.clearTimeout(id),
+  } = {}) {
     this.schedule = schedule
     this.cancelTimer = cancel
     this.pending = null

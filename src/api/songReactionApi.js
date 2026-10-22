@@ -11,7 +11,7 @@ export async function requestSongReaction({
   responseId = '',
   signal,
 }) {
-  const response = await fetch('/api/song-reaction', {
+  const response = await fetchLocalApi('/api/song-reaction', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -44,6 +44,9 @@ export async function requestSongReaction({
       } : null,
       announcementLength,
     }),
+  }, {
+    timeoutMs: 45000,
+    unavailableMessage: '播客生成服务暂时不可用，请稍后重试',
   })
 
   const data = await response.json().catch(() => ({}))
@@ -55,3 +58,4 @@ export async function requestSongReaction({
 
   return data
 }
+import { fetchLocalApi } from './requestApi.js'

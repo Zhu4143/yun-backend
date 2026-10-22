@@ -381,3 +381,93 @@ test('useLocalPlayer routes waiting and stalled events through active playback r
   assert.match(source, /addEventListener\('stalled',\s*handlePlaybackStall\)/)
   assert.match(source, /activePlaybackRecovery\.schedule\(/)
 })
+
+function recoveryClock() {
+  let now = 0, id = 0
+  const tasks = new Map()
+  return {
+    setTimer(callback, delay) { tasks.set(++id, { at: now + delay, callback }); return id },
+    clearTimer(handle) { tasks.delete(handle) },
+    async advance(ms) {
+      const target = now + ms
+      for (let i = 0; i < 100; i++) {
+        const next = [...tasks].filter(([, task]) => task.at <= target).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!next) break
+        tasks.delete(next[0]); now = next[1].at; next[1].callback()
+        for (let turn = 0; turn < 8; turn++) await Promise.resolve()
+      }
+      now = target
+    },
+  }
+}
+
+test('repeated buffering events cannot postpone recovery indefinitely', async () => {
+  const audio = new RecoverableDeck(), scheduler = recoveryClock()
+  const recovery = createActivePlaybackRecovery({ scheduler, stallDelayMs: 1200 })
+  for (let i = 0; i < 8; i++) {
+    recovery.schedule({ audio })
+    await scheduler.advance(400)
+  }
+  assert.ok(audio.loadCalls >= 1, 'a frozen stream must recover even while waiting/stalled keep firing')
+  recovery.cancel()
+})
+
+test('a recovered play promise without real progress gets a bounded follow-up retry', async () => {
+  const audio = new RecoverableDeck(), scheduler = recoveryClock(), failures = []
+  const recovery = createActivePlaybackRecovery({ scheduler, stallDelayMs: 100, loadTimeoutMs: 200, maxAttempts: 2 })
+  recovery.schedule({ audio, onFailed: error => failures.push(error) })
+  await scheduler.advance(1500)
+  assert.equal(audio.loadCalls, 2, 'resolved play() is not proof the media clock resumed')
+  assert.equal(failures.length, 1)
+  recovery.cancel()
+})
+
+test('pausing during asynchronous recovery prevents a late automatic play', async () => {
+  const audio = new RecoverableDeck(), scheduler = recoveryClock()
+  let resume
+  const recovery = createActivePlaybackRecovery({ scheduler, stallDelayMs: 100 })
+  recovery.schedule({ audio, resumeOutput: () => new Promise(resolve => { resume = resolve }) })
+  await scheduler.advance(100)
+  recovery.cancel()
+  audio.pause()
+  resume()
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+  assert.equal(audio.playCalls, 0)
+  assert.equal(audio.paused, true)
+})
+
+test('reusing the same audio element for a new source invalidates old position and play callbacks', async () => {
+  const audio = new RecoverableDeck(), scheduler = recoveryClock()
+  let resume
+  audio.load = function () { this.loadCalls++; this.currentTime = 0 }
+  const recovery = createActivePlaybackRecovery({ scheduler, stallDelayMs: 100 })
+  recovery.schedule({ audio, resumeOutput: () => new Promise(resolve => { resume = resolve }) })
+  await scheduler.advance(100)
+  audio.src = audio.currentSrc = '/api/netease/audio?id=new-song'
+  audio.currentTime = 2
+  audio.listeners.get('loadedmetadata')?.()
+  resume()
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+  assert.equal(audio.currentTime, 2)
+  assert.equal(audio.playCalls, 0)
+  recovery.cancel()
+})
+
+test('real progress cancels retry work and a permanently pending play is bounded', async () => {
+  const audio = new RecoverableDeck(), scheduler = recoveryClock(), failures = []
+  const recovery = createActivePlaybackRecovery({ scheduler, stallDelayMs: 100, loadTimeoutMs: 200 })
+  recovery.schedule({ audio })
+  await scheduler.advance(100)
+  audio.currentTime = 71
+  recovery.observeProgress(audio)
+  await scheduler.advance(2000)
+  assert.equal(audio.loadCalls, 1)
+  assert.equal(recovery.getDiagnostics().pending, false)
+
+  audio.play = () => new Promise(() => {})
+  recovery.schedule({ audio, onFailed: error => failures.push(error) })
+  await scheduler.advance(1500)
+  assert.equal(failures.length, 1)
+  assert.equal(recovery.getDiagnostics().pending, false)
+  assert.equal(audio.paused, true)
+})

@@ -7,7 +7,7 @@ import './AsrSettingsPanel.css'
 
 const TEST_RECORD_MS = 3000
 
-export default function AsrSettingsPanel({ onConfiguredChange, className = '' }) {
+export default function AsrSettingsPanel({ onConfiguredChange, className = '', embedded = false }) {
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [model, setModel] = useState('')
@@ -54,6 +54,11 @@ export default function AsrSettingsPanel({ onConfiguredChange, className = '' })
     recordStreamRef.current = null
     recordContextRef.current = null
   }, [])
+
+  useEffect(() => () => {
+    testRunRef.current += 1
+    stopRecording()
+  }, [stopRecording])
 
   const encodeWavBlob = useCallback((chunks, sampleRate) => {
     const length = chunks.reduce((total, chunk) => total + chunk.length, 0)
@@ -176,16 +181,13 @@ export default function AsrSettingsPanel({ onConfiguredChange, className = '' })
     }
   }, [encodeWavBlob, isRecording, isTesting, stopRecording])
 
-  return createPortal(
-    <LiquidGlass
-      displacementScale={40}
-      blurAmount={0.01}
-      saturation={160}
-      aberrationIntensity={3}
-      elasticity={0.35}
-      cornerRadius={28}
-      padding="20px"
-      className={`asr-settings-glass${className ? ` ${className}` : ''}`}
+  const PanelSurface = embedded ? 'div' : LiquidGlass
+  const glassProperties = embedded ? {} : { displacementScale: 40, blurAmount: 0.01, saturation: 160,
+    aberrationIntensity: 3, elasticity: 0.35, cornerRadius: 28, padding: '20px' }
+  const panel = (
+    <PanelSurface
+      {...glassProperties}
+      className={`asr-settings-glass${embedded ? ' settings-asr-embedded' : ''}${className ? ` ${className}` : ''}`}
     >
       <div className="asr-settings">
         <div className="asr-settings-header">
@@ -245,7 +247,7 @@ export default function AsrSettingsPanel({ onConfiguredChange, className = '' })
         {message && <p className="asr-message">{message}</p>}
         {testResult && <p className="asr-test-result">{testResult}</p>}
       </div>
-    </LiquidGlass>,
-    document.body
+    </PanelSurface>
   )
+  return embedded ? panel : createPortal(panel, document.body)
 }

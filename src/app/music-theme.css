@@ -1,0 +1,106 @@
+:root { color-scheme: light; }
+:root[data-music-theme="dark"] {
+  color-scheme: dark;
+  color: #e6eef6;
+  background: #0c151f;
+  --ink: #e6eef6;
+  --muted: #9eafc1;
+  --accent: #9ed6d0;
+  --accent-soft: #213b46;
+  --line: rgba(164,192,214,.14);
+  --glass: rgba(22,37,52,.7);
+  --night-secondary: #b5c7d6;
+  --night-raised: #1a2b3b;
+}
+body, .nav-item, .track-row, .chat-context, .chat-message-content, .setting-control select {
+  transition: background-color .22s ease, color .22s ease, border-color .22s ease;
+}
+:root[data-music-theme="dark"] body { background: #0c151f; color: var(--ink); }
+:root[data-music-theme="dark"] :is(.music-app,.music-dialog,.lazy-panel-loading) { color: var(--ink); }
+:root[data-music-theme="dark"] :is(.music-sidebar,.music-rail) { --muted: #9eafc1; }
+:root[data-music-theme="dark"] :is(.sidebar-section-heading,.album-caption p,.track-copy > span,.player-artist,.voice-call-control > span) { color: var(--muted); }
+:root[data-music-theme="dark"] .yun-glass-layer { background: #0e1b28; }
+:root[data-music-theme="dark"] .yun-color-fallback { background: radial-gradient(ellipse at 15% 25%,rgba(40,137,123,.36),transparent 62%),radial-gradient(ellipse at 85% 35%,rgba(134,71,150,.3),transparent 62%),radial-gradient(ellipse at 45% 90%,rgba(159,121,57,.25),transparent 65%); }
+:root[data-music-theme="dark"] .yun-glass-layer::after { background: rgba(10,19,29,.12); }
+:root[data-music-theme="dark"] .yun-glass-artwork { opacity: .24; filter: blur(48px) saturate(.9); }
+:root[data-music-theme="dark"] .music-workspace {
+  background: linear-gradient(to bottom,rgba(15,25,37,var(--workspace-opacity)) 0,rgba(15,25,37,var(--workspace-opacity)) calc(100% - var(--player-clearance) - 88px),rgba(15,25,37,.42) calc(100% - var(--player-clearance) - 56px),rgba(15,25,37,.16) calc(100% - var(--player-clearance) - 24px),transparent calc(100% - var(--player-clearance)),transparent 100%);
+}
+:root[data-music-theme="dark"] .glass-finish {
+  border-color: rgba(192,220,238,.14);
+  background: rgba(22,38,54,var(--glass-fill));
+  box-shadow: inset 1px 1px 0 rgba(210,233,245,.12),inset -1px -1px 0 rgba(0,0,0,.2),0 8px 30px rgba(0,0,0,.12);
+}
+:root[data-music-theme="dark"] .glass-finish::after { background: rgba(22,36,51,var(--glass-body,0)); box-shadow: 0 0 8px 5px rgba(22,36,51,var(--glass-body,0)); }
+:root[data-music-theme="dark"] .glass-surface[data-glass-mode="fallback"] > .glass-finish { background: rgba(20,35,50,.94); }
+:root[data-music-theme="dark"] :is(.round-button,.immersive-transport)[data-glass-mode="fallback"] > .glass-finish { background: rgba(255,255,255,.04); }
+:root[data-music-theme="dark"] :is(.global-search,.mobile-search,.chat-composer,.round-button,.music-sidebar,.music-player,.music-rail,.mobile-navigation,.music-dialog) { border-color: var(--line); }
+:root[data-music-theme="dark"] .glass-surface[data-glass-source="liquid-ore"] { border-color: transparent; }
+:root[data-music-theme="dark"] :is(.brand,.page-heading h1,.rail-tabs > button.is-active,.empty-state h3,.chat-context strong,.account-panel strong) { color: var(--ink); }
+:root[data-music-theme="dark"] :is(.nav-item,.text-button,.global-search,.mobile-search,.search-page-form,.setting-control output,.settings-advanced > summary,.field-label,.account-profile small,.account-panel > p:first-child,.account-qr p) { color: var(--night-secondary); }
+:root[data-music-theme="dark"] :is(.page-heading p,.sidebar-empty,.global-search kbd,.setting-copy p,.settings-note,.settings-tabs > button,.lyric-hint,.comments-source,.queue-copy small,.queue-duration,.queue-section > h3,.queue-hint,.track-index,.track-album,.track-duration,.player-time,.comment-card strong,.comment-likes,.chat-status,.chat-message-author,.eyebrow,.composer-actions small,.composer-attachment,.thinking-dots,.rail-tabs > button) { color: var(--muted); }
+:root[data-music-theme="dark"] :is(.global-search input,.mobile-search input,.search-page-form input,.composer-input) { color: var(--ink); }
+:root[data-music-theme="dark"] input::placeholder, :root[data-music-theme="dark"] textarea::placeholder { color: #879cb0; opacity: 1; }
+:root[data-music-theme="dark"] :is(.nav-item:hover,.sidebar-playlist:hover,.track-row:hover,.icon-button:hover:not(:disabled)) { background: rgba(159,198,219,.09); }
+:root[data-music-theme="dark"] :is(.nav-item.is-active,.sidebar-playlist.is-active,.track-row.is-current) { background: rgba(117,186,190,.14); color: #b2dfdc; }
+:root[data-music-theme="dark"] :is(.source-filters button,.collection-tabs button,.companion-modes button,.chat-suggestions button,.voice-call-button) { color: var(--night-secondary); background: rgba(31,49,66,.65); border-color: var(--line); }
+:root[data-music-theme="dark"] :is(.source-filters button[aria-pressed="true"],.collection-tabs button[aria-pressed="true"],.companion-modes button[aria-pressed="true"],.settings-tabs > button.is-active) { color: var(--accent); background: var(--accent-soft); border-color: rgba(133,209,207,.24); }
+:root[data-music-theme="dark"] :is(.queue-row.is-current .queue-copy strong,.lyric-line.is-active button,.text-button:hover) { color: var(--accent); }
+:root[data-music-theme="dark"] .lyric-line:not(.is-active) button { color: var(--muted); }
+:root[data-music-theme="dark"] .immersive-player--record .lyric-line.is-active button { color: #fff; }
+:root[data-music-theme="dark"] :is(.button--primary,.button-primary) { background: #95d1cc; color: #10272e; }
+:root[data-music-theme="dark"] :is(.button--primary:hover:not(:disabled),.button-primary:hover:not(:disabled)) { background: #b1e3de; }
+:root[data-music-theme="dark"] :is(.button--secondary,.button-secondary) { background: #213747; color: #c1dce5; border-color: var(--line); }
+:root[data-music-theme="dark"] :is(.button--secondary:hover:not(:disabled),.button-secondary:hover:not(:disabled)) { background: #2a4354; }
+:root[data-music-theme="dark"] :is(.account-avatar,.comment-avatar) { background: #233e4d; color: #a8d1d8; border-color: var(--line); }
+:root[data-music-theme="dark"] :is(.album-art,.album-play) { background: #1c2d3e; }
+:root[data-music-theme="dark"] :is(.companion-prompt,.companion-open,.chat-context,.chat-message-content,.inline-notice,.memory-summary,.lazy-panel-loading) { background: var(--night-raised); color: var(--night-secondary); border-color: var(--line); }
+:root[data-music-theme="dark"] .memory-summary > strong { color: var(--accent); }
+:root[data-music-theme="dark"] .chat-message.is-user .chat-message-content { background: #25424d; color: #d6efef; }
+:root[data-music-theme="dark"] .chat-scroll-latest { background: #233b4a; color: var(--accent); }
+:root[data-music-theme="dark"] .composer-actions .icon-button { color: var(--night-secondary); }
+:root[data-music-theme="dark"] .composer-actions .icon-button.is-active { background: #4c303a; color: #f1afb8; }
+:root[data-music-theme="dark"] .voice-call-button[aria-pressed="true"] { background: #294a4e; color: #c2ece4; }
+:root[data-music-theme="dark"] .music-app :is(.player-play-button,.player-mobile-play) { background: #a4d6d2; color: #10272e; }
+:root[data-music-theme="dark"] .music-app :is(.player-play-button,.player-mobile-play):hover:not(:disabled) { background: #c4e7e3; }
+:root[data-music-theme="dark"] .music-player[data-glass-source="liquid-ore"] .player-time { color: #a6bacb; }
+:root[data-music-theme="dark"] .mobile-navigation button { color: #9fb2c4; }
+:root[data-music-theme="dark"] .mobile-navigation button[aria-current="page"] { color: #b6e4df; }
+:root[data-music-theme="dark"] .music-modal-backdrop { background: rgba(2,8,15,.55); }
+:root[data-music-theme="dark"] :is(.dialog-header,.setting-row,.settings-tabs,.track-row) { border-color: var(--line); }
+:root[data-music-theme="dark"] :is(.setting-control select,.model-form input) { background: #122332; color: var(--ink); border-color: #344b5d; }
+:root[data-music-theme="dark"] input[role="switch"] { background: #415469; }
+:root[data-music-theme="dark"] input[role="switch"]:checked { background: #72b9b6; }
+:root[data-music-theme="dark"] input[type="range"] {
+  background-color: transparent;
+  background-image: linear-gradient(90deg,#83cdd0 var(--range-progress,50%),rgba(177,202,221,.28) var(--range-progress,50%));
+  accent-color: #9ed6d0;
+}
+:root[data-music-theme="dark"] .account-profile > span { background: #213c4d; color: #b5d6df; }
+:root[data-music-theme="dark"] .account-dialog :is(.yun-login-form,.yun-login-heading h2) { color: var(--ink); }
+:root[data-music-theme="dark"] .account-dialog :is(.yun-login-heading p,.yun-login-heading span,.yun-login-note) { color: var(--muted); }
+:root[data-music-theme="dark"] .account-dialog .yun-login-actions button { background: #233c4b; color: #c2e0e6; border-color: #395565; }
+:root[data-music-theme="dark"] .settings-asr-embedded { color: var(--night-secondary); }
+:root[data-music-theme="dark"] .settings-asr-embedded .asr-settings-card { background: #162b3c !important; color: var(--night-secondary) !important; }
+:root[data-music-theme="dark"] .settings-asr-embedded :is(input,.asr-field input) { background: #102230 !important; color: var(--ink) !important; border-color: #385263; }
+:root[data-music-theme="dark"] .settings-asr-embedded :is(button,.asr-settings) { color: var(--night-secondary); --glass-text: #b5c7d6; }
+/* Keep the existing WebKit auto reset so native arrow buttons stay hidden. */
+:root[data-music-theme="dark"] :is(.music-app,.music-dialog) :is(.sidebar-playlists,.music-content,.player-detail-content,.dialog-body,.chat-messages,.settings-tabs) { --scroll-thumb: rgba(162,189,208,.25); }
+:root[data-music-theme="dark"] :is(.music-app,.music-dialog) :is(.sidebar-playlists,.music-content,.player-detail-content,.dialog-body,.chat-messages,.settings-tabs):is(:hover,:focus-within) { --scroll-thumb: rgba(162,189,208,.5); }
+:root[data-music-theme="dark"] :is(.music-app,.music-dialog) :is(.sidebar-playlists,.music-content,.player-detail-content,.dialog-body,.chat-messages,.settings-tabs)::-webkit-scrollbar-thumb:hover { background-color: rgba(162,189,208,.65); }
+@supports selector(::-webkit-scrollbar) {
+  :root[data-music-theme="dark"] .immersive-details-body { scrollbar-width: auto; scrollbar-color: auto; }
+  :root[data-music-theme="dark"] .immersive-details-body::-webkit-scrollbar { width: 6px; background: transparent; }
+  :root[data-music-theme="dark"] .immersive-details-body::-webkit-scrollbar-track { background: transparent; }
+  :root[data-music-theme="dark"] .immersive-details-body::-webkit-scrollbar-thumb { background: rgba(162,189,208,.35); border: 1px solid transparent; background-clip: padding-box; border-radius: 10px; }
+  :root[data-music-theme="dark"] .immersive-details-body::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+}
+:root[data-music-theme="dark"] .yun-boot-screen { background: #0c151f !important; color: #b9cedd !important; }
+:root[data-music-theme="dark"] .yun-boot-screen :is(h1,strong) { color: #d8eaf3 !important; }
+:root[data-music-theme="dark"] .yun-boot-screen :is(p,small) { color: #99afc3 !important; }
+:root[data-music-theme="dark"] .skip-link { background: #233c4b; color: var(--ink); }
+:root[data-music-theme="dark"] .player-chorus-marker { --chorus-color: #f4c27b; }
+:root[data-music-theme="dark"] .player-chorus-marker::after { box-shadow: 0 0 0 2px #182e3d; }
+@media (prefers-reduced-motion: reduce) {
+  body, .nav-item, .track-row, .chat-context, .chat-message-content, .setting-control select { transition: none; }
+}

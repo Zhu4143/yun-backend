@@ -38,7 +38,7 @@ test('liquid ore settings save and reload with the source storage key', () => {
   resetLiquidOreGlassSettings()
   loadLiquidOreGlassSettings()
   assert.equal(liquidOreGlassState.frost, 15)
-  assert.equal(liquidOreGlassState.hoverScale, 0.075)
+  assert.equal(liquidOreGlassState.hoverScale, 0.008)
 
   delete globalThis.window
   resetLiquidOreGlassSettings()

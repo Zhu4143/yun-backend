@@ -23,7 +23,7 @@ export const LIQUID_ORE_GLASS_DEFAULTS = Object.freeze({
   shadow: 0.42,
   edgeWidth: 24,
   hoverGlow: 0.42,
-  hoverScale: 0.045,
+  hoverScale: 0.008,
   hoverRefract: 0.55,
   bounce: 0.62,
 })
@@ -34,7 +34,7 @@ export const LIQUID_ORE_CONTROL_GROUPS = Object.freeze([
     label: 'Hover',
     controls: [
       { key: 'hoverGlow', label: '光晕强度', min: 0, max: 1.2, step: 0.02, digits: 2 },
-      { key: 'hoverScale', label: '放大比例', min: 0, max: 0.12, step: 0.005, digits: 3 },
+      { key: 'hoverScale', label: '放大比例', min: 0, max: 0.008, step: 0.001, digits: 3 },
       { key: 'hoverRefract', label: '折射加强', min: 0, max: 1.5, step: 0.02, digits: 2 },
     ],
   },
@@ -173,6 +173,13 @@ export const LIQUID_ORE_GLASS_FRAGMENT_SHADER = `
   uniform float uSpecular;
   uniform float uShadow;
   uniform float uEdgeWidth;
+  #ifdef LIQUID_ORE_BODY_TINT
+  uniform vec3 uBodyColor;
+  uniform float uBodyOpacity;
+  #ifdef LIQUID_ORE_CARD_BODY_OPACITY
+  uniform float uCardBodyOpacity[${LIQUID_ORE_MAX_CARDS}];
+  #endif
+  #endif
 
   uniform vec2 uPointer;
   uniform float uHover[${LIQUID_ORE_MAX_CARDS}];
@@ -207,6 +214,12 @@ export const LIQUID_ORE_GLASS_FRAGMENT_SHADER = `
     float glow = 0.0;
     float sweep = 0.0;
     float nearest = 1e9;
+    #ifdef LIQUID_ORE_BODY_TINT
+    float bodyOpacity = uBodyOpacity;
+    #ifdef LIQUID_ORE_CARD_BODY_OPACITY
+    bodyOpacity = 0.0;
+    #endif
+    #endif
 
     for (int i = 0; i < ${LIQUID_ORE_MAX_CARDS}; i++) {
       if (i >= uCardCount) break;
@@ -222,6 +235,9 @@ export const LIQUID_ORE_GLASS_FRAGMENT_SHADER = `
 
       float inside = 1.0 - smoothstep(-1.2, 1.2, d);
       if (inside <= 0.001) continue;
+      #if defined(LIQUID_ORE_BODY_TINT) && defined(LIQUID_ORE_CARD_BODY_OPACITY)
+      bodyOpacity = max(bodyOpacity, uCardBodyOpacity[i] * inside);
+      #endif
 
       float t = clamp(-d / max(uRefractionHeight, 1.0), 0.0, 1.0);
       float hgt = sqrt(t);
@@ -248,6 +264,12 @@ export const LIQUID_ORE_GLASS_FRAGMENT_SHADER = `
       glass.r = texture2D(uBlurred, uv + off * (1.0 + uChromatic)).r;
       glass.g = texture2D(uBlurred, uv + off).g;
       glass.b = texture2D(uBlurred, uv + off * (1.0 - uChromatic)).b;
+
+      #ifdef LIQUID_ORE_BODY_TINT
+      // Opt-in contrast for bright scenes; the particle renderer does not
+      // define this branch and retains the original optical equations.
+      glass = mix(glass, uBodyColor, bodyOpacity);
+      #endif
 
       float lum = dot(glass, vec3(0.2126, 0.7152, 0.0722));
       glass = mix(vec3(lum), glass, uSaturation);

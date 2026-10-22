@@ -14,6 +14,20 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
+test('lightweight startup loads every playlist name without fetching its remote songs', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = () => { throw new Error('Remote tracks must remain on demand') }
+  const playlist = { id: 'large-playlist', name: 'Large library', trackCount: 10000 }
+  const firstPage = { loggedIn: true, items: [playlist], playlists: [playlist], total: 1, hasMore: false }
+  const manager = createYunBootManager({ storage: { getItem: () => null }, preloadPlaylistTracks: false })
+  try {
+    const result = await manager.definitions.get('LOAD_PLAYLISTS').run({ getResult: () => firstPage, reportProgress: () => {} })
+    assert.deepEqual(result.account.playlists, [playlist])
+    assert.equal(result.tracksComplete, false)
+    assert.equal(result.loadedCount, 1)
+  } finally { globalThis.fetch = originalFetch }
+})
+
 test('all blocking tasks must complete before boot becomes ready', async () => {
   const library = deferred()
   const manager = new YunBootManager({
@@ -109,6 +123,68 @@ test('full NetEase playlist synchronization is outside the startup critical path
   assert.deepEqual(manager.definitions.get('LOAD_LIBRARY').dependencies, ['LOAD_SETTINGS'])
   assert.equal(manager.definitions.get('LOAD_PLAYLISTS').blocking, false)
   assert.deepEqual(manager.definitions.get('INIT_PLAYER_CORE').dependencies, ['LOAD_LIBRARY'])
+})
+
+test('the DOM interface boots successfully when accelerated graphics are disabled', async () => {
+  const originalDocument = globalThis.document
+  const contextRequests = []
+  globalThis.document = {
+    createElement: () => ({
+      getContext: (type) => {
+        contextRequests.push(type)
+        return null
+      },
+    }),
+  }
+  const manager = createYunBootManager({ storage: { getItem: () => null } })
+  for (const definition of manager.definitions.values()) {
+    if (definition.id !== 'INIT_VISUAL') definition.run = async () => ({ ok: true })
+  }
+
+  try {
+    await manager.start()
+    await Promise.all(manager.backgroundTasks.values())
+
+    assert.equal(manager.getState().status, 'ready')
+    assert.equal(manager.getState().tasks.find((task) => task.id === 'INIT_VISUAL').status, 'success')
+    assert.deepEqual(contextRequests, [])
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+  }
+})
+
+test('cover preloading cancels the pending image without starting the remaining covers', async () => {
+  const originalImage = globalThis.Image
+  const images = []
+  globalThis.Image = class {
+    constructor() {
+      this.src = ''
+      images.push(this)
+    }
+  }
+  const manager = createYunBootManager({ storage: { getItem: () => null } })
+  const caller = new AbortController()
+  const preload = manager.definitions.get('PRELOAD_COVERS').run
+
+  try {
+    const pending = preload({
+      getResult: () => ({ songs: Array.from({ length: 20 }, (_, index) => ({ coverUrl: `/cover-${index}.jpg` })) }),
+      reportProgress: () => {},
+      signal: caller.signal,
+    })
+    assert.equal(images.length, 1)
+    caller.abort()
+
+    assert.deepEqual(await pending, { loaded: 0, total: 6 })
+    assert.equal(images.length, 1)
+    assert.equal(images[0].src, '')
+    assert.equal(images[0].onload, null)
+    assert.equal(images[0].onerror, null)
+  } finally {
+    if (originalImage === undefined) delete globalThis.Image
+    else globalThis.Image = originalImage
+  }
 })
 
 test('a NetEase outage degrades provider features while the local library boots', async () => {

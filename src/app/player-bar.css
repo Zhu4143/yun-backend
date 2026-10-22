@@ -1,0 +1,71 @@
+/* Shared by the main card and immersive player. Keep the native range for
+   pointer, touch and keyboard seeking; only its visible rail is custom. */
+.player-scrubber--minimal { min-height: 44px; }
+.minimal-scrubber-line {
+  pointer-events: none; position: absolute; top: 50%; left: 0; right: 0; height: 1px;
+  transform: translateY(-50%); border-radius: 0;
+  background: rgb(255 255 255 / .3);
+  transition: height .18s ease;
+}
+.minimal-scrubber-fill {
+  position: absolute; inset: 0; background: #fff;
+  transform: scaleX(var(--range-ratio, 0)); transform-origin: left center;
+}
+:root .player-timeline .player-scrubber--minimal > input[type='range'] {
+  position: relative; z-index: 1; height: 44px; width: 100%; background: transparent;
+  border-radius: 0; padding: 0; cursor: pointer;
+}
+.player-timeline .player-scrubber--minimal > input[type='range']::-webkit-slider-thumb {
+  appearance: none; width: 0; height: 0; background: transparent; box-shadow: none; border: 0; border-radius: 0;
+}
+.player-timeline .player-scrubber--minimal > input[type='range']::-moz-range-thumb {
+  width: 0; height: 0; background: transparent; box-shadow: none; border: 0; border-radius: 0;
+}
+.player-timeline .player-scrubber--minimal > input[type='range']::-moz-range-track,
+.player-timeline .player-scrubber--minimal > input[type='range']::-moz-range-progress { background: transparent; border: 0; }
+.player-scrubber--minimal:has(:focus-visible) .minimal-scrubber-line,
+.player-scrubber--minimal.is-pointer-hovered .minimal-scrubber-line,
+.player-scrubber--minimal:active .minimal-scrubber-line { height: 3px; }
+@media (hover: hover) and (pointer: fine) {
+  .player-scrubber--minimal:hover .minimal-scrubber-line { height: 3px; }
+}
+.player-timeline .player-scrubber--minimal .player-chorus-marker { z-index: 2; height: 44px; border-radius: 0; }
+.player-timeline .player-scrubber--minimal .player-chorus-marker::after {
+  width: 3px; height: 3px; border-radius: 50%; background: #fff; transform: none; box-shadow: none;
+}
+
+/* One sibling button owns the card background, never any playback controls. */
+.music-player > .player-expand-hit { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.music-player > :is(.player-track,.player-center,.player-tools,.player-mobile-controls) {
+  position: relative; z-index: 2; pointer-events: none;
+}
+.music-player :is(button,input,a,select,textarea) { pointer-events: auto; }
+.music-player .player-center { justify-content: center; gap: 0; }
+
+/* The visible line sits on the upper edge. Its hit area extends upwards so
+   it does not intercept the cover, text or buttons inside the glass card. */
+.music-player > .player-timeline--edge {
+  position: absolute; z-index: 3; left: clamp(24px,1.8vw,36px); right: clamp(24px,1.8vw,36px);
+  top: -40px; height: 44px; display: block; pointer-events: none;
+}
+.player-timeline--edge > .player-scrubber { width: 100%; height: 44px; }
+.player-timeline--edge .minimal-scrubber-line { top: 40px; box-shadow: 0 .5px 1px rgb(15 35 48 / .15); }
+.player-timeline--edge .player-chorus-marker {
+  top: auto; bottom: 0; transform: translateX(-50%);
+}
+.player-timeline--edge .player-chorus-marker::after { position: absolute; bottom: 3px; }
+.music-player .player-timeline--edge > .player-time {
+  position: absolute; top: 2px; color: #fff; font-size: 10px; line-height: 14px;
+  text-shadow: 0 1px 4px rgb(13 27 39 / .65); opacity: 0; transition: opacity .15s ease;
+}
+.player-timeline--edge > .player-time:first-child { left: 0; }
+.player-timeline--edge > .player-time:last-child { right: 0; }
+.music-player .player-timeline--edge:is(:hover,:focus-within,:active) > .player-time { opacity: 1; }
+.player-timeline--edge input:focus-visible { outline: none; }
+.player-timeline--edge:has(input:focus-visible) .minimal-scrubber-line { outline: 2px solid #58a6ad; outline-offset: 2px; }
+@media (max-width: 760px) {
+  .music-player > .player-timeline--edge { left: 22px; right: 22px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .minimal-scrubber-line, .music-player .player-timeline--edge > .player-time { transition: none; }
+}

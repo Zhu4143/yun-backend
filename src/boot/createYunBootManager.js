@@ -1,5 +1,4 @@
 import { fetchNeteaseMePage, fetchNeteasePlaylistTracksPage } from '../api/neteaseApi.js'
-import { REVISION as THREE_REVISION } from 'three'
 import { fetchMusicLibrary, scanMusicLibrary } from '../api/yunApi.js'
 import { fetchDefaultUserMemory, fetchYunMemory, fetchYunSettings } from '../api/memoryApi.js'
 import { createYunLegacyPlayerAdapter } from '../player/adapters/yunLegacyPlayerAdapter.js'
@@ -41,22 +40,33 @@ function readPlayerRestoreSnapshot(storage) {
 }
 
 function preloadImage(url, signal) {
-  if (!url || typeof Image === 'undefined') return Promise.resolve(false)
+  if (!url || typeof Image === 'undefined' || signal?.aborted) return Promise.resolve(false)
   return new Promise((resolve) => {
     const image = new Image()
+    let settled = false
+    let timer
     const finish = (loaded) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', cancel)
       image.onload = null
       image.onerror = null
+      if (!loaded) image.src = ''
       resolve(loaded)
     }
+    const cancel = () => finish(false)
     image.onload = () => finish(true)
     image.onerror = () => finish(false)
-    signal?.addEventListener('abort', () => finish(false), { once: true })
+    signal?.addEventListener('abort', cancel, { once: true })
+    // Six sequential covers must settle before the optional boot task's 12s
+    // deadline, even when a server accepts a request but never returns bytes.
+    timer = setTimeout(cancel, 1800)
     image.src = url
   })
 }
 
-export function createYunBootManager({ storage = globalThis.localStorage } = {}) {
+export function createYunBootManager({ storage = globalThis.localStorage, preloadPlaylistTracks = true } = {}) {
   return new YunBootManager({
     retryDelayMs: 350,
     tasks: [
@@ -137,7 +147,7 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
             return { account: firstPage, playlists: [], complete: true, expectedCount: 0, loadedCount: 0 }
           }
 
-          const cached = loadCompletePlaylistCache({
+          const cached = preloadPlaylistTracks && loadCompletePlaylistCache({
             storage,
             key: PLAYLIST_CACHE_KEY,
             version: PLAYLIST_CACHE_VERSION,
@@ -158,6 +168,11 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
               reportProgress(progress * 0.1, `${loadedCount} / ${expectedCount} 个歌单`)
             },
           })
+          if (!preloadPlaylistTracks) {
+            reportProgress(100, `${result.items.length} 个歌单 · 歌曲按需读取`)
+            return { account: { ...firstPage, playlists: result.items }, playlists: result.items,
+              complete: true, tracksComplete: false, expectedCount: result.expectedCount, loadedCount: result.loadedCount }
+          }
           const completePlaylists = await loadCompletePlaylistTracks({
             playlists: result.items,
             signal,
@@ -253,10 +268,13 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
         dependencies: ['BOOT_CONFIG'],
         timeoutMs: 15000,
         run: async () => {
+          if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+            throw new Error('DOM is unavailable')
+          }
           const canvas = document.createElement('canvas')
-          const context = canvas.getContext('webgl2') || canvas.getContext('webgl')
-          if (!context) throw new Error('WebGL is unavailable')
-          return { webgl: true, threeRevision: THREE_REVISION }
+          // The default music interface uses the DOM. Canvas is an optional
+          // capability; checking it must not allocate a GPU context at startup.
+          return { dom: true, canvas: typeof canvas.getContext === 'function', webgl: false, threeRevision: null }
         },
       },
       {
@@ -273,9 +291,11 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
             .slice(0, 6)
           if (!covers.length) return { loaded: 0, total: 0 }
           let loaded = 0
-          for (const cover of covers) {
+          for (const [index, cover] of covers.entries()) {
+            if (signal?.aborted) break
             if (await preloadImage(cover, signal)) loaded += 1
-            reportProgress((loaded + (covers.length - loaded) * 0.25) / covers.length * 100, `${loaded} / ${covers.length}`)
+            if (signal?.aborted) break
+            reportProgress((index + 1) / covers.length * 100, `${loaded} / ${covers.length}`)
           }
           return { loaded, total: covers.length }
         },
@@ -286,7 +306,7 @@ export function createYunBootManager({ storage = globalThis.localStorage } = {})
 
 let sharedManager = null
 
-export function getYunBootManager() {
-  if (!sharedManager) sharedManager = createYunBootManager()
+export function getYunBootManager(options) {
+  if (!sharedManager) sharedManager = createYunBootManager(options)
   return sharedManager
 }

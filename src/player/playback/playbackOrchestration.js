@@ -155,26 +155,38 @@ function mediaPosition(audio) {
 export function createActivePlaybackRecovery({
   scheduler = browserRecoveryScheduler,
   stallDelayMs = 1200,
+  loadTimeoutMs = 8000,
   maxAttempts = 2,
 } = {}) {
   const timers = { ...browserRecoveryScheduler, ...scheduler }
-  let timer = 0
+  let job = null
   let source = ''
   let attempts = 0
   let lastProgress = 0
+  const sourceOf = audio => normalizeMediaSource(audio?.getAttribute?.('src') || audio?.src || audio?.currentSrc)
 
-  const clearScheduled = () => {
-    if (!timer) return
-    timers.clearTimer(timer)
-    timer = 0
+  const clearJob = () => {
+    const previous = job
+    job = null
+    if (!previous) return
+    if (previous.timer) timers.clearTimer(previous.timer)
+    if (previous.restore) previous.audio.removeEventListener?.('loadedmetadata', previous.restore)
   }
 
   const observeProgress = (audio) => {
+    const nextSource = sourceOf(audio)
     const position = mediaPosition(audio)
+    if (source !== nextSource) {
+      clearJob()
+      source = nextSource
+      lastProgress = position
+      attempts = 0
+      return false
+    }
     if (position <= lastProgress + 0.05) return false
     lastProgress = position
     attempts = 0
-    clearScheduled()
+    clearJob()
     return true
   }
 
@@ -187,60 +199,92 @@ export function createActivePlaybackRecovery({
     delayMs = stallDelayMs,
     force = false,
   } = {}) => {
-    const nextSource = String(audio?.currentSrc || audio?.src || '')
+    const nextSource = sourceOf(audio)
     if (!audio || !nextSource || !isActive(audio) || audio.ended || (!force && audio.paused)) return false
 
+    // A burst of waiting/stalled events must not move the recovery deadline.
+    if (job?.audio === audio && job.source === nextSource) return false
+    clearJob()
     if (source !== nextSource) {
       source = nextSource
       attempts = 0
       lastProgress = mediaPosition(audio)
     }
+    if (attempts >= Math.max(1, Number(maxAttempts) || 1)) return false
 
-    const stuckAt = mediaPosition(audio)
-    clearScheduled()
-    timer = timers.setTimer(async () => {
-      timer = 0
-      if (!isActive(audio) || audio.ended || (!force && audio.paused)) return
-      if (!force && mediaPosition(audio) > stuckAt + 0.05) {
+    const request = { audio, source: nextSource, position: mediaPosition(audio), timer: 0, restore: null, token: 0, phase: 'waiting' }
+    job = request
+    const current = token => job === request && request.token === token && isActive(audio) && sourceOf(audio) === request.source && !audio.ended
+    const arm = (callback, delay) => {
+      if (request.timer) timers.clearTimer(request.timer)
+      request.timer = timers.setTimer(callback, Math.max(0, Number(delay) || 0))
+    }
+    const retry = async () => {
+      request.timer = 0
+      const token = ++request.token
+      if (!current(token) || (request.phase === 'waiting' && !force && audio.paused)) {
+        if (job === request) clearJob()
+        return
+      }
+      if (mediaPosition(audio) > request.position + 0.05) {
         observeProgress(audio)
         return
       }
       if (attempts >= Math.max(1, Number(maxAttempts) || 1)) {
+        clearJob()
+        // Abort a pending play promise before reporting a stopped player.
+        audio.pause()
         onFailed(new Error('media_stalled'))
         return
       }
 
       attempts += 1
-      const resumeAt = stuckAt
+      request.phase = 'loading'
+      if (request.restore) audio.removeEventListener?.('loadedmetadata', request.restore)
       const restorePosition = () => {
-        if (!isActive(audio)) return
+        audio.removeEventListener?.('loadedmetadata', restorePosition)
+        if (!current(token)) return
         const duration = Number(audio.duration)
         const safePosition = Number.isFinite(duration) && duration > 0
-          ? Math.min(resumeAt, Math.max(0, duration - 0.1))
-          : resumeAt
+          ? Math.min(request.position, Math.max(0, duration - 0.1))
+          : request.position
         try { audio.currentTime = safePosition } catch { /* metadata is not seekable yet */ }
       }
 
+      request.restore = restorePosition
       audio.addEventListener?.('loadedmetadata', restorePosition, { once: true })
+      // play()/AudioContext.resume() can remain pending when the stream dies.
+      arm(retry, loadTimeoutMs)
       try {
         audio.load()
         await resumeOutput(audio)
+        if (!current(token)) return
         await audio.play()
+        if (!current(token)) return
+        request.phase = 'checking'
         onPlaying()
+        // Only a moving media clock confirms recovery, not a resolved play().
+        arm(retry, stallDelayMs)
       } catch (error) {
-        audio.removeEventListener?.('loadedmetadata', restorePosition)
-        onFailed(error)
+        if (!current(token)) return
+        request.phase = 'checking'
+        if (error?.name === 'NotAllowedError') {
+          clearJob()
+          onFailed(error)
+        } else arm(retry, stallDelayMs)
       }
-    }, Math.max(0, Number(delayMs) || 0))
+    }
+    arm(retry, delayMs)
     return true
   }
 
   return Object.freeze({
     schedule,
     observeProgress,
-    cancel: clearScheduled,
+    cancel: () => { clearJob(); source = ''; attempts = 0; lastProgress = 0 },
     getDiagnostics: () => Object.freeze({
-      pending: Boolean(timer),
+      pending: Boolean(job),
+      phase: job?.phase || 'idle',
       source,
       attempts,
       lastProgress,

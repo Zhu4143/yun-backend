@@ -79,3 +79,21 @@ test('visible morph animation cannot catch up half a second in one frame', () =>
   assert.equal(resolveLiquidMorphDelta(0.5, 'visible'), 1 / 30)
   assert.equal(resolveLiquidMorphDelta(0.5, 'hidden'), 0.5)
 })
+
+test('CD skin reveals panels on wall time even with slow rendering', () => {
+  for (const fps of [60, 15, 5]) {
+    let spring = { progress: 0, velocity: 0 }
+    let elapsed = 0
+    while (elapsed < 2) {
+      let delta = resolveLiquidMorphDelta(1 / fps, 'visible', true)
+      elapsed += delta
+      while (delta > 0.0001) {
+        const step = Math.min(delta, 0.05)
+        spring = stepLiquidMorph(spring, step)
+        delta -= step
+      }
+      if (shouldRevealLiquidMorph(spring, elapsed)) break
+    }
+    assert.ok(elapsed <= 0.65, `${fps} fps delayed content until ${elapsed}s`)
+  }
+})

@@ -1,10 +1,9 @@
 // 云语音识别(ASR)前端 API 封装。
 // 只与本地后端 /api/asr/* 通信,密钥永不进入浏览器。
 
-// In Vite development use the same-origin proxy. Directly calling :3030 from
-// :5173 is cross-origin and the browser correctly blocks ASR status/upload
-// requests because the local Node server does not expose a CORS header.
-const BACKEND_URL = import.meta.env.VITE_YUN_BACKEND_URL || (import.meta.env.DEV ? '' : 'http://127.0.0.1:3030')
+// Both Vite's proxy and the packaged app serve /api on the current origin.
+// A separate backend is used only when explicitly configured for that build.
+const BACKEND_URL = import.meta.env.VITE_YUN_BACKEND_URL || ''
 
 async function request(path, options = {}) {
   const response = await fetch(`${BACKEND_URL}${path}`, {

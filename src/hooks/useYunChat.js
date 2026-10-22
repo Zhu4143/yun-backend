@@ -13,7 +13,6 @@ const observedRouteChatIntent = createCommandObserver(routeChatIntent)
 const initialMessages = [
   { id: 'yun-welcome', role: 'assistant', content: '我在听，你可以慢慢说。' },
 ]
-const PODCAST_AUTO_ANNOUNCEMENT_GAP_MS = 75_000
 
 function createMessage(role, content, extra = {}) {
   return {
@@ -155,7 +154,9 @@ export function useYunChat({
   const [recentRecommendations, setRecentRecommendations] = useState([])
   const [playHistory, setPlayHistory] = useState([])
   const prefetchedSongReactionsRef = useRef(new Map())
-  const lastPodcastAutoAnnouncementAtRef = useRef(0)
+  const songReactionEpochRef = useRef(0)
+  const reactionModeRef = useRef({ responseMode, playbackMode })
+  reactionModeRef.current = { responseMode, playbackMode }
   const requestEpochRef = useRef(0)
   const requestBusyRef = useRef(false)
   const requestAbortControllerRef = useRef(null)
@@ -186,6 +187,7 @@ export function useYunChat({
   // background, but its result must lose the right to update UI, execute a
   // music action, or start TTS as soon as the user speaks again.
   const cancelActiveRequest = useCallback((reason = 'interrupted') => {
+    songReactionEpochRef.current += 1
     requestEpochRef.current += 1
     requestAbortControllerRef.current?.abort(new DOMException(`Conversation turn cancelled: ${reason}`, 'AbortError'))
     requestAbortControllerRef.current = null
@@ -201,6 +203,7 @@ export function useYunChat({
     const inputMode = options?.inputMode === 'voice' ? 'voice' : 'text'
 
     if (!userText && !imageFile) return false
+    songReactionEpochRef.current += 1
 
     if (requestBusyRef.current) {
       // Keep one latest turn only.  A new spoken command supersedes the
@@ -475,10 +478,11 @@ export function useYunChat({
       return false
     }
 
-    if (trigger === 'auto_next' && Date.now() - lastPodcastAutoAnnouncementAtRef.current < PODCAST_AUTO_ANNOUNCEMENT_GAP_MS) {
-      return false
-    }
-
+    const reactionEpoch = ++songReactionEpochRef.current
+    const isCurrentReaction = () => reactionEpoch === songReactionEpochRef.current
+      && !options.signal?.aborted
+      && (reactionModeRef.current.responseMode === 'podcast'
+        || (companionTransition && reactionModeRef.current.playbackMode === 'companion_continue'))
     try {
       const recentAiReplies = chatHistory
         .filter((message) => message.role === 'assistant')
@@ -492,7 +496,7 @@ export function useYunChat({
         trigger,
         responseMode: reactionMode,
         previousSong,
-        announcementLength: companionTransition ? chooseCompanionAnnouncementLength() : 'medium',
+        announcementLength: chooseCompanionAnnouncementLength(),
         currentMood: '平静',
         personaMode,
         recentChat: chatHistory.slice(-6),
@@ -500,35 +504,42 @@ export function useYunChat({
         responseId: options.responseId,
         signal: options.signal,
       })
-      if (options.signal?.aborted) return false
+      if (!isCurrentReaction()) return false
       const reply = String(response.reply || '').trim()
 
       if (!reply || response.displayMessage === false) {
         return false
       }
 
-      if (trigger === 'auto_next') lastPodcastAutoAnnouncementAtRef.current = Date.now()
-
       setMessages((current) => [
         ...current,
         createMessage('assistant', reply),
       ])
 
-      if (response.shouldSpeak !== false && shouldSpeakReply(reply, reactionMode)) {
+      if (response.shouldSpeak !== false
+        && shouldSpeakReply(reply, reactionMode)
+        && (companionTransition || voice?.settings?.enabled !== false)) {
         // Radio transitions are one-way announcements. Do not arm the
         // microphone interruption detector here: it can hear the speakers and
         // mistakenly start a companion call on every automatic track change.
-        voice?.speakText?.(reply, {
+        const spoken = await voice?.speakText?.(reply, {
           allowBargeIn: false,
           force: companionTransition,
-          preDuck: companionTransition,
-          duckingVolume: companionTransition ? 0.16 : undefined,
-          voiceBoost: companionTransition,
+          preDuck: true,
+          duckingVolume: 0.16,
+          voiceBoost: true,
         })
+        if (spoken === false && isCurrentReaction()) {
+          setMessages((current) => [...current, createMessage('assistant', '播客文字已生成，但语音未能播放。请检查语音服务或浏览器的播放权限。')])
+          return false
+        }
       }
 
       return true
-    } catch {
+    } catch (error) {
+      if (isCurrentReaction()) {
+        setMessages((current) => [...current, createMessage('assistant', `这次播客生成失败：${error instanceof Error ? error.message : '服务暂时不可用'}。`)])
+      }
       return false
     }
   }, [chatHistory, personaMode, playbackMode, responseMode, voice])
@@ -550,7 +561,7 @@ export function useYunChat({
         trigger,
         responseMode: reactionMode,
         previousSong,
-        announcementLength: companionTransition ? chooseCompanionAnnouncementLength() : 'medium',
+        announcementLength: chooseCompanionAnnouncementLength(),
         currentMood: '平静',
         personaMode,
         recentChat: chatHistory.slice(-6),

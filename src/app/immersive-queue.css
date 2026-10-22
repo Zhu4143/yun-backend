@@ -1,0 +1,31 @@
+/* An optical overlay, outside the stage's grid. Opening it never reflows the
+   record, lyrics, header or transport. Keep the original transparent field. */
+:root .immersive-player--record .immersive-details {
+  position: fixed; top: calc(max(22px,env(safe-area-inset-top,0px)) + 60px); right: 0;
+  bottom: calc(max(26px,env(safe-area-inset-bottom,0px)) + 138px); z-index: 3;
+  width: clamp(300px,23vw,390px); height: auto; max-height: none;
+  padding: 20px 20px max(24px,env(safe-area-inset-bottom,0px)); border-radius: 24px;
+  --glass-fill: .025; --glass-body: 0; --glass-tint-opacity: 0;
+  border-left: 1px solid rgb(235 247 255 / .15);
+  animation: immersive-queue-arrive .32s cubic-bezier(.2,.75,.25,1) both;
+}
+:root[data-music-theme] .immersive-player--record .immersive-details:not([data-glass-source]) > .glass-finish {
+  background: rgb(255 255 255 / .035); --glass-body: 0;
+  border-color: rgb(240 250 255 / .2);
+  box-shadow: inset 1px 0 0 rgb(255 255 255 / .14);
+}
+.immersive-details .queue-section > h3 { line-height: 1.6; }
+.immersive-details .queue-copy strong { text-shadow: 0 1px 8px rgb(0 0 0 / .35); }
+@keyframes immersive-queue-arrive { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+@media (max-width: 760px) {
+  /* A compact overlay leaves the current lyric and transport visible on a
+     narrow screen; the underlying album and lyric layout stays in place. */
+  :root .immersive-player--record .immersive-details {
+    width: calc(100% - 24px); right: 12px; top: calc(max(16px,env(safe-area-inset-top,0px)) + 58px);
+    bottom: auto; height: min(32dvh,250px); padding: 12px 16px; border-left: 0;
+  }
+}
+@media (max-width: 760px) and (max-height: 500px) {
+  :root .immersive-player--record .immersive-details { top: 62px; bottom: 115px; height: auto; width: min(380px,58vw); }
+}
+@media (prefers-reduced-motion: reduce) { .immersive-player--record .immersive-details { animation: none; } }

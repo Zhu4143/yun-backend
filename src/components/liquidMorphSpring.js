@@ -30,9 +30,9 @@ export function stepLiquidMorph(
   return { progress, velocity }
 }
 
-export function resolveLiquidMorphDelta(elapsedSeconds, visibilityState = 'visible') {
+export function resolveLiquidMorphDelta(elapsedSeconds, visibilityState = 'visible', realTime = false) {
   const elapsed = Math.max(0, Number(elapsedSeconds) || 0)
-  return Math.min(elapsed, visibilityState === 'hidden' ? 0.5 : 1 / 30)
+  return Math.min(elapsed, realTime || visibilityState === 'hidden' ? 0.5 : 1 / 30)
 }
 
 export function shouldRevealLiquidMorph(spring, elapsedSeconds) {

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isTrustedDesktopRequest } from '../../server/requestBoundary.js'
 
 const host = process.env.YUN_DESKTOP_AGENT_HOST || '127.0.0.1'
 const port = Number(process.env.YUN_DESKTOP_AGENT_PORT || 3131)
@@ -956,9 +957,6 @@ function sendHttpJson(res, status, payload) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
   })
   res.end(body)
 }
@@ -1038,6 +1036,10 @@ async function runCompanionCommand({ source = 'wechat', from, rawText, command }
 
 const httpServer = http.createServer(async (req, res) => {
   try {
+    if (!isTrustedDesktopRequest(req)) {
+      sendHttpJson(res, 403, { ok: false, error: 'Forbidden' })
+      return
+    }
     if (req.method === 'OPTIONS') {
       sendHttpJson(res, 204, {})
       return
@@ -1064,7 +1066,9 @@ const httpServer = http.createServer(async (req, res) => {
   }
 })
 
-const wss = new WebSocketServer({ host, port })
+const wss = new WebSocketServer({ host, port,
+  verifyClient: ({ req }, done) => done(isTrustedDesktopRequest(req), 403, 'Forbidden'),
+})
 
 wss.on('connection', (socket, request) => {
   console.log(`[yun-desktop-agent] client connected from ${request.socket.remoteAddress}`)

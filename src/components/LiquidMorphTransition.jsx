@@ -20,7 +20,7 @@ function writeFrame(element, frame) {
   element.dataset.morphDirY = frame.directionY.toFixed(4)
 }
 
-export default function LiquidMorphTransition({ transition, onReveal, onComplete }) {
+export default function LiquidMorphTransition({ transition, onReveal, onComplete, realTime = false }) {
   const layerRef = useRef(null)
   const callbacksRef = useRef({ onReveal, onComplete })
 
@@ -65,6 +65,7 @@ export default function LiquidMorphTransition({ transition, onReveal, onComplete
       let remainingDelta = resolveLiquidMorphDelta(
         (now - previousTime) / 1000,
         document.visibilityState,
+        realTime,
       )
       previousTime = now
       elapsedTime += remainingDelta
@@ -92,7 +93,7 @@ export default function LiquidMorphTransition({ transition, onReveal, onComplete
       cancelled = true
       cancelAnimationFrame(animationFrame)
     }
-  }, [transition])
+  }, [transition, realTime])
 
   if (!transition) return null
 

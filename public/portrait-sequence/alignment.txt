@@ -1,0 +1,12 @@
+target shoulder anchor: 497.0, 1021.0
+01.png <- 第一.png: dx=-13, dy=+0
+02.png <- 第二.png: dx=+7, dy=-34
+03.png <- 第二 - 副本.png: dx=+7, dy=-34
+04.png <- 第三.png: dx=+0, dy=+2
+05.png <- 第四.png: dx=-1, dy=-7
+06.png <- 第五.png: dx=-7, dy=+32
+07.png <- 第六.png: dx=-1, dy=-9
+08.png <- 第七.png: dx=-1, dy=-7
+09.png <- 第八.png: dx=+24, dy=+78
+10.png <- 第九.png: dx=+4, dy=+36
+11.png <- 22.png: dx=+3, dy=+25

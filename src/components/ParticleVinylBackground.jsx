@@ -1,3 +1,5 @@
+import { DEFAULT_BACKGROUND_COLORS, loadCoverBackgroundPalette } from './coverBackgroundPalette'
+import { alignedRecordLayout } from '../skins/recordSkinMotion'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useFBO } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -19,32 +21,19 @@ import {
 } from './liquidMetalSettings'
 import FlowFieldBackground, { LiquidMetalFieldQuad } from './FlowFieldBackground'
 import { createLatestCoverTextureLifecycle } from './particleVinylCoverTextureLifecycle'
+import { AVATAR_GRID_SIZE_BY_QUALITY, AVATAR_PHASE, getAvatarCameraTarget, getPortraitPointSize, lerpAngle, retargetPortraitFrame } from '../avatar/portraitMotion.js'
+import { usePortraitMotionTargets } from '../avatar/usePortraitMotionTargets.js'
 import './ParticleVinylBackground.css'
 
 const FALLBACK_COVER = '/scene.png'
-// Dense enough that the deformed mountain surface reads as continuous rather
-// than as separated rows of dots. 340² stays reasonable for a desktop GPU
-// while providing about 71% more samples than the previous 260² grid.
-const GRID_SIZE_BY_QUALITY = {
-  // "推荐" is the default on most desktop machines.  It must leave enough
-  // frame budget for typing, clicks, audio start and image decoding instead
-  // of behaving like the old high-quality showcase renderer.
-  low: 132,
-  medium: 180,
-  high: 300,
-}
+// Keep one stable grid for both the record and avatar; each quality tier stays
+// within the particle budget requested for the portrait field.
+const GRID_SIZE_BY_QUALITY = AVATAR_GRID_SIZE_BY_QUALITY
 const SPECTRUM_BINS = 48
 const RIM_TRAIL_INNER_RADIUS = 2.84
 const RIM_TRAIL_OUTER_RADIUS = 3.62
 const CAMERA_POSITION = [0, 0, 5.6]
 const CAMERA_FOV = 42
-const DEFAULT_BACKGROUND_COLORS = {
-  base: [8, 3, 2],
-  primary: [118, 73, 42],
-  secondary: [74, 90, 126],
-  accent: [232, 181, 96],
-}
-const BACKGROUND_PALETTE_CACHE = new Map()
 const FIXED_VIEW_STORAGE_KEY = 'yun-particle-vinyl-fixed-view'
 const UI_INTERACTION_SELECTOR = [
   '.local-library-drawer',
@@ -247,61 +236,6 @@ function writeSharedLiquidMetalPalette(uniforms) {
   }
 }
 
-function loadCoverBackgroundPalette(source) {
-  if (BACKGROUND_PALETTE_CACHE.has(source)) return BACKGROUND_PALETTE_CACHE.get(source)
-  const palettePromise = new Promise((resolve) => {
-    const image = new Image()
-    image.crossOrigin = 'anonymous'
-    image.onload = () => {
-      try {
-        const canvas = document.createElement('canvas')
-        const size = 32
-        canvas.width = size
-        canvas.height = size
-        const ctx = canvas.getContext('2d', { willReadFrequently: true })
-        ctx.drawImage(image, 0, 0, size, size)
-        const { data } = ctx.getImageData(0, 0, size, size)
-        const buckets = [
-          { total: [0, 0, 0], count: 0 },
-          { total: [0, 0, 0], count: 0 },
-          { total: [0, 0, 0], count: 0 },
-        ]
-        for (let index = 0; index < data.length; index += 4) {
-          const alpha = data[index + 3] / 255
-          if (alpha < 0.2) continue
-          const red = data[index]
-          const green = data[index + 1]
-          const blue = data[index + 2]
-          const luminance = (red * 0.299 + green * 0.587 + blue * 0.114) / 255
-          const bucket = luminance > 0.62 ? buckets[2] : luminance > 0.32 ? buckets[1] : buckets[0]
-          bucket.total[0] += red
-          bucket.total[1] += green
-          bucket.total[2] += blue
-          bucket.count += 1
-        }
-        const readBucket = (bucket, fallback) => bucket.count
-          ? bucket.total.map((value) => value / bucket.count)
-          : fallback
-        resolve({
-          colors: {
-            base: scaleColor(readBucket(buckets[0], DEFAULT_BACKGROUND_COLORS.base), 0.42),
-            primary: readBucket(buckets[1], DEFAULT_BACKGROUND_COLORS.primary),
-            secondary: readBucket(buckets[0], DEFAULT_BACKGROUND_COLORS.secondary),
-            accent: readBucket(buckets[2], DEFAULT_BACKGROUND_COLORS.accent),
-          },
-          source,
-        })
-      } catch {
-        resolve({ colors: DEFAULT_BACKGROUND_COLORS, source })
-      }
-    }
-    image.onerror = () => resolve({ colors: DEFAULT_BACKGROUND_COLORS, source })
-    image.src = source
-  })
-  BACKGROUND_PALETTE_CACHE.set(source, palettePromise)
-  return palettePromise
-}
-
 function useCoverBackgroundColors(coverUrl, preloadCoverUrls) {
   const resolvedCoverUrl = coverUrl || FALLBACK_COVER
   const [palette, setPalette] = useState({
@@ -372,11 +306,15 @@ function useCoverTexture(coverUrl) {
   return textureLifecycle
 }
 
-function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition, gestureControlRef, quality }) {
+function ParticleVinylDisc({ active, coverUrl, portraitCoverTone, getFrequencyData, pointerRef, mountainControls, voiceOrbVisible, portraitTransition, portraitProgressRef, portraitFieldRef, voiceMeterRef, gestureControlRef, quality, recordPresentation }) {
   const materialRef = useRef(null)
   const rimTrailMaterialRef = useRef(null)
   const pointsRef = useRef(null)
   const groupRef = useRef(null)
+  const normalRotation = useRef(new THREE.Euler())
+  const normalPosition = useRef(new THREE.Vector3())
+  const alignedRotation = useRef(new THREE.Quaternion())
+  const alignedEuler = useRef(new THREE.Euler())
   const samplerRef = useRef(null)
   const spinRef = useRef(0)
   const coverPulseRef = useRef(0)
@@ -390,6 +328,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
   const entryTransitionUntilRef = useRef(0)
   const summonEffectRef = useRef(0)
   const songEffectRef = useRef(0)
+  const avatarFieldUploadRef = useRef({ field: null, version: -1, uploadedAt: 0, smoothingSeconds: 0.035 })
   const textureLifecycle = useCoverTexture(coverUrl)
 
   const rimTrailGeometry = useMemo(() => (
@@ -521,6 +460,12 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     const nextGeometry = new THREE.BufferGeometry()
     nextGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     nextGeometry.setAttribute('aUv', new THREE.BufferAttribute(uvs, 2))
+    nextGeometry.setAttribute('aPortraitTarget', new THREE.BufferAttribute(new Float32Array(pointCount * 3), 3).setUsage(THREE.DynamicDrawUsage))
+    nextGeometry.setAttribute('aPortraitUv', new THREE.BufferAttribute(new Float32Array(pointCount * 2), 2).setUsage(THREE.DynamicDrawUsage))
+    nextGeometry.setAttribute('aPortraitColor', new THREE.BufferAttribute(new Float32Array(pointCount * 3), 3).setUsage(THREE.DynamicDrawUsage))
+    nextGeometry.setAttribute('aPortraitPreviousTarget', new THREE.BufferAttribute(new Float32Array(pointCount * 3), 3).setUsage(THREE.DynamicDrawUsage))
+    nextGeometry.setAttribute('aPortraitPreviousUv', new THREE.BufferAttribute(new Float32Array(pointCount * 2), 2).setUsage(THREE.DynamicDrawUsage))
+    nextGeometry.setAttribute('aPortraitPreviousColor', new THREE.BufferAttribute(new Float32Array(pointCount * 3), 3).setUsage(THREE.DynamicDrawUsage))
     nextGeometry.computeBoundingSphere()
     return nextGeometry
   }, [quality])
@@ -544,6 +489,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uCoverPulse: { value: 0 },
       uCoverRippleAge: { value: 1 },
       uSongTransition: { value: 1 },
+      uRecordHandoff: { value: 0 },
       uCoverTex: { value: createPlaceholderTexture() },
       uPreviousCoverTex: { value: createPlaceholderTexture() },
       uSpectrumTex: { value: createSpectrumTexture() },
@@ -551,6 +497,11 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uSummonEffect: { value: 0 },
       uSongEffect: { value: 0 },
       uPortraitTransition: { value: 0 },
+      uPortraitFrameBlend: { value: 1 },
+      uPortraitPointSize: { value: 4 },
+      uPortraitRms: { value: 0 },
+      uPortraitBands: { value: new THREE.Vector3() },
+      uPortraitCoverTone: { value: new THREE.Color(1, 1, 1) },
       uGestureScatter: { value: 0 },
       uLiquidMetalC0: { value: new THREE.Color(0.02, 0.01, 0.01) },
       uLiquidMetalC1: { value: new THREE.Color(0.12, 0.08, 0.06) },
@@ -559,6 +510,12 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     },
     vertexShader: `
       attribute vec2 aUv;
+      attribute vec3 aPortraitTarget;
+      attribute vec2 aPortraitUv;
+      attribute vec3 aPortraitColor;
+      attribute vec3 aPortraitPreviousTarget;
+      attribute vec2 aPortraitPreviousUv;
+      attribute vec3 aPortraitPreviousColor;
       uniform sampler2D uSpectrumTex;
       uniform float uTime;
       uniform float uBass;
@@ -573,10 +530,15 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform float uCoverPulse;
       uniform float uCoverRippleAge;
       uniform float uSongTransition;
+      uniform float uRecordHandoff;
       uniform float uVoiceSummonAge;
       uniform float uSummonEffect;
       uniform float uSongEffect;
       uniform float uPortraitTransition;
+      uniform float uPortraitFrameBlend;
+      uniform float uPortraitPointSize;
+      uniform float uPortraitRms;
+      uniform vec3 uPortraitBands;
       uniform float uGestureScatter;
       varying vec2 vUv;
       varying vec2 vTintUv;
@@ -595,6 +557,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       varying float vTerrainSweep;
       varying float vFresnel;
       varying float vSpecularFacing;
+      varying float vPortraitBlend;
+      varying vec3 vPortraitColor;
+      varying vec2 vPortraitUv;
       varying float vParticleSeed;
       varying vec2 vStudioLight;
       varying vec3 vViewPosition;
@@ -615,6 +580,25 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       }
 
       void main() {
+        float portraitProgress = clamp(uPortraitTransition, 0.0, 1.0);
+        float portraitSeed = fract(sin(dot(aUv, vec2(173.3, 269.5))) * 41731.731);
+        vec2 portraitUv = mix(aPortraitPreviousUv, aPortraitUv, uPortraitFrameBlend);
+        vec3 humanPosition = mix(aPortraitPreviousTarget, aPortraitTarget, uPortraitFrameBlend);
+        float portraitBreath = sin(uTime * 1.15 + portraitUv.y * 9.0 + portraitSeed * 6.2831853);
+        humanPosition.z += portraitBreath * 0.018 + uPortraitBands.x * 0.052 + uPortraitRms * 0.018;
+        float portraitPointSize = uPortraitPointSize * (0.96 + portraitSeed * 0.08 + uPortraitBands.z * 0.08);
+        // Fully formed portraits need no spectrum sampling, vinyl terrain,
+        // summoning spirals or record lighting. The morph keeps that path below.
+        if (portraitProgress >= 1.0) {
+          vPortraitBlend = 1.0;
+          vPortraitColor = mix(aPortraitPreviousColor, aPortraitColor, uPortraitFrameBlend);
+          vPortraitUv = portraitUv;
+          vAlpha = 1.0;
+          vec4 portraitView = modelViewMatrix * vec4(humanPosition, 1.0);
+          gl_PointSize = portraitPointSize;
+          gl_Position = projectionMatrix * portraitView;
+          return;
+        }
         vec2 centered = aUv * 2.0 - 1.0;
         float radius = length(centered);
         float angle = atan(centered.y, centered.x);
@@ -848,20 +832,25 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         songDepthScatter = mix(songDepthScatter, songArmSide * sin(songTidalAngle * 2.0) * 1.45, songIsTidal);
         pos.z += transitionBurst * songDepthScatter;
 
-        // Shared vinyl-to-portrait handoff: the existing record particles
-        // break into a deterministic spiral cloud before the portrait gathers.
-        float portraitBreak = smoothstep(0.0, 0.72, uPortraitTransition);
-        float portraitSeed = fract(sin(dot(aUv, vec2(173.3, 269.5))) * 41731.731);
+        // The record's own points break out, then gather into coordinates
+        // sampled from the invisible, color-keyed motion source.
+        float portraitBreak = sin(portraitProgress * 3.14159265);
         vec2 portraitTangent = vec2(-radialDir.y, radialDir.x);
-        pos.xy += radialDir * portraitBreak * (0.35 + portraitSeed * 2.25);
-        pos.xy += portraitTangent * sin(portraitBreak * 3.14159265) * (portraitSeed - 0.5) * 2.8;
-        pos.z += (portraitSeed - 0.5) * portraitBreak * 3.4;
+        vec3 portraitScatter = pos;
+        portraitScatter.xy += radialDir * portraitBreak * (0.35 + portraitSeed * 2.25);
+        portraitScatter.xy += portraitTangent * portraitBreak * (portraitSeed - 0.5) * 2.8;
+        portraitScatter.z += (portraitSeed - 0.5) * portraitBreak * 3.4;
+        float portraitGather = smoothstep(0.22, 0.98, portraitProgress);
+        pos = mix(portraitScatter, humanPosition, portraitGather);
 
         vUv = vec2(cos(angle), sin(angle)) * radius * 0.5 / max(coverR, 0.001) + 0.5;
         float tintAngle = spectrumPhase * 6.2831853;
         vTintUv = vec2(cos(tintAngle), sin(tintAngle)) * 0.28 + 0.5;
         vRadius = radius;
-        vAlpha = inside;
+        vAlpha = mix(inside, 1.0, portraitProgress);
+        vPortraitBlend = portraitProgress;
+        vPortraitColor = mix(aPortraitPreviousColor, aPortraitColor, uPortraitFrameBlend);
+        vPortraitUv = portraitUv;
         vCoverMask = coverMask;
         vGroove = groove;
         vMountain = mountainWave;
@@ -874,6 +863,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         vAudioGlow = audioGlow;
         vTerrainSweep = terrainSweep;
 
+        // Temporarily settle the raised terrain onto the shared circular plane
+        // so two different camera/geometry systems meet at the same silhouette.
+        pos = mix(pos, vec3(rotated * 3.05, 0.0), uRecordHandoff * (1.0 - portraitProgress));
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         // The points form a height field. This analytical normal follows the
         // existing relief without changing a single particle position.
@@ -897,7 +889,7 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         vViewPosition = mvPosition.xyz;
         float pointBase = mix(0.19 + uTreble * 0.22 + groove * 0.055 + mountainWave * 0.09, 0.16 + uTreble * 0.055, coverMask);
         pointBase += mountainBand * 0.035;
-        gl_PointSize = pointBase * (420.0 / -mvPosition.z);
+        gl_PointSize = mix(pointBase * (420.0 / -mvPosition.z), portraitPointSize, portraitProgress);
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -912,6 +904,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       uniform float uSongTransition;
       uniform float uTime;
       uniform float uPortraitTransition;
+      uniform float uPortraitRms;
+      uniform vec3 uPortraitBands;
+      uniform vec3 uPortraitCoverTone;
       uniform vec3 uLiquidMetalC0;
       uniform vec3 uLiquidMetalC1;
       uniform vec3 uLiquidMetalC2;
@@ -933,6 +928,9 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
       varying float vTerrainSweep;
       varying float vFresnel;
       varying float vSpecularFacing;
+      varying float vPortraitBlend;
+      varying vec3 vPortraitColor;
+      varying vec2 vPortraitUv;
       varying float vParticleSeed;
       varying vec2 vStudioLight;
       varying vec3 vViewPosition;
@@ -963,9 +961,31 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         return mix(color, uLiquidMetalC3, smoothstep(0.56, 1.0, x));
       }
 
+      vec4 portraitPixel(float spriteDistance) {
+        float luminance = dot(vPortraitColor, vec3(0.299, 0.587, 0.114));
+        // One restrained cover tone across the portrait, with the source
+        // brightness/detail preserved. Bound the grade before mixing it in
+        // so a saturated cover cannot turn the face into a neon color.
+        vec3 coverTone = uPortraitCoverTone / max(dot(uPortraitCoverTone, vec3(0.299, 0.587, 0.114)), 0.001);
+        vec3 graded = vPortraitColor * mix(vec3(1.0), clamp(coverTone, 0.65, 1.35), 0.32);
+        graded *= luminance / max(dot(graded, vec3(0.299, 0.587, 0.114)), 0.0001);
+        vec3 color = acesFilmic(graded * (1.30 + uPortraitRms * 0.12)
+          + vec3(0.018, 0.026, 0.04) * (uPortraitBands.x + uPortraitBands.y));
+        float mask = smoothstep(0.50, 0.38, spriteDistance);
+        float alpha = mask * min(1.0, 0.92 + luminance * 0.08 + uPortraitRms * 0.03);
+        return vec4(color, alpha);
+      }
+
       void main() {
         vec2 point = gl_PointCoord - 0.5;
         float spriteDistance = length(point);
+        // The full portrait uses no cover textures or metallic shading.
+        // Skip that fragment work as its screen footprint grows.
+        if (vPortraitBlend >= 0.999) {
+          vec4 portrait = portraitPixel(spriteDistance);
+          gl_FragColor = vec4(boostSaturation(portrait.rgb, 1.08), portrait.a);
+          return;
+        }
         float dotMask = smoothstep(0.43, 0.17, spriteDistance);
         float spriteCore = 1.0 - smoothstep(0.018, 0.095, spriteDistance);
         float spriteHalo = (1.0 - smoothstep(0.08, 0.31, spriteDistance)) * (1.0 - spriteCore * 0.72);
@@ -1159,11 +1179,14 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
         float glassRingAlpha = glassRingBody * dotMask
           * (0.24 + glassRingEdge * 0.24 + ringAngleLight * 0.08);
         alpha = max(alpha, glassRingAlpha);
-        alpha *= 1.0 - smoothstep(0.18, 0.68, uPortraitTransition);
+        float portraitMix = smoothstep(0.22, 0.88, vPortraitBlend);
+        vec4 portrait = portraitPixel(spriteDistance);
+        color = mix(color, portrait.rgb, portraitMix);
+        alpha = mix(alpha, portrait.a, portraitMix);
         // Tone-map inside this custom shader so high-energy cores retain
         // cyan/blue/silver transitions instead of clipping to dead white.
-        color = acesFilmic(color * 0.92);
-        color = boostSaturation(color, mix(1.08, 1.24, vCoverMask));
+        color = mix(acesFilmic(color * 0.92), color, portraitMix);
+        color = boostSaturation(color, mix(1.08, 1.24, vCoverMask * (1.0 - portraitMix)));
         gl_FragColor = vec4(color, alpha);
       }
     `,
@@ -1189,6 +1212,8 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
   useFrame((state, delta) => {
     const trailMaterial = rimTrailMaterialRef.current
     if (!materialRef.current || !trailMaterial || !samplerRef.current) return
+    const handoff = recordPresentation?.state
+    materialRef.current.uniforms.uRecordHandoff.value = handoff?.active && !handoff.reduced ? handoff.particleAlign : 0
     const audio = samplerRef.current.read()
     if (voiceOrbVisible && !previousVoiceOrbVisibleRef.current) {
       voiceSummonAgeRef.current = 0
@@ -1223,7 +1248,53 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     )
     writeSharedLiquidMetalPalette(materialRef.current.uniforms)
     writeSharedLiquidMetalPalette(trailMaterial.uniforms)
-    materialRef.current.uniforms.uPortraitTransition.value = portraitTransition
+    const visiblePortraitTone = materialRef.current.uniforms.uPortraitCoverTone.value
+    for (const channel of ['r', 'g', 'b']) {
+      visiblePortraitTone[channel] = THREE.MathUtils.damp(visiblePortraitTone[channel], portraitCoverTone[channel], 3, delta)
+    }
+    const framePortraitProgress = portraitProgressRef?.current ?? portraitTransition
+    materialRef.current.uniforms.uPortraitTransition.value = portraitFieldRef?.current?.ready ? framePortraitProgress : 0
+    const portraitField = portraitFieldRef?.current
+    if (portraitField?.ready) materialRef.current.uniforms.uPortraitPointSize.value = getPortraitPointSize({
+      screenHeight: portraitField.screenHeight,
+      motionHeight: portraitField.motionHeight,
+      pixelRatio: state.gl.getPixelRatio(),
+    })
+    const upload = avatarFieldUploadRef.current
+    const frameBlend = 1 - Math.exp(-Math.max(0, state.clock.elapsedTime - upload.uploadedAt) / upload.smoothingSeconds)
+    materialRef.current.uniforms.uPortraitFrameBlend.value = frameBlend
+    if (portraitField?.ready && (
+      avatarFieldUploadRef.current.field !== portraitField
+      || avatarFieldUploadRef.current.version !== portraitField.version
+    )) {
+      const geometry = pointsRef.current?.geometry
+      const firstFrame = upload.field !== portraitField
+      for (const [name, values] of [['Target', portraitField.targets], ['Uv', portraitField.uvs], ['Color', portraitField.colors]]) {
+        const current = geometry?.getAttribute(`aPortrait${name}`)
+        const previous = geometry?.getAttribute(`aPortraitPrevious${name}`)
+        if (!current || !previous) continue
+        if (firstFrame) {
+          current.array.set(values)
+          previous.array.set(values)
+        } else retargetPortraitFrame(previous.array, current.array, values, frameBlend)
+        current.needsUpdate = true
+        previous.needsUpdate = true
+      }
+      materialRef.current.uniforms.uPortraitFrameBlend.value = firstFrame ? 1 : 0
+      avatarFieldUploadRef.current = { field: portraitField, version: portraitField.version, uploadedAt: state.clock.elapsedTime, smoothingSeconds: portraitField.smoothingSeconds }
+    }
+    const portraitMeter = voiceMeterRef?.current || { rms: 0, low: 0, mid: 0, high: 0 }
+    materialRef.current.uniforms.uPortraitRms.value = THREE.MathUtils.damp(
+      materialRef.current.uniforms.uPortraitRms.value,
+      portraitMeter.rms || 0,
+      (portraitMeter.rms || 0) > materialRef.current.uniforms.uPortraitRms.value ? 14 : 5,
+      delta,
+    )
+    materialRef.current.uniforms.uPortraitBands.value.set(
+      THREE.MathUtils.damp(materialRef.current.uniforms.uPortraitBands.value.x, portraitMeter.low || 0, (portraitMeter.low || 0) > materialRef.current.uniforms.uPortraitBands.value.x ? 14 : 5, delta),
+      THREE.MathUtils.damp(materialRef.current.uniforms.uPortraitBands.value.y, portraitMeter.mid || 0, (portraitMeter.mid || 0) > materialRef.current.uniforms.uPortraitBands.value.y ? 14 : 5, delta),
+      THREE.MathUtils.damp(materialRef.current.uniforms.uPortraitBands.value.z, portraitMeter.high || 0, (portraitMeter.high || 0) > materialRef.current.uniforms.uPortraitBands.value.z ? 14 : 5, delta),
+    )
     const gestureScatterTarget = THREE.MathUtils.clamp(
       Number(gestureControlRef?.current?.scatter) || 0,
       0,
@@ -1302,28 +1373,41 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
     }
     if (groupRef.current) {
       const pointer = pointerRef.current
-      spinRef.current += delta * (0.25 + audio.bass * 0.22)
-      if (spinRef.current > Math.PI * 2) {
-        spinRef.current -= Math.PI * 2
-        groupRef.current.rotation.z -= Math.PI * 2
-      }
+      spinRef.current = (spinRef.current + delta * (0.25 + audio.bass * 0.22)) % (Math.PI * 2)
+      const presentation = recordPresentation?.state
+      if (presentation?.active) spinRef.current = presentation.angle
       const entryLocked = performance.now() < entryTransitionUntilRef.current
-      const targetX = voiceOrbVisible || entryLocked ? 0 : THREE.MathUtils.clamp(pointer.dragY * 1.22 + pointer.y * 0.045, -3.05, 3.05)
-      const targetY = voiceOrbVisible || entryLocked ? 0 : THREE.MathUtils.clamp(pointer.dragX * 1.22 + pointer.x * 0.055, -3.05, 3.05)
-      const targetZ = spinRef.current
-        + gestureRotationTarget
-        + Math.sin(state.clock.elapsedTime * 0.23) * 0.018
-      const shakePower = voiceOrbVisible ? 0 : recordShakeRef.current.power
+      const portraitShowing = framePortraitProgress > 0.04
+      const targetX = voiceOrbVisible || entryLocked || portraitShowing ? 0 : THREE.MathUtils.clamp(pointer.dragY * 1.22 + pointer.y * 0.045, -3.05, 3.05)
+      const targetY = voiceOrbVisible || entryLocked || portraitShowing ? 0 : THREE.MathUtils.clamp(pointer.dragX * 1.22 + pointer.x * 0.055, -3.05, 3.05)
+      const targetZ = portraitShowing
+        ? 0
+        : spinRef.current + gestureRotationTarget + Math.sin(state.clock.elapsedTime * 0.23) * 0.018
+      const shakePower = voiceOrbVisible || portraitShowing ? 0 : recordShakeRef.current.power
       const shakePhase = recordShakeRef.current.phase
       const shakeTiltX = Math.sin(shakePhase) * shakePower * 0.026
       const shakeTiltY = Math.cos(shakePhase * 1.17) * shakePower * 0.020
       const shakeOffsetX = Math.cos(shakePhase * 1.31) * shakePower * 0.018
       const shakeOffsetY = Math.sin(shakePhase * 1.08) * shakePower * 0.014
-      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, targetX + shakeTiltX, 0.08)
-      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, targetY + shakeTiltY, 0.08)
-      groupRef.current.rotation.z = THREE.MathUtils.lerp(groupRef.current.rotation.z, targetZ, 0.08)
-      groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, shakeOffsetX, 0.16)
-      groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, shakeOffsetY, 0.16)
+      const rotationBlend = 1 - Math.exp(-delta * (portraitShowing ? 14 : 5))
+      const rotation = normalRotation.current, position = normalPosition.current
+      rotation.x = lerpAngle(rotation.x, targetX + shakeTiltX, rotationBlend)
+      rotation.y = lerpAngle(rotation.y, targetY + shakeTiltY, rotationBlend)
+      rotation.z = lerpAngle(rotation.z, targetZ, rotationBlend)
+      position.x = THREE.MathUtils.lerp(position.x, shakeOffsetX, 0.16)
+      position.y = THREE.MathUtils.lerp(position.y, shakeOffsetY, 0.16)
+      groupRef.current.rotation.copy(rotation)
+      groupRef.current.position.copy(position)
+      if (presentation?.active && !presentation.reduced) {
+        alignedEuler.current.set(0, 0, presentation.angle)
+        alignedRotation.current.setFromEuler(alignedEuler.current)
+        groupRef.current.quaternion.slerp(alignedRotation.current, presentation.particleAlign)
+        groupRef.current.position.multiplyScalar(1 - presentation.particleAlign)
+      }
+      if (recordPresentation) {
+        recordPresentation.publishParticleSpin(groupRef.current.rotation.z)
+        if (hasLoadedCoverRef.current) recordPresentation.markReady('particle')
+      }
     }
   })
 
@@ -1336,16 +1420,26 @@ function ParticleVinylDisc({ active, coverUrl, getFrequencyData, pointerRef, mou
   )
 }
 
-function PointerCameraRig({ pointerRef, voiceOrbVisible }) {
-  useFrame(({ camera }) => {
+function PointerCameraRig({ pointerRef, voiceOrbVisible, portraitTransition, portraitProgressRef, recordPresentation }) {
+  const normalPosition = useRef(new THREE.Vector3(...CAMERA_POSITION))
+  useFrame(({ camera, size }, delta) => {
     const pointer = pointerRef.current
-    const targetX = voiceOrbVisible ? 0 : pointer.x * 0.08
-    const targetY = voiceOrbVisible ? 0 : pointer.y * 0.055
-    const targetZ = CAMERA_POSITION[2] + pointer.zoom + (voiceOrbVisible ? 1.35 : 0)
-    camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetX, 0.075)
-    camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.075)
-    camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZ, 0.09)
-    camera.lookAt(targetX * 0.55, targetY * 0.55, 0)
+    const { x: targetX, y: targetY, z: targetZ } = getAvatarCameraTarget({
+      portraitProgress: portraitProgressRef?.current ?? portraitTransition,
+      voiceOrbVisible,
+      pointer,
+      cameraDistance: CAMERA_POSITION[2],
+    })
+    const position = normalPosition.current
+    position.x = THREE.MathUtils.damp(position.x, targetX, 12, delta)
+    position.y = THREE.MathUtils.damp(position.y, targetY, 12, delta)
+    position.z = THREE.MathUtils.damp(position.z, targetZ, 12, delta)
+    const presentation = recordPresentation?.state
+    const weight = presentation?.active && !presentation.reduced ? presentation.particleAlign : 0
+    const layout = alignedRecordLayout(size.width, size.height, presentation?.active ? recordPresentation.zoom : pointer.zoom || 0)
+    camera.position.set(position.x * (1 - weight), position.y * (1 - weight), THREE.MathUtils.lerp(position.z, layout.cameraZ, weight))
+    camera.lookAt(targetX * 0.55 * (1 - weight), targetY * 0.55 * (1 - weight), 0)
+    recordPresentation?.setZoom(pointer.zoom || 0)
   })
 
   return null
@@ -2576,6 +2670,7 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
         '.app button:not(.settings-panel-backdrop)',
       ].join(',')
       const elements = Array.from(document.querySelectorAll(liquidOreSurfaceSelector))
+        .filter((element) => !element.closest('[data-layout-editor-ui]'))
         .filter((element) => !element.parentElement?.closest(liquidOreSurfaceSelector))
       const registeredElements = []
       let glassCount = 0
@@ -2699,7 +2794,7 @@ function LiquidGlassOrbPass({ visible, voiceLevel = 0, topFogStrength, topBlurSt
   return null
 }
 
-function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition, gestureControlRef, quality, liquidMetal }) {
+function ParticleVinylScene({ active, coverUrl, portraitCoverTone, getFrequencyData, pointerRef, mountainControls, topFogStrength, topBlurStrength, voiceOrbVisible, voiceOrbLevel, portraitTransition, portraitProgressRef, portraitFieldRef, voiceMeterRef, gestureControlRef, quality, liquidMetal, recordPresentation }) {
   return (
     <>
       {liquidMetal?.visible && (
@@ -2714,15 +2809,20 @@ function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mo
         />
       )}
       <ambientLight intensity={0.45} />
-      <PointerCameraRig pointerRef={pointerRef} voiceOrbVisible={voiceOrbVisible} />
+      <PointerCameraRig pointerRef={pointerRef} voiceOrbVisible={voiceOrbVisible} portraitTransition={portraitTransition} portraitProgressRef={portraitProgressRef} recordPresentation={recordPresentation} />
       <ParticleVinylDisc
+        recordPresentation={recordPresentation}
         active={active}
         coverUrl={coverUrl}
+        portraitCoverTone={portraitCoverTone}
         getFrequencyData={getFrequencyData}
         pointerRef={pointerRef}
         mountainControls={mountainControls}
         voiceOrbVisible={voiceOrbVisible}
         portraitTransition={portraitTransition}
+        portraitProgressRef={portraitProgressRef}
+        portraitFieldRef={portraitFieldRef}
+        voiceMeterRef={voiceMeterRef}
         gestureControlRef={gestureControlRef}
         quality={quality}
       />
@@ -2735,6 +2835,7 @@ function ParticleVinylScene({ active, coverUrl, getFrequencyData, pointerRef, mo
 }
 
 export default function ParticleVinylBackground({
+  recordPresentation,
   active = false,
   coverUrl = FALLBACK_COVER,
   trackKey = '',
@@ -2749,15 +2850,23 @@ export default function ParticleVinylBackground({
   voiceOrbLevel = 0,
   onReady,
   portraitTransition = 0,
+  portraitProgressRef,
+  avatarPhase = AVATAR_PHASE.VINYL_IDLE,
+  avatarTurnId = 0,
+  voiceMeterRef,
   gestureControlRef,
   quality = 'high',
   liquidMetalSettings = LIQUID_METAL_BACKGROUND_DEFAULTS,
 }) {
   const pointerRef = useRef(opticalFieldController.state)
+  const portraitFieldRef = usePortraitMotionTargets({ quality, phase: avatarPhase, turnId: avatarTurnId, voiceMeterRef })
   const { colors: backgroundColors, source: paletteSource } = useCoverBackgroundColors(coverUrl, preloadCoverUrls)
+  const portraitCoverTone = useMemo(() => new THREE.Color()
+    .setRGB(...backgroundColors.portrait.map((value) => value / 255))
+    .convertSRGBToLinear(), [backgroundColors])
   const [showFlowBackground, setShowFlowBackground] = useState(true)
   // Flow gives the opening screen its visual identity; defer the much heavier
-  // 115k-point record mesh until the first controls have been painted.
+  // Shared vinyl/avatar point mesh until the first controls have been painted.
   const [showRecord, setShowRecord] = useState(false)
   const [debugMode, setDebugMode] = useState(false)
   const [debugFlowStrength, setDebugFlowStrength] = useState(1)
@@ -2914,6 +3023,10 @@ export default function ParticleVinylBackground({
     }
 
     const handlePointerMove = (event) => {
+      if ((portraitProgressRef?.current ?? portraitTransition) > 0.001) {
+        pointer.dragging = false
+        return
+      }
       if (!pointer.dragging) return
       event.preventDefault()
       const dx = event.clientX - pointer.lastClientX
@@ -2924,6 +3037,7 @@ export default function ParticleVinylBackground({
       pointer.lastClientY = event.clientY
     }
     const handlePointerDown = (event) => {
+      if ((portraitProgressRef?.current ?? portraitTransition) > 0.001) return
       if (event.button !== 0 || event.target instanceof Element && event.target.closest(UI_INTERACTION_SELECTOR)) return
       event.preventDefault()
       pointer.dragging = true
@@ -2933,6 +3047,10 @@ export default function ParticleVinylBackground({
     const handlePointerUp = () => { pointer.dragging = false }
     const handleWheel = (event) => {
       if (event.target instanceof Element && event.target.closest(UI_INTERACTION_SELECTOR)) return
+      if ((portraitProgressRef?.current ?? portraitTransition) > 0.001) {
+        event.preventDefault()
+        return
+      }
       pointer.zoom = THREE.MathUtils.clamp(pointer.zoom + event.deltaY * 0.0042, -4.4, 4.2)
       event.preventDefault()
     }
@@ -2956,7 +3074,7 @@ export default function ParticleVinylBackground({
       window.removeEventListener('pointerleave', handlePointerLeave)
       window.removeEventListener('blur', handlePointerLeave)
     }
-  }, [viewLocked])
+  }, [viewLocked, portraitProgressRef, portraitTransition])
 
   return (
     <div className="particle-vinyl-background" style={backgroundStyle}>
@@ -2989,8 +3107,10 @@ export default function ParticleVinylBackground({
             }}
           >
             <ParticleVinylScene
+              recordPresentation={recordPresentation}
               active={active}
               coverUrl={coverUrl}
+              portraitCoverTone={portraitCoverTone}
               getFrequencyData={getFrequencyData}
               pointerRef={pointerRef}
               mountainControls={mountainControls}
@@ -2999,6 +3119,9 @@ export default function ParticleVinylBackground({
               voiceOrbVisible={voiceOrbVisible}
               voiceOrbLevel={voiceOrbLevel}
               portraitTransition={portraitTransition}
+              portraitProgressRef={portraitProgressRef}
+              portraitFieldRef={portraitFieldRef}
+              voiceMeterRef={voiceMeterRef}
               gestureControlRef={gestureControlRef}
               quality={quality}
               liquidMetal={{

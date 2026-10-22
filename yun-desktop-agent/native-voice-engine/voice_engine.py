@@ -26,6 +26,8 @@ import sounddevice as sd
 import webrtcvad
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from request_policy import LOCAL_ORIGIN_PATTERN, trusted_request
 
 from py_xiaozhi_apm import NativeWebRtcApm
 from py_xiaozhi_wake import PyXiaozhiWakeWord
@@ -326,7 +328,14 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Yun native voice engine", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN_PATTERN, allow_methods=["GET", "POST"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def local_request_boundary(request: Request, call_next):
+    if not trusted_request(request.headers, request.client.host if request.client else ""):
+        return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -398,6 +407,9 @@ async def events(after: int = 0) -> dict[str, Any]:
 
 @app.websocket("/ws")
 async def websocket_events(socket: WebSocket) -> None:
+    if not trusted_request(socket.headers, socket.client.host if socket.client else ""):
+        await socket.close(code=1008)
+        return
     await socket.accept()
     engine.subscribers.add(socket)
     try:

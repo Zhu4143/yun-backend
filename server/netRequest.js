@@ -22,13 +22,20 @@ function waitForRetry(ms, signal) {
 export async function fetchWithRetry(url, options = {}, {
   attempts = 2,
   timeoutMs = 12000,
+  timeoutScope = 'body',
   retryDelayMs = (attempt) => 300 * attempt,
   fetchImpl = fetch,
 } = {}) {
   let lastError
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (options.signal?.aborted) throw abortError(options.signal)
-    const timeoutSignal = AbortSignal.timeout(timeoutMs)
+    // Streaming media may take minutes to finish. Its connection deadline must
+    // stop at response headers, while caller cancellation keeps owning the body.
+    const headerTimeout = timeoutScope === 'headers' ? new AbortController() : null
+    const timer = headerTimeout
+      ? setTimeout(() => headerTimeout.abort(new DOMException('Response headers timed out', 'TimeoutError')), timeoutMs)
+      : null
+    const timeoutSignal = headerTimeout?.signal || AbortSignal.timeout(timeoutMs)
     const signal = options.signal
       ? AbortSignal.any([options.signal, timeoutSignal])
       : timeoutSignal
@@ -40,6 +47,8 @@ export async function fetchWithRetry(url, options = {}, {
       if (options.signal?.aborted) throw abortError(options.signal)
       lastError = error
       if (attempt === attempts) throw error
+    } finally {
+      if (timer) clearTimeout(timer)
     }
     if (attempt < attempts) await waitForRetry(typeof retryDelayMs === 'function' ? retryDelayMs(attempt) : retryDelayMs, options.signal)
   }

@@ -40,6 +40,7 @@ function createFixtureService(overrides = {}, { loggedIn = true } = {}) {
     check_music: async (query) => { calls.push(['check_music', query]); return response({ success: true, message: 'ok' }) },
     song_url_v1: async (query) => { calls.push(['song_url_v1', query]); return response({ data: [{ id: 123, url: 'https://audio.example/song.flac', level: query.level, encodeType: 'flac' }] }) },
     likelist: async (query) => { calls.push(['likelist', query]); return response({ ids: [123, 456] }) },
+    like: async (query) => { calls.push(['like', query]); return response({ code: 200 }) },
     user_subcount: async () => response({ artistCount: 2, newAlbumCount: 3, createdPlaylistCount: 4, subPlaylistCount: 5, djRadioCount: 6 }),
     album_sublist: async () => response({ data: [{ id: 71, name: '收藏专辑', artist: { name: '歌手' }, picUrl: 'https://img.example/a.jpg' }], count: 1 }),
     artist_sublist: async () => response({ data: [{ id: 81, name: '收藏歌手', picUrl: 'https://img.example/b.jpg', musicSize: 10 }], count: 1 }),
@@ -200,4 +201,30 @@ test('P1 read contracts expose liked, subscription, membership and enhanced play
 test('personal endpoints return typed not_logged_in errors', async () => {
   const { service } = createFixtureService({}, { loggedIn: false })
   await assert.rejects(() => service.dailySongs(), (error) => error instanceof NeteaseCapabilityError && error.code === 'not_logged_in')
+})
+
+test('adding and cancelling a heart use the signed-in account and provider string flag', async () => {
+  const { service, calls } = createFixtureService()
+  assert.deepEqual(await service.setLiked({ id: 'netease-123', liked: true }), { providerId: '123', liked: true })
+  assert.deepEqual(await service.setLiked({ id: '123', liked: false }), { providerId: '123', liked: false })
+  const writes = calls.filter(([method]) => method === 'like').map(([, query]) => query)
+  assert.deepEqual(writes.map(({ id, like }) => ({ id, like })), [{ id: '123', like: 'true' }, { id: '123', like: 'false' }])
+  assert.ok(writes.every((query) => query.cookie === 'MUSIC_U=test' && query.timestamp > 0))
+})
+
+test('a heart write requires authentication, a numeric song ID and a boolean state', async () => {
+  const signedOut = createFixtureService({}, { loggedIn: false })
+  await assert.rejects(() => signedOut.service.setLiked({ id: '123', liked: true }), (error) => error.code === 'not_logged_in')
+  assert.equal(signedOut.calls.length, 0)
+  const signedIn = createFixtureService()
+  await assert.rejects(() => signedIn.service.setLiked({ id: 'local-123', liked: true }), (error) => error.code === 'unsupported')
+  await assert.rejects(() => signedIn.service.setLiked({ id: '123', liked: 'false' }), (error) => error.code === 'unsupported')
+  assert.equal(signedIn.calls.length, 0)
+})
+
+test('a rejected or empty provider response never claims a heart was changed', async () => {
+  for (const body of [{ code: 500, msg: 'provider failed' }, {}]) {
+    const { service } = createFixtureService({ like: async () => response(body) })
+    await assert.rejects(() => service.setLiked({ id: '123', liked: false }), (error) => error.code === 'provider_error')
+  }
 })

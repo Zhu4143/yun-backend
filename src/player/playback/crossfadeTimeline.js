@@ -1,4 +1,4 @@
-export function createCrossfadeTimeline({ onTime, onDuration }) {
+export function createCrossfadeTimeline({ onTime, onDuration, readActiveMedia = () => null }) {
   let targetDeck = null
   let removeListeners = null
 
@@ -15,6 +15,11 @@ export function createCrossfadeTimeline({ onTime, onDuration }) {
   }
 
   return {
+    // The displayed song changes when its target starts playing, before the
+    // engine promotes that deck. Visual clocks must follow the same source.
+    getMedia() {
+      return targetDeck || readActiveMedia()
+    },
     follow(deck) {
       clear()
       targetDeck = deck
